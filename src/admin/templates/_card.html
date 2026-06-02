@@ -1,0 +1,65 @@
+<div class="card" id="card-{{ c.match_id }}">
+  <div class="meta">
+    <span class="badge badge-yellow">{{ c.platform }}</span>
+    <span>confidence {{ '%.2f' % c.confidence }} • {{ c.matched_photo_count }} фото совпало</span>
+    {% if c.post_date %}<span>пост от {{ c.post_date.strftime('%Y-%m-%d %H:%M') }}</span>{% endif %}
+    <span>match #{{ c.match_id }}</span>
+  </div>
+
+  <div class="card-row">
+    <div>
+      <div class="photos">
+        {% for i in range(c.inbound_photo_count if c.inbound_photo_count <= 6 else 6) %}
+          <img src="/photo/inbound/{{ c.inbound_id }}/{{ i }}" alt="inbound photo {{ i }}" loading="lazy">
+        {% endfor %}
+      </div>
+      {% if c.inbound_photo_count > 6 %}
+        <div style="font-size:12px; color:var(--muted); margin-top:6px;">+{{ c.inbound_photo_count - 6 }} ещё</div>
+      {% endif %}
+      {% if c.inbound_url %}
+        <div style="margin-top:8px;"><a href="{{ c.inbound_url }}" target="_blank">↗ Открыть в источнике</a></div>
+      {% endif %}
+      {% if c.inbound_text %}
+        <details style="margin-top:10px;">
+          <summary style="cursor:pointer; color:var(--muted); font-size:12px;">Исходный текст</summary>
+          <pre class="raw-text">{{ c.inbound_text }}</pre>
+        </details>
+      {% endif %}
+    </div>
+
+    <div>
+      <dl class="listing-info">
+        <dt>Цена:</dt><dd>{{ c.price_eur or '—' }} EUR</dd>
+        <dt>Площадь:</dt><dd>{{ '%g' % c.area_m2 if c.area_m2 else '—' }} м²</dd>
+        <dt>Комнат:</dt><dd>{{ '%g' % c.rooms if c.rooms else '—' }}</dd>
+        <dt>Район:</dt><dd>{{ c.district or '—' }}</dd>
+        {% if c.address_raw %}<dt>Адрес:</dt><dd>{{ c.address_raw }}</dd>{% endif %}
+        <dt>Платформа:</dt><dd><a href="{{ c.listing_url }}" target="_blank">↗ {{ c.platform }}</a></dd>
+      </dl>
+
+      <textarea id="post-text-{{ c.match_id }}" rows="12" readonly>{{ c.post_text }}</textarea>
+
+      <div class="actions">
+        <button
+          type="button"
+          class="btn-primary"
+          onclick="copyPost({{ c.match_id }})"
+        >Скопировать пост</button>
+        <button
+          type="button"
+          class="btn-danger"
+          hx-post="/match/{{ c.match_id }}/reject"
+          hx-target="#card-{{ c.match_id }}"
+          hx-swap="outerHTML"
+          hx-confirm="Отклонить этот вариант?"
+          hx-vals='{"reason": ""}'
+        >Отклонить</button>
+        <span style="flex:1"></span>
+        <a href="{{ c.listing_url }}" target="_blank" class="btn-link">площадка</a>
+        {% if c.inbound_url %}
+          <a href="{{ c.inbound_url }}" target="_blank" class="btn-link">источник</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

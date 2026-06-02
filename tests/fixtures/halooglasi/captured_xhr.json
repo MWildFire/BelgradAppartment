@@ -1,0 +1,22 @@
+[
+  {
+    "url": "https://www.halooglasi.com/Quiddita.Widgets.Ad/AdCategoryBasicSearchWidget/GetLookupValuesByIds",
+    "status": 200,
+    "body": [
+      {
+        "Id": 35112,
+        "Code": "Beograd",
+        "Value": null,
+        "InvariantValue": null,
+        "FullText": null,
+        "Position": 0,
+        "MappingTypeId": 0
+      }
+    ]
+  },
+  {
+    "url": "https://analytics.contentexchange.me/bex/config?page_url=https%3A%2F%2Fwww.halooglasi.com%2Fnekretnine%2Fizdavanje-stanova%2Fbeograd",
+    "status": 200,
+    "body": []
+  }
+]

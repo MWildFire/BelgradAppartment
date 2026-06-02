@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Очередь — otz-rent-finder{% endblock %}
+{% block content %}
+<h1>Очередь — {{ cards|length }} {{ 'кандидат' if cards|length == 1 else 'кандидатов' }}</h1>
+{% if not cards %}
+  <div class="empty">
+    Пусто. Запусти <code>otz monitor</code> или <code>otz backfill</code>, чтобы появились новые кандидаты.
+  </div>
+{% else %}
+<div class="grid">
+  {% for c in cards %}{% include "_card.html" %}{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Listings — otz-rent-finder{% endblock %}
+{% block content %}
+<h1>Listings ({{ listings|length }} последних)</h1>
+<div style="margin-bottom:12px; display:flex; gap:8px;">
+  <a href="/listings" class="badge {% if not platform_filter %}badge-green{% endif %}">все</a>
+  <a href="/listings?platform=nekretnine" class="badge {% if platform_filter == 'nekretnine' %}badge-green{% endif %}">nekretnine</a>
+  <a href="/listings?platform=cetiri_zida" class="badge {% if platform_filter == 'cetiri_zida' %}badge-green{% endif %}">4zida</a>
+  <a href="/listings?platform=halooglasi" class="badge {% if platform_filter == 'halooglasi' %}badge-green{% endif %}">halooglasi</a>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Платформа</th>
+      <th>Цена</th>
+      <th>Площадь</th>
+      <th>Комнат</th>
+      <th>Район</th>
+      <th>Фото</th>
+      <th>pHash</th>
+      <th>Активно</th>
+      <th>Скрапнуто</th>
+      <th>URL</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for l in listings %}
+    <tr>
+      <td>#{{ l.id }}</td>
+      <td><span class="badge badge-yellow">{{ l.platform.value }}</span></td>
+      <td>{{ l.price_eur or '—' }}</td>
+      <td>{{ '%g' % l.area_m2 if l.area_m2 else '—' }}</td>
+      <td>{{ '%g' % l.rooms if l.rooms else '—' }}</td>
+      <td>{{ l.district or '—' }}</td>
+      <td>{{ l.photo_urls|length }}</td>
+      <td>{{ l.photo_phashes|length }}</td>
+      <td>{% if l.is_active %}<span class="badge badge-green">да</span>{% else %}<span class="badge badge-red">нет</span>{% endif %}</td>
+      <td>{{ l.scraped_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td><a href="{{ l.url }}" target="_blank">↗</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

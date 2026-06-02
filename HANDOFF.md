@@ -1,0 +1,460 @@
+# otz-rent-finder — handoff документ
+
+Цель этого документа — дать новому инстансу Claude (или человеку) исчерпывающий контекст для продолжения работы над проектом.
+
+---
+
+## 1. TL;DR
+
+Автоматизация для Telegram-канала **@RentBelgrad** (ведёт Дарья, @Darya_kralj).
+
+**Что делает:**
+1. **Слушает** канал-архив **@OtzRentBelgrad** (там Дарья репостит понравившиеся квартиры от конкурентов).
+2. **Скрапит** 3 серба платформы: `nekretnine.rs`, `4zida.rs`, `halooglasi.com`.
+3. **Матчит** каждый новый inbound с базой listings через `pHash → CLIP → text → Claude vision LLM`.
+4. **Доставляет** найденные кандидаты в Telegram-бот (`@RentFinderBot`) → Дарья сама постит их в @RentBelgrad. Мы НЕ публикуем сами.
+
+**Кто получает доставки в бот:** chat_id=`1003207518` (Дарья), chat_id=`62399456` (mvstrike).
+
+**Stack:** Python 3.12 · async SQLAlchemy 2 · aiosqlite (WAL) · Alembic · Telethon (userbot) · aiogram (bot) · playwright+stealth+xvfb (halooglasi) · open_clip ViT-B/32 · imagehash · anthropic SDK (`claude-haiku-4-5`).
+
+---
+
+## 2. VPS — подключение
+
+| | |
+|---|---|
+| IP | `90.156.254.159` |
+| User | `root` (для setup) / `otz` (для приложения) |
+| OS | Ubuntu 24.04 |
+| Specs | 8 vCPU, 8 GB RAM |
+| Repo path | `/opt/otz` (owner: `otz:otz`) |
+| Логи | `/var/log/otz/*.log` |
+| Пароль | в password manager (не хранится в репозитории) |
+| SSH | ключевая auth уже настроена, password auth disabled |
+
+**Подключение:**
+```bash
+ssh root@90.156.254.159
+```
+
+Параллельно на этой же машине крутится **Outline VPN** (порты 50029/tcp+udp, 28395/tcp — открыты в ufw). Эти сервисы независимы и не должны мешать друг другу.
+
+---
+
+## 3. Сервисы и таймеры (systemd)
+
+Все unit-файлы лежат в `/etc/systemd/system/otz-*` и устанавливаются через [scripts/vps_install.sh](scripts/vps_install.sh).
+
+| Сервис | Расписание | Что делает | Лог |
+|---|---|---|---|
+| `otz-monitor.service` | active 24/7 | Live-listener @OtzRentBelgrad через Telethon. Каждый новый альбом → `process_new_inbound` → match → bot delivery | `/var/log/otz/monitor.log` |
+| `otz-nightly-refresh.timer` | `OnCalendar=*-*-* 03:00:00` UTC (05:00 Belgrade) | Полный (non-incremental) скрап всех 3 платформ + mark stale listings inactive (`inactive_after_days=3`) | `/var/log/otz/nightly-refresh.log` |
+| `otz-daily-summary.timer` | `OnCalendar=*-*-* 07:00:00` UTC (09:00 Belgrade) | Считает inbound / matched / no_match / delivered за 24ч, постит в бот сводку | `/var/log/otz/daily-summary.log` |
+
+**Проверить статус:**
+```bash
+ssh root@90.156.254.159 'systemctl list-timers otz-* --all --no-pager; systemctl is-active otz-monitor.service'
+```
+
+После каждого прогона oneshot-сервиса срабатывает `ExecStartPost`, который вызывает `ship-log` — он **шлёт tail лога в Saved Messages** через второй userbot session (см. §5).
+
+---
+
+## 4. Adhoc-запуски через `otz-bg`
+
+Любая ручная команда запускается **в фоне как transient systemd unit**, переживает SSH disconnect:
+
+```bash
+ssh root@90.156.254.159 'otz-bg <subcommand> [args...]'
+```
+
+Команды (полный список — `otz-bg` без аргументов):
+
+| Команда | Назначение |
+|---|---|
+| `stats` | Текущие счётчики БД |
+| `refresh [--force]` | Инкрементальный scrape (быстро, ~1-5 мин) |
+| `nightly-refresh` | Полный scrape + stale-sweep (часы) |
+| `backfill --from-date 2026-05-19` | Перечитать @OtzRentBelgrad с даты (override watermark) |
+| `match-all` | Прогнать matcher на всех NEW inbound |
+| `rematch-all` | Сбросить matches и прогнать заново |
+| `deliver-all [--force]` | Доставить PENDING (или ВСЕ через `--force`) с force_resend=True |
+| `test-batch <N>` | Reset + прогнать последние N inbound через полный pipeline |
+| `daily-summary` | Ручной запуск утренней сводки |
+| `backfill-nekretnine-address` | Re-fetch только адресов для nekretnine listings |
+| `ship-log <file> --label X` | Послать tail файла в Saved Messages |
+
+После каждого `otz-bg` запуска **автоматически** прилетает tail (150 строк) в Saved Messages.
+
+**Где смотреть лог запуска:**
+```bash
+ssh root@90.156.254.159 'tail -f /var/log/otz/adhoc-<TS>.log'
+# или
+ssh root@90.156.254.159 'journalctl -u otz-adhoc-<TS> -f'
+```
+
+---
+
+## 5. Telegram: bot mode + два userbot session'а
+
+### 5.1 Bot mode (основной канал доставки)
+- **Bot:** `@RentFinderBot`, токен в `.env` как `TG_BOT_TOKEN`
+- **Recipients:** `TG_BOT_RECIPIENTS=1003207518,62399456` (Дарья, mvstrike)
+- **Когда:** каждый matched inbound → `send_match_via_bot` шлёт album+caption обоим recipients. Doesn't deliver to Saved Messages — у бота нет туда доступа.
+- **Mode** задан в `.env`: `TG_DELIVERY_MODE=bot` (альтернатива `userbot`)
+
+### 5.2 Userbot #1 — `otz_monitor.session` (24/7)
+- Telethon session в `/opt/otz/data/otz_monitor.session`
+- Используется только `otz-monitor.service` — слушает @OtzRentBelgrad
+- **НЕ ТРОГАТЬ** при работающем мониторе — SQLite session lock ломает всё ("disk I/O error")
+- Если нужно временно остановить: `systemctl stop otz-monitor.service`, потом запустить нужную команду, потом `systemctl start otz-monitor.service`
+
+### 5.3 Userbot #2 — `otz_logger.session` (log shipping)
+- Telethon session в `/opt/otz/data/otz_logger.session`
+- Используется ТОЛЬКО командой `ship-log` для отправки tail логов в **Saved Messages** того же аккаунта
+- Авторизация — `scripts/auth_logger.py` (одноразовая, требует SMS code)
+- Можно вызывать concurrently с monitor.service — это разные session-файлы
+
+### 5.4 Re-authorization (если sessions сломались)
+```bash
+# monitor session:
+ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && .venv/bin/python scripts/auth_telethon.py"'
+
+# logger session:
+ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && .venv/bin/python scripts/auth_logger.py"'
+```
+
+---
+
+## 6. БД — SQLite (WAL mode) на VPS
+
+**Путь:** `/opt/otz/data/otz.db` (owner otz:otz).
+
+**Таблицы (упрощённо):**
+- `source_channels` — @OtzRentBelgrad (id=1), watermark `last_processed_message_id`
+- `inbound_posts` — каждый альбом из source, с `photo_paths`, `photo_phashes`, `photo_embeddings` (CLIP float16 BLOB)
+- `listings` — все scraped квартиры с 3 платформ. `is_active=True/False` управляется `mark_stale_inactive`. Ключевые поля: `external_id`, `url`, `price_eur`, `area_m2`, `rooms`, `district`, `address_raw`, `lat`, `lon`, `photo_urls`, `photo_phashes`, `photo_embeddings`
+- `matches` — `(inbound_post_id, listing_id)` + `confidence`, `matched_photo_count`, `method` (`phash` / `clip` / `clip+llm`), `status` (PENDING/PUBLISHED/REJECTED)
+- `published_posts` — `(match_id, tg_message_id, post_text)` — фактическая доставка
+
+**Миграции:** Alembic в [alembic/](alembic/). Применять: `cd /opt/otz && .venv/bin/alembic upgrade head`.
+
+**Backup перед опасными операциями:**
+```bash
+ssh root@90.156.254.159 'cp /opt/otz/data/otz.db /opt/otz/data/backups/otz-$(date +%F-%H%M).db'
+```
+
+---
+
+## 7. Скраперы — особенности
+
+[src/scrapers/](src/scrapers/) — три класса от [base.Scraper](src/scrapers/base.py).
+
+| Платформа | Особенности |
+|---|---|
+| `nekretnine.rs` | Чистый httpx + selectolax. **Pagination через `/stranica/N/`** (с слэшем — иначе сервер тихо отдаёт страницу 1). Адрес: `.property__location > ul > li`, последний `<li>` — улица (UPPER-CASE). Координаты в инлайн-JS: `Lat = ...; Lng = ...`. Photos: подписанные URL с `?st=...&ts=...&e=0` — без query CDN отвечает 403. |
+| `4zida.rs` | httpx + JSON-API. District встречается в полях типа `Vracar Centar` или `Centar Uzi`. |
+| `halooglasi.com` | **Playwright + playwright-stealth + xvfb-run** для обхода Cloudflare. Запускается в headed mode. Поэтому `otz-monitor.service` и `otz-nightly-refresh.service` стартуют через `xvfb-run -a`. |
+
+**Запуск scrape вручную:**
+```bash
+ssh root@90.156.254.159 'otz-bg refresh --force'                  # инкремент
+ssh root@90.156.254.159 'otz-bg scrape halooglasi --max-pages 10' # одна платформа
+ssh root@90.156.254.159 'otz-bg nightly-refresh'                  # полный (часы)
+```
+
+### 7.1 Инкрементальный режим
+Каждая платформа использует `known_ids` (set всех `external_id` из БД) и **early-stop**: если 2 страницы подряд содержат только known IDs, прекращаем. Делает ежедневный inkrement быстрым (1-5 мин вместо часов).
+
+### 7.2 Photo download
+Через [src/scrapers/photo_dl.py](src/scrapers/photo_dl.py). Лог скачиваний — JSON-lines в `data/logs/photo_downloads.jsonl`. Просмотр: `otz-bg photo-stats`.
+
+---
+
+## 8. Matcher — pipeline
+
+[src/matching/matcher.py](src/matching/matcher.py) — `match_inbound(inbound_id)`:
+
+1. **Stage 1 — pHash pre-screen**: количество фото с Hamming distance ≤6 (см. `PHASH_MAX_HAMMING`).
+2. **Stage 2 — CLIP cosine**: для каждого listing подсчёт фото с CLIP similarity ≥0.92 (см. `CLIP_SIMILARITY_THRESHOLD`).
+3. **Stage 3 — text cross-check** (только для CLIP-кандидатов): сравнение цены/площади из caption Telegram-поста с listing.
+4. **Stage 4 — Claude vision LLM** (только для CLIP-кандидатов): [src/matching/llm_validator.py](src/matching/llm_validator.py) шлёт оба набора фото Claude Haiku и спрашивает «это одна квартира?». Fail-open: если LLM crashed / 529 OverloadedError, оставляем CLIP-вердикт.
+
+**Порог:** минимум `min_matched_photos=2` (см. `.env`).
+
+**LLM model:** `claude-haiku-4-5` — задан в [src/matching/llm_validator.py](src/matching/llm_validator.py). НИКОГДА не менять на legacy строку с date-суффиксом.
+
+---
+
+## 9. Доставка (delivery)
+
+[src/telegram/delivery.py](src/telegram/delivery.py) — dispatcher по `TG_DELIVERY_MODE`:
+
+| Mode | Module | Куда |
+|---|---|---|
+| `bot` (prod) | [bot_delivery.py](src/telegram/bot_delivery.py) — aiogram | Все chat_id в `TG_BOT_RECIPIENTS` |
+| `userbot` (legacy) | [delivery.py](src/telegram/delivery.py) — Telethon | `TG_DELIVERY_TARGET` (или Saved Messages если `me`) |
+
+**Идемпотентность:** если `PublishedPost(match_id)` существует, повторный `send_match_to_saved` skip'ает (если не `force_resend=True`).
+
+**Сообщения формируются в [src/post/template.py](src/post/template.py)**:
+- Header: «🏠 Кандидат на @RentBelgrad — {platform}», ссылки на listing + Telegram source, кол-во matched фото + confidence + method
+- Body: render_post(listing, inbound).text — цена, площадь, **Yandex Maps URL** (через [src/post/location.py](src/post/location.py) — text-search с улицей), описание из площадки
+- Hashtags: **районный** ([src/post/hashtags.py](src/post/hashtags.py) → [data/districts.yaml](data/districts.yaml)) + ценовой + типа квартиры + brand `#квартирыOtz`
+
+### 9.1 Yandex Maps URL (важно)
+[src/post/location.py](src/post/location.py) — приоритет:
+1. Если есть `address` → `?text=<address>, Beograd&ll=lon,lat&z=17` — Yandex резолвит и **подсвечивает улицу**
+2. Coords-only fallback → `?ll=...&pt=...` (голый красный пин)
+
+**Адрес есть у:**
+- HALOOGLASI: ~84%
+- CETIRI_ZIDA: ~76%
+- NEKRETNINE: ~82% (заполнено через `backfill-nekretnine-address`)
+
+---
+
+## 10. Configuration (.env)
+
+`/opt/otz/.env` — env-файл, **не синкается** через `deploy_sync.sh`. Ключи:
+
+```ini
+TG_API_ID=...                     # my.telegram.org
+TG_API_HASH=...
+TG_SESSION_NAME=otz_monitor
+TG_DELIVERY_MODE=bot              # bot | userbot
+TG_BOT_TOKEN=...                  # @RentFinderBot
+TG_BOT_RECIPIENTS=1003207518,62399456
+TG_DELIVERY_TARGET=me             # для legacy userbot mode
+ANTHROPIC_API_KEY=sk-ant-...
+ADMIN_PASSWORD=...                # FastAPI admin (read-only)
+SOURCE_DEFAULT_START_DATE=2026-01-01
+ENABLE_LLM_VALIDATION=true
+CLIP_SIMILARITY_THRESHOLD=0.92
+PHASH_MAX_HAMMING=6
+MIN_MATCHED_PHOTOS=2
+```
+
+Шаблон: [.env.example](.env.example).
+
+---
+
+## 11. Deploy workflow (с laptop на VPS)
+
+```bash
+# отредактируй файлы локально
+.venv/bin/python -m pytest tests/ -q     # 52 теста, должны пройти
+
+# rsync code → VPS (excludes data/, .env, .venv, .session, halooglasi fixtures)
+bash scripts/deploy_sync.sh
+
+# если изменены файлы которые читает live monitor — перезапустить:
+bash scripts/deploy_sync.sh --restart
+```
+
+**deploy_sync.sh внутри:**
+- `rsync -rlptzv --delete-after` — **не сохраняет owner/group** (macOS rsync 2.6 не поддерживает `--chown`)
+- После rsync: `ssh ... 'chown -R otz:otz /opt/otz/{data,src,scripts,tests}'`
+- Эксепшен: `data/districts.yaml` синкается (с `--include`), остальные `data/*` excluded
+
+**ВАЖНО:** не запускать `rsync -a` — это переписывало `data/` под UID 501:staff (mac user), и otz user терял доступ. См. историю фиксов §13.
+
+---
+
+## 12. Локальная разработка
+
+```bash
+# venv (1 ГБ)
+uv sync                    # или: python -m venv .venv && pip install -e .
+.venv/bin/pytest tests/ -q
+
+# локально БД нет — все тесты используют in-memory или fixtures
+# фактический прогон CLI требует .env + .session, обычно проще тестировать на VPS
+```
+
+**Что есть локально:**
+- `src/`, `tests/`, `scripts/`, `alembic/`, `docs/`
+- `data/districts.yaml` (это конфиг, синкается на VPS)
+- `.env` (для локальных smoke runs, при необходимости)
+- `.venv/`
+
+**Чего нет локально (всё на VPS):**
+- `data/otz.db`, `data/inbound/`, `data/listings/`, `data/playwright/` — 9+ ГБ, удалены 2026-05-20 после деплоя
+
+---
+
+## 13. Известные нюансы / quirks
+
+### 13.1 SQLite session lock
+Telethon хранит auth_key в `.session` (SQLite). Два процесса на один session-файл → `disk I/O error`. Решение: остановить `otz-monitor.service` или использовать `otz_logger.session` (отдельный).
+
+### 13.2 Throttle race в scrape
+[scrape_all_with_throttle](src/scrapers/orchestrator.py) использует file marker `data/state/last_scrape.txt`. Если 5 параллельных pipeline вызовут одновременно — race, все 5 пройдут throttle. Не критично — listings upsert'ятся без дублей.
+
+### 13.3 pipeline.py: bot mode + client=None
+[src/jobs/pipeline.py](src/jobs/pipeline.py) — раньше тихо пропускал доставку при `client is None`. Сейчас проверяет mode: пропуск только если `mode == userbot AND client is None`. В bot mode delivery вызывается всегда.
+
+### 13.4 LLM validator non-determinism
+Claude может разный verdict давать на одну и ту же пару фото. На практике stable enough для 0.95 conf threshold, но `test-batch` повторно может дать другую раскладку matched/no_match.
+
+### 13.5 Telegram Bot API rate limits
+- 30 msg/sec глобально для бота
+- 20/sec в один чат
+- При burst > 10 матчей одновременно — может быть FloodWait. Тогда `PublishedPost.tg_message_id=0`, fix через `otz-bg deliver-all --force`.
+
+### 13.6 districts.yaml — единственный синкаемый data-файл
+Конфиг маппинга район → хэштег. Если добавить новый микрорайон, не забыть `deploy_sync.sh` (он синкает только этот файл из `data/`).
+
+---
+
+## 14. История фиксов (этой сессии: 2026-05-20 — 2026-05-21)
+
+### 14.1 Yandex URL подсвечивает улицу
+- Было: `?ll=lon,lat&pt=lon,lat` — голый красный пин
+- Стало: `?text=<address>, Beograd&ll=lon,lat&z=17`
+- Файл: [src/post/location.py](src/post/location.py)
+
+### 14.2 nekretnine address extraction
+- Было: `address_raw=None` хардкоден
+- Стало: `_extract_address` парсит `.property__location > ul > li`
+- Backfill: 5445/6633 listings обновлены (82% coverage)
+
+### 14.3 districts.yaml на VPS
+- Было: `data/` excluded в rsync → yaml не доходил → `district_tag()` всегда None
+- Стало: явный `--include='data/districts.yaml'` exception
+- Удалён дубликат «Beograd na vodi: Savskivenac» (был после правильного → NewBeograd)
+- Добавлен «Čubura → Vracar»
+
+### 14.4 pipeline.py: bot mode delivery
+- См. §13.3 выше — bot mode теперь не пропускает доставку при `client=None`
+
+### 14.5 rsync ownership
+- Было: `rsync -a` → `data/` принадлежал 501:staff → otz user не мог писать
+- Стало: `-rlptzv` без preserve owner + явный `chown -R otz:otz` после
+
+### 14.6 weekly-refresh → nightly-refresh
+- CLI команда переименована (старая `weekly-refresh` оставлена hidden alias)
+- Stale-grace уменьшен с 10 дней до 3 (ежедневная cadence)
+- Telegram summary через `send_text_to_recipients` (bot-aware) вместо прямого Telethon
+- systemd timer: `OnCalendar=*-*-* 03:00:00` daily (было: Sun 03:00)
+
+### 14.7 deliver-all --force
+- Добавлен флаг для re-rendering ВСЕХ matches (включая PUBLISHED) — нужно после template/URL изменений
+
+### 14.8 daily-summary
+- Новая CLI команда, считает inbound/matched/no_match/delivered по `InboundPost.status` за окно (default 24h)
+- systemd timer `OnCalendar=*-*-* 07:00:00` daily
+
+### 14.9 ship-log → Saved Messages
+- Новая CLI команда, шлёт tail лога в Saved Messages через `otz_logger.session`
+- `ExecStartPost` в каждом oneshot service unit + в `otz-bg` wrapper
+- Авторизация: `scripts/auth_logger.py` (одноразовая)
+
+---
+
+## 15. Полезные snippets
+
+### 15.1 Свежий state БД
+```bash
+ssh root@90.156.254.159 'otz-bg stats'
+```
+
+### 15.2 Принудительно прислать все matches заново
+```bash
+ssh root@90.156.254.159 'otz-bg deliver-all --force'
+```
+
+### 15.3 Реобработать последние N inbound
+```bash
+ssh root@90.156.254.159 'otz-bg test-batch 10'
+```
+
+### 15.4 Логи monitor live
+```bash
+ssh root@90.156.254.159 'journalctl -u otz-monitor -f'
+```
+
+### 15.5 SQL ad-hoc
+```bash
+ssh root@90.156.254.159 'sqlite3 /opt/otz/data/otz.db "SELECT COUNT(*) FROM matches WHERE status=\"PENDING\";"'
+```
+
+### 15.6 Восстановить ownership на VPS если что-то сломалось
+```bash
+ssh root@90.156.254.159 'chown -R otz:otz /opt/otz'
+```
+
+---
+
+## 16. Что НЕ делать
+
+- ❌ Не публиковать что-либо в @RentBelgrad из бота — это работа Дарьи
+- ❌ Не доставлять unmatched inbounds в бот — только matched, иначе спам Дарье
+- ❌ Не trogать `otz_monitor.session` пока запущен `otz-monitor.service`
+- ❌ Не использовать `rsync -a` на /opt/otz — ломает ownership
+- ❌ Не указывать date-суффиксы в model ID (использовать `claude-haiku-4-5`, НЕ `claude-haiku-4-5-20251001`)
+- ❌ Не комментить детальные docstrings — стиль проекта: лаконичные комментарии только для нетривиального WHY
+
+---
+
+## 17. Где искать что (карта файлов)
+
+```
+src/
+├── cli.py                          # все CLI команды (Click)
+├── config.py                       # settings из .env
+├── db/
+│   ├── models.py                   # SQLAlchemy модели
+│   └── session.py                  # async session factory
+├── scrapers/
+│   ├── base.py                     # Scraper ABC, ListingPreview/Detail
+│   ├── orchestrator.py             # scrape_all_with_throttle, mark_stale_inactive
+│   ├── nekretnine.py
+│   ├── cetiri_zida.py
+│   ├── halooglasi.py               # playwright + stealth + xvfb
+│   └── photo_dl.py                 # download + JSON-lines logger
+├── matching/
+│   ├── matcher.py                  # match_inbound — pipeline
+│   ├── phash.py                    # imagehash wrappers
+│   ├── clip_embed.py               # open_clip ViT-B/32
+│   └── llm_validator.py            # Claude Haiku vision
+├── telegram/
+│   ├── monitor.py                  # Telethon — live + backfill
+│   ├── delivery.py                 # dispatcher + send_text_to_recipients
+│   └── bot_delivery.py             # aiogram — send_match_via_bot
+├── jobs/
+│   ├── pipeline.py                 # process_new_inbound
+│   └── photo_stats.py              # photo_downloads.jsonl aggregator
+├── post/
+│   ├── template.py                 # render_post
+│   ├── hashtags.py                 # build_hashtags, district_tag
+│   └── location.py                 # yandex_maps_url
+└── admin/                          # FastAPI read-only UI (опционально)
+
+scripts/
+├── vps_install.sh                  # one-shot bootstrap для Ubuntu 24.04
+├── deploy_sync.sh                  # rsync laptop → VPS
+├── auth_telethon.py                # auth для otz_monitor.session
+└── auth_logger.py                  # auth для otz_logger.session
+
+data/
+└── districts.yaml                  # район → хэштег (единственный синкаемый data-файл)
+
+tests/
+├── test_*.py                       # 52 теста, должны проходить
+└── fixtures/                       # HTML fixtures для скраперов
+
+alembic/
+└── versions/                       # 0001..0003 миграции
+```
+
+---
+
+## 18. Что дальше (возможные направления)
+
+- **Admin UI** ([src/admin/](src/admin/)) — FastAPI + HTMX, read-only. Запуск: `otz-bg admin`. Можно расширить editing.
+- **Расширить районы**: при появлении новых micro-locations в халооглази/4zida — добавить в `data/districts.yaml`.
+- **Алерты при сбоях monitor**: `OnFailure=` хук в `otz-monitor.service` → шлёт alert через `ship-log` или `send_text_to_recipients`.
+- **Метрики**: уже есть `photo_downloads.jsonl`. Можно завести dashboard (Grafana / простой HTML отчёт).
+- **Тюнинг LLM threshold**: сейчас 0.95 — иногда зарезает легитимные матчи (см. логи `REJECTED by LLM`).

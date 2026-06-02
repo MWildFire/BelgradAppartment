@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}otz-rent-finder{% endblock %}</title>
+  <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
+  <script>
+    function copyPost(matchId) {
+      const ta = document.getElementById('post-text-' + matchId);
+      if (!ta) return;
+      navigator.clipboard.writeText(ta.value).then(() => {
+        const btn = event.target;
+        const orig = btn.textContent;
+        btn.textContent = '✓ Скопировано';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      });
+    }
+  </script>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --fg: #1c1f23;
+      --muted: #6b7280;
+      --border: #e3e7eb;
+      --card: #ffffff;
+      --accent: #2f6feb;
+      --accent-hover: #2455c2;
+      --green: #1aa066;
+      --red: #c63a3a;
+      --yellow: #d68a06;
+      --shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--fg); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; align-items: center; gap: 32px; box-shadow: var(--shadow); }
+    header .brand { font-weight: 700; font-size: 16px; }
+    header nav { display: flex; gap: 20px; }
+    header nav a { color: var(--muted); font-weight: 500; padding: 6px 0; border-bottom: 2px solid transparent; }
+    header nav a.active { color: var(--fg); border-color: var(--accent); }
+    main { max-width: 1280px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 20px; margin: 0 0 16px; }
+    .empty { padding: 48px; text-align: center; color: var(--muted); background: var(--card); border-radius: 8px; border: 1px solid var(--border); }
+    .grid { display: grid; gap: 16px; grid-template-columns: 1fr; }
+    @media (min-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; box-shadow: var(--shadow); }
+    .card-row { display: grid; grid-template-columns: 320px 1fr; gap: 20px; }
+    @media (max-width: 720px) { .card-row { grid-template-columns: 1fr; } }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; background: #eef1f5; color: var(--muted); }
+    .badge-green { background: #dff5e9; color: var(--green); }
+    .badge-yellow { background: #fff1cc; color: var(--yellow); }
+    .badge-red { background: #fde2e2; color: var(--red); }
+    .meta { color: var(--muted); font-size: 12px; margin-bottom: 8px; display: flex; gap: 14px; flex-wrap: wrap; }
+    .photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; max-width: 320px; }
+    .photos img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: #eaeaea; }
+    textarea { width: 100%; min-height: 240px; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; padding: 10px; border: 1px solid var(--border); border-radius: 6px; resize: vertical; background: #fafbfc; }
+    .listing-info { font-size: 13px; line-height: 1.7; }
+    .listing-info dt { display: inline-block; color: var(--muted); width: 95px; }
+    .listing-info dd { display: inline; margin: 0; }
+    .listing-info dd::after { content: ''; display: block; }
+    .actions { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+    button, .btn { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--card); cursor: pointer; color: var(--fg); }
+    button:hover { background: #f0f3f7; }
+    .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .btn-danger { background: var(--card); color: var(--red); border-color: var(--red); }
+    .btn-danger:hover { background: #fde2e2; }
+    .btn-link { background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; }
+    .btn-link:hover { text-decoration: underline; }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; box-shadow: var(--shadow); }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
+    th { background: #f9fafb; color: var(--muted); font-weight: 500; }
+    tr:last-child td { border-bottom: none; }
+    .error-box { padding: 10px 14px; border-radius: 6px; background: #fde2e2; color: var(--red); font-size: 13px; }
+    .ok-box { padding: 10px 14px; border-radius: 6px; background: #dff5e9; color: var(--green); font-size: 13px; }
+    pre.raw-text { white-space: pre-wrap; background: #fafbfc; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; max-height: 140px; overflow: auto; }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand">otz-rent-finder</div>
+  <nav>
+    <a href="/queue" class="{% if active_nav == 'queue' %}active{% endif %}">Очередь</a>
+    <a href="/published" class="{% if active_nav == 'published' %}active{% endif %}">Доставлено</a>
+    <a href="/sources" class="{% if active_nav == 'sources' %}active{% endif %}">Источники</a>
+    <a href="/listings" class="{% if active_nav == 'listings' %}active{% endif %}">Listings</a>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

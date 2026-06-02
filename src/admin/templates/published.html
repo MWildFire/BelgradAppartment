@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Доставлено — otz-rent-finder{% endblock %}
+{% block content %}
+<h1>Доставлено в Saved Messages</h1>
+{% if not items %}
+  <div class="empty">Кандидаты ещё не доставлялись. При новом посте в @OtzRentBelgrad готовый шаблон автоматически прилетит вам в Saved Messages.</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Когда</th>
+      <th>Платформа</th>
+      <th>Цена</th>
+      <th>Площадь</th>
+      <th>Saved msg</th>
+      <th>Listing</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for it in items %}
+    <tr>
+      <td>{{ it.published_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td><span class="badge badge-yellow">{{ it.platform }}</span></td>
+      <td>{{ it.price_eur or '—' }} EUR</td>
+      <td>{{ '%g' % it.area_m2 if it.area_m2 else '—' }} м²</td>
+      <td>#{{ it.tg_message_id }}</td>
+      <td>{% if it.listing_url %}<a href="{{ it.listing_url }}" target="_blank">↗</a>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Источники — otz-rent-finder{% endblock %}
+{% block content %}
+<h1>Каналы-источники</h1>
+{% if not sources %}
+  <div class="empty">
+    Источников нет. Добавь через CLI:<br>
+    <code>otz add-source https://t.me/название_канала</code>
+  </div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Username</th>
+      <th>Title</th>
+      <th>TG id</th>
+      <th>Старт</th>
+      <th>Последнее сообщение</th>
+      <th>Последний проход</th>
+      <th>Active</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in sources %}
+    <tr>
+      <td>#{{ s.id }}</td>
+      <td>{% if s.username %}<a href="https://t.me/{{ s.username }}" target="_blank">@{{ s.username }}</a>{% endif %}</td>
+      <td>{{ s.title or '—' }}</td>
+      <td><code>{{ s.tg_id }}</code></td>
+      <td>{{ s.start_date.strftime('%Y-%m-%d') if s.start_date else '—' }}</td>
+      <td>{% if s.last_processed_message_id %}<code>{{ s.last_processed_message_id }}</code>{% else %}—{% endif %}</td>
+      <td>{{ s.last_processed_at.strftime('%Y-%m-%d %H:%M') if s.last_processed_at else '—' }}</td>
+      <td>
+        {% if s.is_active %}
+          <span class="badge badge-green">active</span>
+        {% else %}
+          <span class="badge badge-red">paused</span>
+        {% endif %}
+      </td>
+      <td>
+        <form method="post" action="/sources/{{ s.id }}/toggle">
+          <button type="submit">{% if s.is_active %}Pause{% else %}Activate{% endif %}</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
