@@ -28,6 +28,7 @@ from src.post import render_post
 logger = logging.getLogger(__name__)
 
 MAX_ALBUM = 10
+TELEGRAM_CAPTION_LIMIT = 1024
 
 
 class DeliveryError(RuntimeError):
@@ -160,6 +161,8 @@ async def _send_match_via_userbot(
     header_lines.append("─── готовый текст ↓ ───")
     header_lines.append("")
     full_caption = "\n".join(header_lines) + "\n" + rendered_text
+    if len(full_caption) > TELEGRAM_CAPTION_LIMIT:
+        full_caption = full_caption[:TELEGRAM_CAPTION_LIMIT - 1] + "…"
 
     recipient = await _resolve_delivery_target(client)
     messages = await client.send_file(

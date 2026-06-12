@@ -10,7 +10,7 @@
 1. Читает Дарьин архив **@OtzRentBelgrad** через Telethon-userbot (туда она копит посты с понравившимися квартирами из других каналов).
 2. На каждый новый пост в @OtzRentBelgrad — автоматически обновляет listings на трёх площадках (nekretnine.rs, 4zida.rs, halooglasi.com) с throttle 15 мин.
 3. Матчит фото inbound-поста с объявлениями на площадках по pHash.
-4. Если нашлось совпадение — присылает Дарье в **Saved Messages** готовый шаблон поста + фото + ссылку на listing на площадке.
+4. Если нашлось совпадение — присылает получателям в Telegram-бот (`TG_DELIVERY_MODE=bot`) готовый шаблон поста + фото + ссылку на listing на площадке.
 5. Дарья проверяет, копирует и сама постит в **@RentBelgrad** (бот в канал НЕ публикует — она контролирует процесс).
 6. Веб-админка read-only: просмотр очереди, истории доставки, источников, listings.
 
@@ -53,7 +53,7 @@ src/
 ├── telegram/          # monitor (Telethon) + publisher (Bot API)
 ├── post/              # генератор поста по шаблону
 ├── admin/             # FastAPI + Jinja
-├── jobs/              # APScheduler
+├── jobs/              # pipeline process_new_inbound
 └── cli.py             # `otz <command>`
 ```
 
@@ -72,7 +72,7 @@ otz monitor                 # backfill watermark + live режим (всегда
 otz backfill --limit N      # одноразовый backfill истории
 
 # доставка / отладка
-otz deliver-all             # повторно отправить все PENDING матчи в Saved Messages
+otz deliver-all             # повторно отправить все PENDING матчи получателям бота
 otz rematch-all --hamming N # сбросить статусы и пересчитать matcher с другим порогом
 otz match <inbound_id>      # one-off матчинг конкретного inbound
 otz stats                   # текущее состояние БД

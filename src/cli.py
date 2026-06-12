@@ -35,7 +35,8 @@ PLATFORM_NAMES = {p.value.lower(): p for p in Platform}
 
 
 @cli.command("scrape-all")
-@click.option("--max-pages", default=3, show_default=True, type=int)
+@click.option("--max-pages", default=None, type=int,
+              help="Page cap per platform. Default: 3 (quick pass), or 500 with --full.")
 @click.option("--max-new", default=None, type=int, help="Cap newly inserted listings per platform.")
 @click.option("--no-photos", is_flag=True, help="Skip downloading photos (faster, no pHash).")
 @click.option(
@@ -48,10 +49,11 @@ PLATFORM_NAMES = {p.value.lower(): p for p in Platform}
 @click.option(
     "--full",
     is_flag=True,
-    help="Disable incremental early-stop — walk every page, even pages of already-known items.",
+    help="Full market walk: no incremental early-stop AND a deep page limit (enables the "
+         "price-band segmentation that defeats the sites' ~2000-result caps).",
 )
 def scrape_all(
-    max_pages: int,
+    max_pages: int | None,
     max_new: int | None,
     no_photos: bool,
     platforms: tuple[str, ...],
@@ -63,6 +65,11 @@ def scrape_all(
         selected = [PLATFORM_NAMES[p.lower()] for p in platforms]
     else:
         selected = list(SCRAPERS.keys())
+
+    # `--full` with the old quick-pass default of 3 pages silently skipped segmentation and
+    # walked 3 pages "fully" — a footgun. Full now implies deep unless explicitly overridden.
+    if max_pages is None:
+        max_pages = 500 if full else 3
 
     results = asyncio.run(
         _run_all(selected, max_pages, max_new, not no_photos, incremental=not full)
@@ -93,8 +100,10 @@ async def _run_all(
     results: list[ScrapeResult] = []
     for plat in platforms:
         scraper_cls = SCRAPERS[plat]
-        async with scraper_cls() as scraper:
-            try:
+        # `async with` stays INSIDE the try: an __aenter__ failure (e.g. halooglasi's Playwright
+        # browser refusing to launch) must skip that one platform, not crash the whole run.
+        try:
+            async with scraper_cls() as scraper:
                 result = await scrape_platform(
                     scraper,
                     max_pages=max_pages,
@@ -102,12 +111,12 @@ async def _run_all(
                     download_photos=download_photos,
                     incremental=incremental,
                 )
-            except NotImplementedError as e:
-                click.echo(f"[{plat.value}] skipped: {e}", err=True)
-                continue
-            except Exception:
-                logging.getLogger(__name__).exception("[%s] scrape failed", plat.value)
-                continue
+        except NotImplementedError as e:
+            click.echo(f"[{plat.value}] skipped: {e}", err=True)
+            continue
+        except Exception:
+            logging.getLogger(__name__).exception("[%s] scrape failed", plat.value)
+            continue
         results.append(result)
     return results
 
@@ -551,10 +560,11 @@ def match_all() -> None:
     help="Temporary override of PHASH_MAX_HAMMING for this run (try 10–14 on cold start).",
 )
 @click.option(
-    "--keep-published",
-    is_flag=True,
+    "--keep-published/--reset-published",
     default=True,
-    help="(default) Skip inbounds that already have a PUBLISHED match.",
+    show_default=True,
+    help="Keep PUBLISHED matches (and their inbounds) untouched; --reset-published wipes "
+         "ALL matches including published history and re-matches everything.",
 )
 def rematch_all(hamming: int | None, keep_published: bool) -> None:
     """Reset all PENDING/REJECTED/NO_MATCH state and re-run matcher from scratch.
@@ -576,25 +586,30 @@ async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
         click.echo(f"→ Using Hamming threshold = {hamming} for this run only.")
 
     async with get_session() as s:
-        # Delete only non-published Match rows; preserve history.
-        await s.execute(
-            delete(Match).where(Match.status != MatchStatus.PUBLISHED)
-        )
-        # Reset inbound status — but never touch ones with a PublishedPost.
-        published_ib_ids = set(
-            (await s.execute(
-                select(InboundPost.id)
-                .join(Match, Match.inbound_post_id == InboundPost.id)
-                .where(Match.status == MatchStatus.PUBLISHED)
-            )).scalars().all()
-        )
-        if published_ib_ids:
+        if keep_published:
+            # Delete only non-published Match rows; preserve history.
             await s.execute(
-                update(InboundPost)
-                .where(~InboundPost.id.in_(published_ib_ids))
-                .values(status=InboundStatus.NEW)
+                delete(Match).where(Match.status != MatchStatus.PUBLISHED)
             )
+            # Reset inbound status — but never touch ones with a PublishedPost.
+            published_ib_ids = set(
+                (await s.execute(
+                    select(InboundPost.id)
+                    .join(Match, Match.inbound_post_id == InboundPost.id)
+                    .where(Match.status == MatchStatus.PUBLISHED)
+                )).scalars().all()
+            )
+            if published_ib_ids:
+                await s.execute(
+                    update(InboundPost)
+                    .where(~InboundPost.id.in_(published_ib_ids))
+                    .values(status=InboundStatus.NEW)
+                )
+            else:
+                await s.execute(update(InboundPost).values(status=InboundStatus.NEW))
         else:
+            click.echo("⚠️  --reset-published: wiping ALL matches including published history")
+            await s.execute(delete(Match))
             await s.execute(update(InboundPost).values(status=InboundStatus.NEW))
     click.echo("→ State reset. Running matcher...")
 
@@ -1064,10 +1079,46 @@ async def _nightly_refresh(
         )
         _print_summary(results)
 
+    # Sweep ONLY platforms whose scrape actually worked. Sweeping after a failed/segment-starved
+    # walk is how 3 bad nights wipe a platform's whole active set: nothing refreshed last_seen_at,
+    # so everything "ages out" even though the apartments are still live on the site.
+    sweep_skipped_platforms: list[str] = []
     if not skip_sweep:
         click.echo(f"\n→ Marking listings inactive (not seen in last {inactive_after_days} days)…")
-        sweep_result = await mark_stale_inactive(inactive_after_days=inactive_after_days)
-        click.echo(f"  marked {sweep_result.marked_inactive} listings inactive")
+        healthy: list[Platform] = []
+        if skip_scrape:
+            # No scrape this run — operator explicitly asked for sweep-only; sweep everything.
+            healthy = list(SCRAPERS.keys())
+        else:
+            by_platform = {r.platform: r for r in results}
+            for plat in SCRAPERS:
+                r = by_platform.get(plat)
+                # site_total is REQUIRED: a full walk that couldn't even read the site's own
+                # result count can't prove coverage, and sweeping after an unproven walk is how
+                # a silently-truncated scrape mass-deactivates a platform.
+                ok = (
+                    r is not None
+                    and r.previewed > 0
+                    and bool(r.site_total)
+                    and r.previewed >= 0.5 * r.site_total
+                )
+                if ok:
+                    healthy.append(plat)
+                else:
+                    sweep_skipped_platforms.append(plat.value)
+        total_marked = 0
+        for plat in healthy:
+            res = await mark_stale_inactive(
+                inactive_after_days=inactive_after_days, platform=plat
+            )
+            total_marked += res.marked_inactive
+        from src.scrapers.orchestrator import StaleSweepResult
+        sweep_result = StaleSweepResult(platform=None, marked_inactive=total_marked)
+        click.echo(f"  marked {total_marked} listings inactive")
+        if sweep_skipped_platforms:
+            click.echo(
+                f"  ⚠️ sweep skipped for unhealthy platforms: {', '.join(sweep_skipped_platforms)}"
+            )
 
     if skip_scrape:
         return
@@ -1102,7 +1153,12 @@ async def _nightly_refresh(
         lines.append("")
         lines.append("По площадкам (previewed/new):")
         for r in results:
-            extra = f"  ⚠️ пропущено стр.: {r.skipped_pages}" if r.skipped_pages else ""
+            extra = ""
+            if r.site_total:
+                pct = 100 * r.previewed // max(r.site_total, 1)
+                extra += f"  покрытие {pct}% из {r.site_total}"
+            if r.skipped_pages:
+                extra += f"  ⚠️ пропущено стр.: {r.skipped_pages}"
             lines.append(f"  • {r.platform.value}: {r.previewed} / {r.inserted}{extra}")
     # The guard runs UNCONDITIONALLY: if every scraper raised, `results` is empty and `_run_all`
     # records no error counter, so without this an all-platforms-down night would post a cheerful
@@ -1111,11 +1167,23 @@ async def _nightly_refresh(
     dead = [r.platform.value for r in results if r.previewed == 0]
     dead += [p.value for p in SCRAPERS if p not in seen_platforms]
     degraded = [f"{r.platform.value} ({r.skipped_pages} стр.)" for r in results if r.skipped_pages]
+    # Coverage guard: a walk that collects far less than the site holds means pagination caps /
+    # dead segments are eating the active set — the exact silent failure behind the "9000 instead
+    # of 20000" incident. 70% leaves slack for ads appearing/expiring mid-walk.
+    low_coverage = [
+        f"{r.platform.value} ({r.previewed}/{r.site_total})"
+        for r in results
+        if r.site_total and r.previewed < 0.7 * r.site_total
+    ]
     if dead:
         lines.append("")
         lines.append(f"🚨 ВНИМАНИЕ: площадки без результатов: {', '.join(dead)} — проверь скрейпер!")
+    if low_coverage:
+        lines.append(f"🚨 Низкое покрытие: {', '.join(low_coverage)} — кап пагинации/сегменты?")
     if degraded:
         lines.append(f"⚠️ Частичный обход (пропущены страницы): {', '.join(degraded)}")
+    if sweep_skipped_platforms:
+        lines.append(f"⚠️ Sweep пропущен (нездоровый скрейп): {', '.join(sweep_skipped_platforms)}")
     client = await _open_userbot_if_needed()
     try:
         # bot mode → fans out to all chat_ids; userbot mode → Saved Messages.
@@ -1125,6 +1193,11 @@ async def _nightly_refresh(
     finally:
         if client is not None:
             await client.disconnect()
+
+    # Exit non-zero on dead platforms so systemd marks the unit failed (it exits 0 today even
+    # when every scraper is down, which keeps monitoring blind). Summary is already sent above.
+    if dead:
+        raise SystemExit(1)
 
 
 @cli.command("mark-stale")
@@ -1243,6 +1316,128 @@ async def _deliver_all(force: bool = False) -> None:
     finally:
         if client is not None:
             await client.disconnect()
+
+
+@cli.command("refetch-details")
+@click.option(
+    "--platform",
+    type=click.Choice(list(PLATFORM_NAMES.keys()), case_sensitive=False),
+    default=None,
+    help="Limit to one platform.",
+)
+@click.option(
+    "--all", "refetch_all", is_flag=True,
+    help="Re-fetch EVERY active listing (default: only broken rows — no photos, no phashes, "
+         "or no price). Use after a parser fix to backfill, e.g. the 4zida cover photo.",
+)
+@click.option("--limit", type=int, default=None, help="Cap number of listings.")
+@click.option("--no-photos", is_flag=True, help="Update text fields only, skip photo downloads.")
+def refetch_details(platform: str | None, refetch_all: bool, limit: int | None, no_photos: bool) -> None:
+    """Re-fetch detail pages for existing listings and repair their stored data.
+
+    Listings are normally detail-fetched exactly once at insert; a transient failure or a
+    parser bug at that moment freezes the row forever (no price/photos → invisible to the
+    matcher). This command heals such rows, and backfills after parser improvements.
+    """
+    asyncio.run(_refetch_details(platform, refetch_all, limit, no_photos))
+
+
+async def _refetch_details(
+    platform: str | None, refetch_all: bool, limit: int | None, no_photos: bool
+) -> None:
+    from src.db.models import Listing
+    from src.db.session import get_session
+    from src.scrapers.orchestrator import _download_photos
+
+    stmt = select(Listing.id, Listing.platform, Listing.url).where(Listing.is_active.is_(True))
+    if platform:
+        stmt = stmt.where(Listing.platform == PLATFORM_NAMES[platform.lower()])
+    if not refetch_all:
+        stmt = stmt.where(
+            (Listing.photo_urls == [])
+            | (Listing.photo_phashes == [])
+            | (Listing.price_eur.is_(None))
+        )
+    stmt = stmt.order_by(Listing.id)
+    if limit:
+        stmt = stmt.limit(limit)
+    async with get_session() as s:
+        rows = (await s.execute(stmt)).all()
+
+    by_platform: dict[Platform, list] = {}
+    for row in rows:
+        by_platform.setdefault(row.platform, []).append(row)
+    total = len(rows)
+    click.echo(f"→ refetch-details: {total} listings ({'ALL' if refetch_all else 'broken only'})")
+    stats = {"updated": 0, "photos": 0, "errors": 0}
+
+    for plat, plat_rows in by_platform.items():
+        scraper_cls = SCRAPERS[plat]
+        try:
+            async with scraper_cls() as scraper:
+                for row in plat_rows:
+                    try:
+                        detail = await scraper.fetch_detail(row.url)
+                        if not detail.photo_urls and detail.price_eur is None and detail.title is None:
+                            raise RuntimeError("still an empty payload")
+                        # Decide and DOWNLOAD photos before touching the row: committing the new
+                        # photo_urls first would make a failed download undetectable forever
+                        # (urls match, phashes non-empty → no filter ever selects the row again).
+                        async with get_session() as s:
+                            current = await s.get(Listing, row.id)
+                            if current is None:
+                                continue
+                            old_urls = list(current.photo_urls or [])
+                            old_phash_count = len(current.photo_phashes or [])
+                        need_photos = (
+                            not no_photos
+                            and detail.photo_urls
+                            and (
+                                list(detail.photo_urls) != old_urls
+                                or old_phash_count < len(detail.photo_urls)
+                            )
+                        )
+                        hashes: list[str] = []
+                        emb = None
+                        if need_photos:
+                            paths, hashes, emb = await _download_photos(detail)
+                            if not hashes:
+                                raise RuntimeError("photo download produced no hashes — row left untouched")
+                        async with get_session() as s:
+                            listing = await s.get(Listing, row.id)
+                            if listing is None:
+                                continue
+                            listing.price_eur = detail.price_eur
+                            listing.area_m2 = detail.area_m2
+                            listing.rooms = detail.rooms
+                            listing.district = detail.district
+                            listing.address_raw = detail.address_raw
+                            listing.lat = detail.lat
+                            listing.lon = detail.lon
+                            listing.title = detail.title
+                            listing.description = detail.description
+                            listing.raw_payload = detail.raw_payload
+                            if need_photos:
+                                listing.photo_urls = detail.photo_urls
+                                listing.photo_phashes = hashes
+                                listing.photo_embeddings = emb
+                                stats["photos"] += len(hashes)
+                        stats["updated"] += 1
+                        if stats["updated"] % 100 == 0:
+                            click.echo(
+                                f"  … {stats['updated']}/{total} photos={stats['photos']} errors={stats['errors']}"
+                            )
+                        await asyncio.sleep(0.3)
+                    except Exception as e:
+                        stats["errors"] += 1
+                        if stats["errors"] <= 5:
+                            click.echo(f"  ⚠ {plat.value} #{row.id}: {type(e).__name__}: {e}", err=True)
+        except Exception:
+            logging.getLogger(__name__).exception("[refetch %s] platform failed", plat.value)
+
+    click.echo(
+        f"=== DONE: updated={stats['updated']} photos={stats['photos']} errors={stats['errors']} ==="
+    )
 
 
 @cli.command("backfill-nekretnine-address")

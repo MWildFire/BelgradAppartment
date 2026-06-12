@@ -36,6 +36,10 @@ _send_lock = asyncio.Lock()
 # Avoid spamming the log with the same "credentials missing" warning on every no_match.
 _creds_warning_emitted = False
 
+# The event loop only keeps weak refs to tasks — without a strong ref a fire-and-forget
+# notify task can be garbage-collected mid-flight.
+_background_tasks: set[asyncio.Task[None]] = set()
+
 
 def notify_no_match(
     inbound_id: int,
@@ -51,7 +55,7 @@ def notify_no_match(
     and the daily 07:00 UTC summary, so a silent pipeline failure is indistinguishable
     from "no matches today".
     """
-    return asyncio.create_task(
+    task = asyncio.create_task(
         _do_notify_no_match(
             inbound_id,
             best_count=best_count,
@@ -60,6 +64,9 @@ def notify_no_match(
             confidence=confidence,
         )
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 async def _do_notify_no_match(

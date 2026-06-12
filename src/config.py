@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -99,6 +99,17 @@ class Settings(BaseSettings):
     # --- Misc ---
     log_level: str = "INFO"
     timezone: str = "Europe/Belgrade"
+
+    @model_validator(mode="after")
+    def _absolutize_sqlite_path(self) -> Settings:
+        # A CWD-relative sqlite path silently targets a different/empty DB when the CLI
+        # runs from another directory — anchor it at PROJECT_ROOT instead.
+        prefix = "sqlite+aiosqlite:///"
+        if self.database_url.startswith(prefix):
+            path = self.database_url[len(prefix):]
+            if path and path != ":memory:" and not path.startswith("/"):
+                self.database_url = prefix + str((PROJECT_ROOT / path).resolve())
+        return self
 
     def ensure_dirs(self) -> None:
         """Create data directories if missing (idempotent)."""

@@ -63,6 +63,21 @@ def _make_bot() -> Bot:
     return Bot(token=settings.tg_bot_token)
 
 
+async def _send_album_with_floodwait(bot: Bot, chat_id: int, media: list[InputMediaPhoto]):
+    """send_media_group with one flood-wait retry — Telegram 429s are temporary, the match isn't."""
+    import asyncio
+
+    from aiogram.exceptions import TelegramRetryAfter
+
+    try:
+        return await bot.send_media_group(chat_id=chat_id, media=media)
+    except TelegramRetryAfter as e:
+        wait = min(float(e.retry_after) + 1.0, 120.0)
+        logger.warning("[bot_delivery] flood-wait %ss for chat_id=%d — retrying once", wait, chat_id)
+        await asyncio.sleep(wait)
+        return await bot.send_media_group(chat_id=chat_id, media=media)
+
+
 async def send_match_via_bot(
     match_id: int,
     *,
@@ -134,8 +149,9 @@ async def send_match_via_bot(
 
     bot = _make_bot()
     first_msg_id = 0
+    delivered_to = 0
     try:
-        for i, chat_id in enumerate(recipients):
+        for chat_id in recipients:
             media: list[InputMediaPhoto] = []
             for j, p in enumerate(photo_paths):
                 media.append(
@@ -145,9 +161,10 @@ async def send_match_via_bot(
                     )
                 )
             try:
-                messages = await bot.send_media_group(chat_id=chat_id, media=media)
-                if i == 0 and messages:
+                messages = await _send_album_with_floodwait(bot, chat_id, media)
+                if delivered_to == 0 and messages:
                     first_msg_id = int(messages[0].message_id)
+                delivered_to += 1
                 logger.info(
                     "Delivered match=%d → chat_id=%d (msg=%d, %d photos)",
                     match_id, chat_id,
@@ -155,9 +172,17 @@ async def send_match_via_bot(
                     len(photo_paths),
                 )
             except Exception:
+                # One blocked/broken recipient must not stop the fan-out to the others.
                 logger.exception("[bot_delivery] failed to send to %d", chat_id)
     finally:
         await bot.session.close()
+
+    if delivered_to == 0:
+        # NOT delivered anywhere — leave the match un-PUBLISHED so deliver-all / the next
+        # pipeline run retries it. Marking it PUBLISHED here would silently lose the match.
+        raise BotDeliveryError(
+            f"Match {match_id}: delivery failed for all {len(recipients)} recipient(s)"
+        )
 
     async with get_session() as s:
         m = await s.get(Match, match_id)

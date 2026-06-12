@@ -31,16 +31,32 @@ _JSON_LD_RE = re.compile(
 class CetiriZidaScraper(Scraper):
     platform: ClassVar[Platform] = Platform.CETIRI_ZIDA
 
-    # Resilience knobs (overridable in tests to keep them fast).
-    fetch_attempts: ClassVar[int] = 3
+    # Resilience knobs (overridable in tests to keep them fast). 4zida rate-limits aggressive
+    # walks (429 + soft 200-without-data pages), so pace gentler than the other scrapers — a full
+    # segmented walk is ~460 pages, 0.8s ≈ 6 min, irrelevant for a nightly job.
+    fetch_attempts: ClassVar[int] = 4
     retry_backoff_sec: ClassVar[float] = 2.0
-    page_delay_sec: ClassVar[float] = 0.4
-    max_consecutive_failures: ClassVar[int] = 3
+    page_delay_sec: ClassVar[float] = 0.8
+    max_consecutive_failures: ClassVar[int] = 5
+
+    # 4zida hard-caps every search at ~100 pages × 20 = ~2000 results (deeper ?strana values
+    # re-serve earlier pages) while holding ~7000 Belgrade rentals. For full walks we segment by
+    # price (?skuplje_od / ?jeftinije_od = min/max EUR), each band under the cap, merged with dedup.
+    # Effective cap measured at ~99 pages / ~1980 uniques (page 100+ serves a near-static
+    # sliding window) — the band-overflow warning threshold must not overstate safe capacity.
+    page_cap: ClassVar[int] = 99
+    results_cap: ClassVar[int] = 1900
+    price_bands: ClassVar[tuple[tuple[int, int | None], ...]] = (
+        (0, 300), (300, 400), (400, 500), (500, 600), (600, 700), (700, 800), (800, 900),
+        (900, 1100), (1100, 1400), (1400, 2000), (2000, 3000), (3000, None),
+    )
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self.list_url = get_settings().cetiri_zida_list_url
         self._skipped_pages = 0
+        # Site-reported total ("N oglasa" header) for the unfiltered search — coverage signal.
+        self._site_total: int | None = None
 
     async def list_recent(
         self,
@@ -49,14 +65,86 @@ class CetiriZidaScraper(Scraper):
         known_ids: set[str] | None = None,
         early_stop_full_known_pages: int = 2,
     ) -> list[ListingPreview]:
+        known_ids = known_ids or set()
         seen: set[str] = set()
         previews: list[ListingPreview] = []
-        known_ids = known_ids or set()
+        self._skipped_pages = 0
+        self._site_total = None
+
+        # Pass 1 — unfiltered walk (newest-first; also the only pass that sees price-less ads).
+        await self._walk(
+            self.list_url, max_pages, known_ids, early_stop_full_known_pages,
+            seen, previews, is_base=True,
+        )
+
+        # Pass 2 — price-band segmentation for full walks the cap truncated.
+        wants_full = max_pages > self.page_cap
+        if wants_full and self._site_total is None:
+            # Can't tell how much the cap hid — segmentation silently skipped would re-create
+            # the "walk truncates to ~2000 and passes for healthy" failure. Surface it loudly;
+            # the nightly sweep gate also treats a full walk without site_total as unhealthy.
+            logger.error(
+                "[4zida] full walk requested but the results-count header did not parse — "
+                "site_total unknown, segmentation skipped, coverage unverifiable",
+            )
+        if self._site_total is not None and len(previews) > 1.5 * self._site_total:
+            logger.error(
+                "[4zida] parsed site_total=%d is implausible (collected %d) — separator change? "
+                "Discarding the bogus total.",
+                self._site_total, len(previews),
+            )
+            self._site_total = None
+        if wants_full and self._site_total is not None and self._site_total > len(previews):
+            logger.info(
+                "[4zida] unfiltered walk capped at %d of %d site listings — walking %d price bands",
+                len(previews), self._site_total, len(self.price_bands),
+            )
+            for lo, hi in self.price_bands:
+                before = len(previews)
+                band_total = await self._walk(
+                    self._band_url(lo, hi), self.page_cap, known_ids,
+                    early_stop_full_known_pages, seen, previews,
+                )
+                if band_total is not None and band_total > self.results_cap:
+                    logger.warning(
+                        "[4zida] band %s-%s holds %d listings > cap %d — narrow price_bands",
+                        lo, hi if hi is not None else "∞", band_total, self.results_cap,
+                    )
+                logger.info(
+                    "[4zida] band %s-%s: +%d new (band_total=%s, cumulative=%d)",
+                    lo, hi if hi is not None else "∞", len(previews) - before, band_total, len(previews),
+                )
+            logger.info(
+                "[4zida] segmented walk done: %d collected vs site_total=%s",
+                len(previews), self._site_total,
+            )
+        return previews
+
+    async def _walk(
+        self,
+        base_url: str,
+        max_pages: int,
+        known_ids: set[str],
+        early_stop_full_known_pages: int,
+        seen: set[str],
+        previews: list[ListingPreview],
+        *,
+        is_base: bool = False,
+    ) -> int | None:
+        """Paginate one search (base or price band), accumulating into seen/previews.
+
+        Returns the site-reported total for THIS search (None if not found).
+        """
         consecutive_full_known = 0
         consecutive_failures = 0
-        self._skipped_pages = 0
-        for page in range(1, max_pages + 1):
-            url = self.list_url if page == 1 else f"{self.list_url}?strana={page}"
+        search_total: int | None = None
+        # Never request past the site's hard pagination cap — deeper pages re-serve old content.
+        limit = min(max_pages, self.page_cap)
+
+        page = 1
+        while page <= limit:
+            sep = "&" if "?" in base_url else "?"
+            url = base_url if page == 1 else f"{base_url}{sep}strana={page}"
             html = await self._fetch_page(url)
             if html is None:
                 # A single transient error (429/timeout/5xx) must not abort the whole walk —
@@ -71,9 +159,18 @@ class CetiriZidaScraper(Scraper):
                 if consecutive_failures >= self.max_consecutive_failures:
                     logger.error("[4zida] aborting walk after %d consecutive fetch failures", consecutive_failures)
                     break
+                page += 1
                 continue
-            consecutive_failures = 0
             page_previews = self.parse_list(html)
+            if search_total is None:
+                search_total = self._total_from_html(html)
+                if is_base and search_total is not None:
+                    self._site_total = search_total
+                # The site has no maxPages signal; derive the walk bound from its own result
+                # count so we stop instead of reading re-served pages past the end.
+                if search_total is not None and page_previews:
+                    expected = -(-search_total // len(page_previews))  # ceil div
+                    limit = min(limit, max(expected, 1))
             new_this_page = 0
             unknown_this_page = 0
             for prev in page_previews:
@@ -84,9 +181,33 @@ class CetiriZidaScraper(Scraper):
                 new_this_page += 1
                 if prev.external_id not in known_ids:
                     unknown_this_page += 1
-            if new_this_page == 0:
-                break
-            if known_ids and unknown_this_page == 0:
+            if not page_previews:
+                # search_total == 0 is a genuinely empty band, not a soft failure to retry.
+                if search_total and page < limit:
+                    # 200 OK but no listings while the site says more pages exist — a soft
+                    # rate-limit/error page, NOT the end. Treating it as end-of-pagination is
+                    # how the first segmentation rollout silently collected 9% of 4zida.
+                    consecutive_failures += 1
+                    self._skipped_pages += 1
+                    logger.warning(
+                        "[4zida] page %d: empty parse below expected end (page %d/%d) — soft "
+                        "failure (consecutive=%d)",
+                        page, page, limit, consecutive_failures,
+                    )
+                    if consecutive_failures >= self.max_consecutive_failures:
+                        logger.error("[4zida] aborting walk after %d consecutive soft failures", consecutive_failures)
+                        break
+                    if self.retry_backoff_sec > 0:
+                        await asyncio.sleep(self.retry_backoff_sec * consecutive_failures)
+                    page += 1
+                    continue
+                break  # structurally empty page = end of pagination
+            # A page with real listings is the only success that resets the failure streak —
+            # resetting on mere fetch-200 would let alternating soft-failures run forever.
+            consecutive_failures = 0
+            # NB: an all-duplicate page is NOT the end — price-band walks legitimately overlap
+            # the unfiltered pass; the expected-pages bound above ends the walk instead.
+            if known_ids and unknown_this_page == 0 and new_this_page > 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
                     logger.info(
@@ -97,7 +218,34 @@ class CetiriZidaScraper(Scraper):
                 consecutive_full_known = 0
             if self.page_delay_sec > 0:
                 await asyncio.sleep(self.page_delay_sec)  # pace the walk to avoid 429s
-        return previews
+            page += 1
+        return search_total
+
+    def _band_url(self, lo: int, hi: int | None) -> str:
+        sep = "&" if "?" in self.list_url else "?"
+        params = f"skuplje_od={lo}"
+        if hi is not None:
+            params += f"&jeftinije_od={hi}"
+        return f"{self.list_url}{sep}{params}"
+
+    @staticmethod
+    def _total_from_html(html: str) -> int | None:
+        """Parse the "6.947 oglasa" results-count header.
+
+        Tolerates dot/comma/space/nbsp thousands separators — a separator change that made the
+        regex match only the trailing digits would silently understate the total, shrink the
+        walk bound and skip segmentation while still passing the coverage health check.
+        """
+        m = re.search(r"(\d[\d.,  ]*)\s*oglas", html)
+        if not m:
+            return None
+        digits = re.sub(r"\D", "", m.group(1))
+        if not digits:
+            return None
+        try:
+            return int(digits)
+        except ValueError:
+            return None
 
     async def fetch_detail(self, url: str) -> ListingDetail:
         resp = await self._client.get(url)
@@ -105,19 +253,26 @@ class CetiriZidaScraper(Scraper):
         return self.parse_detail(url, resp.text)
 
     async def _fetch_page(self, url: str) -> str | None:
-        """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed."""
+        """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed.
+
+        429s get a much longer backoff — hammering through a rate limit only digs deeper."""
         for attempt in range(self.fetch_attempts):
             try:
                 resp = await self._client.get(url)
                 resp.raise_for_status()
                 return resp.text
             except Exception as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
                 logger.warning(
-                    "[4zida] GET %s attempt %d/%d failed: %s",
+                    "[4zida] GET %s attempt %d/%d failed: %s%s",
                     url, attempt + 1, self.fetch_attempts, type(e).__name__,
+                    f" (HTTP {status})" if status else "",
                 )
                 if attempt + 1 < self.fetch_attempts and self.retry_backoff_sec > 0:
-                    await asyncio.sleep(self.retry_backoff_sec * (attempt + 1))
+                    backoff = self.retry_backoff_sec * (attempt + 1)
+                    if status == 429:
+                        backoff = max(backoff * 5, 10.0 * (attempt + 1))
+                    await asyncio.sleep(backoff)
         return None
 
     # ---- Pure parsers ----
@@ -309,9 +464,28 @@ def _safe_float(value: object) -> float | None:
 
 
 def _collect_4zida_photos(blocks: list[dict[str, Any]]) -> list[str]:
-    """Walk JSON-LD looking for the Apartment image array (full-size webp URLs)."""
+    """Walk JSON-LD looking for the Apartment image array (full-size webp URLs).
+
+    The COVER photo is referenced as {"@id": "...#primary-image"} inside the array, with the
+    actual URL in a separate top-level ImageObject block — resolve it via an @id map, or every
+    listing silently loses its cover (the photo Telegram reposts usually lead with), and
+    single-photo listings end up with photo_urls=[] entirely.
+    """
+    id_map: dict[str, str] = {}
+    for b in blocks:
+        if b.get("@type") == "ImageObject" and isinstance(b.get("@id"), str):
+            u = b.get("url") or b.get("contentUrl")
+            if isinstance(u, str) and u.startswith("https://"):
+                id_map[b["@id"]] = u
+
     photos: list[str] = []
     seen: set[str] = set()
+
+    def _add(url: object) -> None:
+        if isinstance(url, str) and url.startswith("https://") and url not in seen:
+            seen.add(url)
+            photos.append(url)
+
     for b in blocks:
         if b.get("@type") != "Apartment":
             continue
@@ -319,12 +493,8 @@ def _collect_4zida_photos(blocks: list[dict[str, Any]]) -> list[str]:
         if not isinstance(images, list):
             continue
         for img in images:
-            if isinstance(img, str) and img.startswith("https://") and img not in seen:
-                seen.add(img)
-                photos.append(img)
+            if isinstance(img, str):
+                _add(img)
             elif isinstance(img, dict):
-                url = img.get("url") or img.get("contentUrl")
-                if isinstance(url, str) and url.startswith("https://") and url not in seen:
-                    seen.add(url)
-                    photos.append(url)
+                _add(img.get("url") or img.get("contentUrl") or id_map.get(img.get("@id") or ""))
     return photos

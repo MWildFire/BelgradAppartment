@@ -73,6 +73,8 @@ class HalooglasiScraper(Scraper):
         self._user_data_dir.mkdir(parents=True, exist_ok=True)
         self._pw = None
         self._context = None
+        self._skipped_pages = 0
+        self._site_total: int | None = None  # serverListData.TotalCount — coverage denominator
         # Cloudflare's "Just a moment…" challenge often denies the headless-shell binary.
         # Default to headed so it passes on macOS; on Linux VPS use xvfb-run or override via env.
         # Toggle with HALOOGLASI_HEADLESS=true in .env when you really need headless.
@@ -84,28 +86,35 @@ class HalooglasiScraper(Scraper):
         from playwright_stealth import Stealth
 
         self._pw = await async_playwright().start()
-        # Stealth patches: navigator.webdriver=undefined, real chrome.runtime, proper sec-ch-ua,
-        # webgl vendor, plugin list, etc. — what Cloudflare actually checks. Hook the running
-        # Playwright instance so every new page gets the patches applied at navigation time.
-        stealth = Stealth(
-            navigator_user_agent_override=USER_AGENT,
-            navigator_languages_override=("sr-RS", "sr", "en-US", "en"),
-            init_scripts_only=False,
-        )
-        stealth.hook_playwright_context(self._pw)
+        try:
+            # Stealth patches: navigator.webdriver=undefined, real chrome.runtime, proper sec-ch-ua,
+            # webgl vendor, plugin list, etc. — what Cloudflare actually checks. Hook the running
+            # Playwright instance so every new page gets the patches applied at navigation time.
+            stealth = Stealth(
+                navigator_user_agent_override=USER_AGENT,
+                navigator_languages_override=("sr-RS", "sr", "en-US", "en"),
+                init_scripts_only=False,
+            )
+            stealth.hook_playwright_context(self._pw)
 
-        self._context = await self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(self._user_data_dir),
-            headless=self._headless,
-            user_agent=USER_AGENT,
-            viewport={"width": 1366, "height": 900},
-            locale="sr-RS",
-            timezone_id="Europe/Belgrade",
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
-            ],
-        )
+            self._context = await self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(self._user_data_dir),
+                headless=self._headless,
+                user_agent=USER_AGENT,
+                viewport={"width": 1366, "height": 900},
+                locale="sr-RS",
+                timezone_id="Europe/Belgrade",
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                ],
+            )
+        except BaseException:
+            # A failed launch must not leak the playwright driver process — and the caller
+            # (e.g. nightly _run_all) treats this platform as failed, not the whole run.
+            await self._pw.stop()
+            self._pw = None
+            raise
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
@@ -130,16 +139,20 @@ class HalooglasiScraper(Scraper):
         consecutive_failures = 0
         known_ids = known_ids or set()
         consecutive_full_known = 0
+        self._skipped_pages = 0
+        self._site_total = None
 
         for page_num in range(1, max_pages + 1):
             url = self.list_url if page_num == 1 else f"{self.list_url}?page={page_num}"
 
-            # Single-page retry with browser restart if Chromium reports a network/resource error.
+            # Single-page retry with browser restart on Chromium network errors. A returned page
+            # WITHOUT the data marker (Cloudflare challenge that outlasted the poll, soft error
+            # page) must also consume retries — previously it broke out after attempt 1 and the
+            # page was skipped with two unused retries left.
             html = ""
             for attempt in range(3):
                 try:
                     html = await self._fetch_with_browser(url, ready_marker=_LIST_VAR)
-                    break
                 except Exception as e:
                     logger.warning(
                         "[halooglasi] page %d attempt %d failed: %s — recycling browser",
@@ -147,16 +160,32 @@ class HalooglasiScraper(Scraper):
                     )
                     await self._recycle_browser()
                     await asyncio.sleep(3.0)
+                    continue
+                if html and _LIST_VAR in html:
+                    break
+                logger.warning(
+                    "[halooglasi] page %d attempt %d: marker missing (challenge/soft error) — retrying",
+                    page_num, attempt + 1,
+                )
+                await asyncio.sleep(5.0)
 
             if not html or _LIST_VAR not in html:
                 consecutive_failures += 1
-                logger.warning("[halooglasi] page %d: no data after retries (consec_fail=%d)",
-                               page_num, consecutive_failures)
+                self._skipped_pages += 1
+                logger.warning("[halooglasi] page %d: no data after retries (consec_fail=%d, skipped=%d)",
+                               page_num, consecutive_failures, self._skipped_pages)
                 if consecutive_failures >= 5:
                     logger.error("[halooglasi] giving up after 5 consecutive failures")
                     break
                 continue
             consecutive_failures = 0
+
+            if self._site_total is None:
+                data = _extract_json_var(html, _LIST_VAR)
+                if isinstance(data, dict):
+                    tc = data.get("TotalCount")
+                    if isinstance(tc, int) and tc > 0:
+                        self._site_total = tc
 
             page_previews = self.parse_list(html)
             added = 0
@@ -214,6 +243,11 @@ class HalooglasiScraper(Scraper):
         for attempt in range(3):
             try:
                 html = await self._fetch_with_browser(url, ready_marker=_DETAIL_VAR)
+                if _DETAIL_VAR not in html:
+                    # Challenge/soft-error page: parse_detail would "succeed" with an all-None
+                    # shell that gets inserted and frozen forever (existing rows are never
+                    # detail-refreshed) — fail instead so the retry/error path handles it.
+                    raise RuntimeError("detail data marker missing (challenge or soft error page)")
                 return self.parse_detail(url, html)
             except Exception as e:
                 last_error = e

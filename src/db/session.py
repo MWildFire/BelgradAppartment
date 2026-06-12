@@ -37,6 +37,9 @@ def init_engine(database_url: str | None = None) -> AsyncEngine:
                 cur.execute("PRAGMA journal_mode=WAL")
                 cur.execute("PRAGMA busy_timeout=10000")  # wait up to 10s on lock
                 cur.execute("PRAGMA synchronous=NORMAL")
+                # SQLite ships with FK enforcement OFF — without this, ondelete=CASCADE
+                # declared on our models is silently ignored.
+                cur.execute("PRAGMA foreign_keys=ON")
                 cur.close()
         _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
     return _engine

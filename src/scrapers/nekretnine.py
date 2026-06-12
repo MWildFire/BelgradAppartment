@@ -61,12 +61,29 @@ class NekretnineScraper(Scraper):
     page_delay_sec: ClassVar[float] = 0.4  # pacing between pages on a long walk (avoids 429s)
     max_consecutive_failures: ClassVar[int] = 3  # abort the walk after this many in a row
 
+    # The site hard-caps every search at 80 pages × 25 = 2000 results (page 81+ returns HTTP 404)
+    # even when totalAds is ~7700. A single unfiltered walk therefore covers only ~25% of the
+    # market. For full walks we segment the search into price bands (?prezzoMinimo/?prezzoMassimo —
+    # IndomioTech's Italian param names), each safely under the cap, and merge with dedup.
+    page_cap: ClassVar[int] = 80
+    results_cap: ClassVar[int] = 2000
+    # (lo, hi) EUR bands; hi=None = open-ended. Shared boundaries are safe: inclusive overlap is
+    # deduped by external_id, exclusive boundaries lose nothing.
+    price_bands: ClassVar[tuple[tuple[int, int | None], ...]] = (
+        (0, 300), (300, 400), (400, 500), (500, 600), (600, 700), (700, 800), (800, 900),
+        (900, 1100), (1100, 1400), (1400, 2000), (2000, 3000), (3000, None),
+    )
+
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
         self.list_url = get_settings().nekretnine_list_url
         # Pages we couldn't fetch and skipped past — surfaced via ScrapeResult so a partial
         # under-run doesn't masquerade as a healthy walk.
         self._skipped_pages = 0
+        # totalAds the site reports for the unfiltered search — lets the nightly summary show
+        # coverage (previewed/site_total) and alert when we collect far less than what exists.
+        self._site_total: int | None = None
+        self._last_status: int | None = None  # HTTP status of the most recent _fetch_page
 
     async def list_recent(
         self,
@@ -75,18 +92,78 @@ class NekretnineScraper(Scraper):
         known_ids: set[str] | None = None,
         early_stop_full_known_pages: int = 2,
     ) -> list[ListingPreview]:
+        known_ids = known_ids or set()
         seen: set[str] = set()
         previews: list[ListingPreview] = []
-        known_ids = known_ids or set()
+        self._skipped_pages = 0
+        self._site_total = None
+
+        # Pass 1 — unfiltered walk (newest-first). For incremental scrapes this is all we need;
+        # it is also the only pass that can see listings with NO price (excluded by price filters).
+        await self._walk(
+            self.list_url, max_pages, known_ids, early_stop_full_known_pages,
+            seen, previews, is_base=True,
+        )
+
+        # Pass 2 — price-band segmentation, only for full walks that the cap truncated.
+        wants_full = max_pages > self.page_cap
+        if wants_full and self._site_total is not None and self._site_total > len(previews):
+            logger.info(
+                "[nekretnine] unfiltered walk capped at %d of %d site listings — walking %d price bands",
+                len(previews), self._site_total, len(self.price_bands),
+            )
+            for lo, hi in self.price_bands:
+                before = len(previews)
+                band_total = await self._walk(
+                    self._band_url(lo, hi), self.page_cap, known_ids,
+                    early_stop_full_known_pages, seen, previews,
+                )
+                if band_total is not None and band_total > self.results_cap:
+                    logger.warning(
+                        "[nekretnine] band %s-%s holds %d listings > cap %d — band too wide, "
+                        "narrow price_bands to restore full coverage",
+                        lo, hi if hi is not None else "∞", band_total, self.results_cap,
+                    )
+                logger.info(
+                    "[nekretnine] band %s-%s: +%d new (band_total=%s, cumulative=%d)",
+                    lo, hi if hi is not None else "∞", len(previews) - before, band_total, len(previews),
+                )
+            logger.info(
+                "[nekretnine] segmented walk done: %d collected vs site_total=%s",
+                len(previews), self._site_total,
+            )
+        return previews
+
+    async def _walk(
+        self,
+        base_url: str,
+        max_pages: int,
+        known_ids: set[str],
+        early_stop_full_known_pages: int,
+        seen: set[str],
+        previews: list[ListingPreview],
+        *,
+        is_base: bool = False,
+    ) -> int | None:
+        """Paginate one search (base or price band), accumulating into seen/previews.
+
+        Returns the totalAds the site reports for THIS search (None if never seen).
+        """
         consecutive_full_known = 0  # pages where every entry was already in known_ids
         consecutive_failures = 0  # pages we couldn't fetch at all
         site_max_pages: int | None = None
-        self._skipped_pages = 0
+        search_total: int | None = None
+        # Never request past the site's hard pagination cap — pages beyond it 404 or re-serve.
+        limit = min(max_pages, self.page_cap)
 
         page = 1
-        while page <= max_pages:
-            html = await self._fetch_page(self._page_url(page))
+        while page <= limit:
+            html = await self._fetch_page(self._page_url(base_url, page))
             if html is None:
+                if self._last_status == 404:
+                    # Past the site's pagination cap — semantic end of this search, not a failure.
+                    logger.info("[nekretnine] page %d → 404 (pagination cap), ending walk", page)
+                    break
                 # Transient fetch failure: retry a few pages before giving up. A single 429/timeout
                 # must NOT abort the whole walk (the old `except: break` silently truncated the
                 # active set and is what let nekretnine drop to zero unnoticed). But we DO count the
@@ -116,14 +193,29 @@ class NekretnineScraper(Scraper):
                     page,
                 )
                 break
+            ta = data.get("totalAds")
+            if search_total is None and isinstance(ta, int):
+                search_total = ta
+                if is_base:
+                    self._site_total = ta
             if site_max_pages is None:
                 mp = data.get("maxPages")
                 if isinstance(mp, int) and mp > 0:
                     site_max_pages = mp
+            cp = data.get("currentPage")
+            if isinstance(cp, int) and cp != page:
+                # The site ignored ?pag= and re-served another page (the original migration bug
+                # class). Without this guard a band walk would happily re-read page 1 forever.
+                logger.error(
+                    "[nekretnine] requested page %d but got currentPage=%s — pagination broken, stopping walk",
+                    page, cp,
+                )
+                break
 
+            page_previews = self._previews_from_payload(data)
             new_this_page = 0
             unknown_this_page = 0
-            for prev in self._previews_from_payload(data):
+            for prev in page_previews:
                 if prev.external_id in seen:
                     continue
                 seen.add(prev.external_id)
@@ -132,9 +224,12 @@ class NekretnineScraper(Scraper):
                 if prev.external_id not in known_ids:
                     unknown_this_page += 1
 
-            if new_this_page == 0:
-                break  # empty page = end of pagination
-            if known_ids and unknown_this_page == 0:
+            if not page_previews:
+                break  # structurally empty page = end of pagination
+            # NB: a page whose listings are ALL already in `seen` is NOT the end — price-band
+            # walks legitimately overlap the unfiltered pass (newest listings appear in both), so
+            # we keep walking; the site's maxPages/currentPage signals bound the walk instead.
+            if known_ids and unknown_this_page == 0 and new_this_page > 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
                     logger.info(
@@ -149,7 +244,7 @@ class NekretnineScraper(Scraper):
             if self.page_delay_sec > 0:
                 await asyncio.sleep(self.page_delay_sec)  # pace a long walk to avoid 429s
             page += 1
-        return previews
+        return search_total
 
     async def fetch_detail(self, url: str) -> ListingDetail:
         resp = await self._client.get(url)
@@ -157,26 +252,48 @@ class NekretnineScraper(Scraper):
         return self.parse_detail(url, resp.text)
 
     async def _fetch_page(self, url: str) -> str | None:
-        """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed."""
+        """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed.
+
+        Sets `self._last_status` to the final HTTP status (or None on transport errors) so the
+        caller can tell a semantic 404 (past the pagination cap) from a transient failure —
+        404s short-circuit without retries.
+        """
+        self._last_status = None
         for attempt in range(self.fetch_attempts):
             try:
                 resp = await self._client.get(url)
+                self._last_status = resp.status_code
+                if resp.status_code == 404:
+                    return None
                 resp.raise_for_status()
                 return resp.text
             except Exception as e:
+                status = getattr(getattr(e, "response", None), "status_code", None)
                 logger.warning(
-                    "[nekretnine] GET %s attempt %d/%d failed: %s",
+                    "[nekretnine] GET %s attempt %d/%d failed: %s%s",
                     url, attempt + 1, self.fetch_attempts, type(e).__name__,
+                    f" (HTTP {status})" if status else "",
                 )
                 if attempt + 1 < self.fetch_attempts and self.retry_backoff_sec > 0:
-                    await asyncio.sleep(self.retry_backoff_sec * (attempt + 1))
+                    backoff = self.retry_backoff_sec * (attempt + 1)
+                    if status == 429:
+                        backoff = max(backoff * 5, 10.0 * (attempt + 1))
+                    await asyncio.sleep(backoff)
         return None
 
-    def _page_url(self, page: int) -> str:
-        if page <= 1:
-            return self.list_url
+    def _band_url(self, lo: int, hi: int | None) -> str:
         sep = "&" if "?" in self.list_url else "?"
-        return f"{self.list_url}{sep}pag={page}"
+        params = f"prezzoMinimo={lo}"
+        if hi is not None:
+            params += f"&prezzoMassimo={hi}"
+        return f"{self.list_url}{sep}{params}"
+
+    @staticmethod
+    def _page_url(base_url: str, page: int) -> str:
+        if page <= 1:
+            return base_url
+        sep = "&" if "?" in base_url else "?"
+        return f"{base_url}{sep}pag={page}"
 
     # ---- Pure parsers (testable on fixtures) ----
 

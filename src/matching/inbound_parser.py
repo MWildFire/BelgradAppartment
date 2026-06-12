@@ -16,10 +16,11 @@ from dataclasses import dataclass, field
 from src.post.hashtags import _districts_map, _normalise
 
 PRICE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    # "550 €", "700€", "1.200€"
-    re.compile(r"(?<![\d.])(\d{2,3}(?:[.,]\d{3})?|\d{3,5})\s*€", re.IGNORECASE),
-    # "600 евро", "1100 евро", "800евро"
-    re.compile(r"(?<![\d.])(\d{2,3}(?:[.,]\d{3})?|\d{3,5})\s*евр[оa]", re.IGNORECASE),
+    # "550 €", "700€", "1.200€", "1 200€" (Russian space/nbsp thousands — without the separator
+    # alternative "1 200€" parses as 200 and the text cross-check rejects genuine matches)
+    re.compile(r"(?<![\d.])(?<![a-zA-Zа-яёА-ЯЁ])(\d{1,3}(?:[.,  ]\d{3})|\d{2,5})\s*€", re.IGNORECASE),
+    # "600 евро", "1100 евро", "800евро", "1 200 евро"
+    re.compile(r"(?<![\d.])(?<![a-zA-Zа-яёА-ЯЁ])(\d{1,3}(?:[.,  ]\d{3})|\d{2,5})\s*евр[оa]", re.IGNORECASE),
     # "Аренда 700", "цена 550"
     re.compile(r"(?:аренда|цена|стоимост[ьи]|rent|price)[^\d\n]{0,15}(\d{3,5})", re.IGNORECASE),
     # Trailing "е" abbreviation: "600е в месяц", "550e", "1100е"
@@ -28,6 +29,12 @@ PRICE_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 # Price bucket from hashtag like #до1500 — last-resort upper bound.
 PRICE_BUCKET = re.compile(r"#до\s*(\d{3,5})", re.IGNORECASE)
+
+# Words whose trailing number is a COUNT (floor, rooms), not a price — guards the
+# space-thousands reading: "этаж 3 600€" is floor 3 + 600€, not 3600€.
+_COUNT_WORD_BEFORE = re.compile(
+    r"(?:этаж|спратн?|комнат\w*|соб[ае]\w*|спальн\w*|корпус|пол)\s*$", re.IGNORECASE
+)
 
 AREA_PATTERN = re.compile(
     r"(?<![\d.])(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:м²|м2|m²|m2|кв\.?\s*м)",
@@ -52,7 +59,16 @@ def parse_inbound_text(text: str | None) -> ParsedInbound:
     price: int | None = None
     for pat in PRICE_PATTERNS:
         for m in pat.finditer(text):
-            raw = m.group(1).replace(",", "").replace(".", "").replace(" ", "")
+            group = m.group(1)
+            # Space-separated thousands are ambiguous with "count + price" run-ons: in
+            # "этаж 3 600€" the 3 is a floor number, not thousands. When the captured group
+            # fused across a bare space right after a count-like word, use the plain reading.
+            if ("\u00a0" in group or " " in group) and _COUNT_WORD_BEFORE.search(
+                text[max(0, m.start(1) - 14):m.start(1)]
+            ):
+                # Keep only the trailing (price) part: "3 600" → "600".
+                group = group.replace("\u00a0", " ").split()[-1]
+            raw = group.replace(",", "").replace(".", "").replace(" ", "").replace(" ", "")
             try:
                 val = int(raw)
             except ValueError:

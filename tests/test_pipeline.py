@@ -183,10 +183,11 @@ async def test_process_one_reactivates_inactive_listing(db):
     # Existing-row branch must return before fetching detail.
     scraper.fetch_detail = AsyncMock(side_effect=AssertionError("must not fetch_detail for existing row"))
 
-    inserted = await _process_one(
+    inserted, photos = await _process_one(
         scraper, "https://www.nekretnine.rs/oglasi/123/", "123", download_photos=False
     )
     assert inserted is False, "reactivation is a refresh, not a new insert (don't inflate 'new')"
+    assert photos == 0
 
     async with factory() as s:
         row = (await s.execute(select(Listing).where(Listing.external_id == "123"))).scalar_one()

@@ -22,7 +22,7 @@ from src.db.models import (
     SourceChannel,
 )
 
-CREDS = base64.b64encode(b"darya:change_me").decode()
+CREDS = base64.b64encode(b"darya:test_secret_123").decode()
 AUTH = {"Authorization": f"Basic {CREDS}"}
 
 
@@ -32,7 +32,7 @@ def _force_admin_password(monkeypatch):
     from src.config import get_settings
     s = get_settings()
     monkeypatch.setattr(s, "admin_username", "darya")
-    monkeypatch.setattr(s, "admin_password", "change_me")
+    monkeypatch.setattr(s, "admin_password", "test_secret_123")
     yield
 
 
@@ -68,6 +68,24 @@ def test_requires_auth(client):
 
 
 def test_wrong_password_is_unauthorized(client):
+    bad = base64.b64encode(b"darya:wrong").decode()
+    r = client.get("/queue", headers={"Authorization": f"Basic {bad}"})
+    assert r.status_code == 401
+
+
+def test_default_password_rejected_even_when_correct(client, monkeypatch):
+    """Fail closed: the shipped default 'change_me' must never grant access."""
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "admin_password", "change_me")
+    creds = base64.b64encode(b"darya:change_me").decode()
+    r = client.get("/queue", headers={"Authorization": f"Basic {creds}"})
+    assert r.status_code == 401
+
+
+def test_non_ascii_configured_password_returns_401_not_500(client, monkeypatch):
+    """compare_digest would TypeError (→ 500) on non-ASCII str; must be a clean 401."""
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "admin_password", "пароль")
     bad = base64.b64encode(b"darya:wrong").decode()
     r = client.get("/queue", headers={"Authorization": f"Basic {bad}"})
     assert r.status_code == 401

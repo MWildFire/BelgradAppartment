@@ -38,7 +38,6 @@ from src.db import (
 )
 from src.matching.clip_embed import unpack_embeddings
 from src.matching.inbound_parser import ParsedInbound, parse_inbound_text
-from src.matching.phash import hamming_distance
 
 logger = logging.getLogger(__name__)
 
@@ -95,38 +94,83 @@ async def match_inbound(inbound_id: int) -> MatchResult:
                 existing.confidence, STATUS_MATCHED, match_id=existing.id, method=existing.method,
             )
 
-        listings = (
-            await s.execute(select(Listing).where(Listing.is_active.is_(True)))
-        ).scalars().all()
-
         inbound_phashes = list(inbound.photo_phashes)
         inbound_embs = unpack_embeddings(inbound.photo_embeddings) if inbound.photo_embeddings else []
+
+        # Early exit: matched_photo_count can never exceed the number of inbound photos, so an
+        # inbound with fewer photos than min_matched_photos is a guaranteed NO_MATCH — skip the
+        # full listing scan (which costs seconds across ~20k active listings).
+        if max(len(inbound_phashes), len(inbound_embs)) < min_photos:
+            inbound.status = InboundStatus.NO_MATCH
+            logger.info(
+                "[match] inbound=%s NO_MATCH (only %d photo(s) < min_matched_photos=%d — scan skipped)",
+                inbound_id, max(len(inbound_phashes), len(inbound_embs)), min_photos,
+            )
+            return MatchResult(inbound_id, None, 0, 0.0, STATUS_NO_MATCH)
+
+        # Lightweight scan rows only — photo_embeddings BLOBs (~20 KB/row, hundreds of MB total)
+        # are fetched separately in chunks during stage 2, never all at once.
+        rows = (
+            await s.execute(
+                select(
+                    Listing.id,
+                    Listing.photo_phashes,
+                    Listing.price_eur,
+                    Listing.area_m2,
+                    Listing.district,
+                    Listing.photo_embeddings.isnot(None).label("has_embs"),
+                ).where(Listing.is_active.is_(True))
+            )
+        ).all()
 
         # Parse price/area from inbound caption — used to reject CLIP false-positives.
         parsed = parse_inbound_text(inbound.raw_text)
 
-        best_listing: Listing | None = None
+        # Stage 1 — pHash pre-screen for every listing. Plain 64-bit XOR+popcount: identical
+        # result to imagehash's hamming distance but ~40x faster — the old per-call
+        # hex_to_hash() parsing froze the event loop for 40-75s per inbound at 20k listings.
+        inbound_ints = _parse_hashes(inbound_phashes)
+        ph_counts: dict[int, int] = {}
+        for row in rows:
+            if row.photo_phashes:
+                ph_counts[row.id] = _count_phash_matches(
+                    inbound_ints, list(row.photo_phashes), phash_thr
+                )
+
+        # Stage 2 — CLIP cosine for every listing that has embeddings, fetched in bounded chunks.
+        clip_results: dict[int, tuple[int, float]] = {}
+        if inbound_embs:
+            emb_ids = [row.id for row in rows if row.has_embs]
+            for start in range(0, len(emb_ids), _CLIP_CHUNK):
+                chunk_ids = emb_ids[start:start + _CLIP_CHUNK]
+                blob_rows = (
+                    await s.execute(
+                        select(Listing.id, Listing.photo_embeddings)
+                        .where(Listing.id.in_(chunk_ids))
+                    )
+                ).all()
+                for lid, blob in blob_rows:
+                    if not blob:
+                        continue
+                    try:
+                        listing_embs = unpack_embeddings(blob)
+                    except Exception:
+                        # One corrupt BLOB must not take the whole matcher down for every inbound.
+                        logger.warning("[match] corrupt photo_embeddings for listing=%s — skipped", lid)
+                        continue
+                    if listing_embs:
+                        clip_results[lid] = _clip_match(inbound_embs, listing_embs, clip_thr)
+
+        best_id: int | None = None
         best_count = 0
         best_score = 0.0
         best_method = METHOD_CLIP
 
-        for listing in listings:
-            if not listing.photo_phashes and not listing.photo_embeddings:
+        for row in rows:
+            ph_count = ph_counts.get(row.id, 0)
+            clip_count, clip_score = clip_results.get(row.id, (0, 0.0))
+            if ph_count == 0 and clip_count == 0 and clip_score == 0.0:
                 continue
-
-            # Stage 1 — pHash pre-screen. If pHash already finds enough matches, trust it.
-            ph_count = _count_phash_matches(
-                inbound_phashes, list(listing.photo_phashes or []), phash_thr
-            )
-
-            # Stage 2 — CLIP, if embeddings are available on both sides.
-            clip_count, clip_score = 0, 0.0
-            if inbound_embs and listing.photo_embeddings:
-                listing_embs = unpack_embeddings(listing.photo_embeddings)
-                if listing_embs:
-                    clip_count, clip_score = _clip_match(
-                        inbound_embs, listing_embs, clip_thr
-                    )
 
             # Pick the stronger signal per listing.
             if clip_count > ph_count or (
@@ -141,23 +185,26 @@ async def match_inbound(inbound_id: int) -> MatchResult:
             # Stage 3 — text cross-check (rejects CLIP false positives between unrelated apartments
             # that happen to have similar-looking interiors). Only applies to CLIP-based candidates;
             # pHash with ≥2 matches is already strong enough on its own.
-            if cand_method == METHOD_CLIP and not _passes_text_check(parsed, listing, settings):
+            if cand_method == METHOD_CLIP and not _passes_text_check(parsed, row, settings):
                 continue
 
             # Track best across listings (prefer higher count; tie-break by score).
             if cand_count > best_count or (
                 cand_count == best_count and cand_score > best_score
             ):
-                best_listing = listing
+                best_id = row.id
                 best_count = cand_count
                 best_score = cand_score
                 best_method = cand_method
 
+        best_listing: Listing | None = (
+            await s.get(Listing, best_id) if best_id is not None else None
+        )
         if best_listing is None or best_count < min_photos:
             inbound.status = InboundStatus.NO_MATCH
             logger.info(
                 "[match] inbound=%s NO_MATCH (best_count=%d listings=%d threshold=%d phash≤%d clip≥%.2f)",
-                inbound_id, best_count, len(listings), min_photos, phash_thr, clip_thr,
+                inbound_id, best_count, len(rows), min_photos, phash_thr, clip_thr,
             )
             return MatchResult(inbound_id, None, best_count, best_score, STATUS_NO_MATCH, method=best_method)
 
@@ -278,21 +325,48 @@ async def match_all_pending() -> list[MatchResult]:
     return results
 
 
+# Listings per photo_embeddings fetch — bounds peak BLOB memory to ~chunk × ~20 KB.
+_CLIP_CHUNK = 500
+
+
+def _parse_hashes(hex_hashes: list[str]) -> list[int]:
+    """Hex pHashes → 64-bit ints, silently dropping malformed entries.
+
+    Every pHash in this system is str(imagehash.phash()) = exactly 16 hex chars; anything else
+    is a corrupt row whose short hash would XOR into phantom near-zero distances — skip it
+    (the old imagehash path raised on length mismatch, which skipped the pair too).
+    """
+    out: list[int] = []
+    for h in hex_hashes:
+        if not isinstance(h, str) or len(h) != 16:
+            continue
+        try:
+            out.append(int(h, 16))
+        except ValueError:
+            continue
+    return out
+
+
 def _count_phash_matches(
-    inbound_hashes: list[str], listing_hashes: list[str], max_hamming: int
+    inbound_ints: list[int], listing_hashes: list[str], max_hamming: int
 ) -> int:
-    """How many inbound photos have at least one near-duplicate in the listing (pHash)."""
-    if not inbound_hashes or not listing_hashes:
+    """How many inbound photos have at least one near-duplicate in the listing (pHash).
+
+    Hamming distance via int XOR + popcount — bit-identical to imagehash's `hash1 - hash2`
+    (both count differing bits of the same 64-bit hash) but ~40x faster, because it skips
+    re-parsing hex into numpy bool arrays on every one of the ~1M comparisons per inbound.
+    """
+    if not inbound_ints or not listing_hashes:
+        return 0
+    listing_ints = _parse_hashes(listing_hashes)
+    if not listing_ints:
         return 0
     count = 0
-    for ih in inbound_hashes:
-        for lh in listing_hashes:
-            try:
-                if hamming_distance(ih, lh) <= max_hamming:
-                    count += 1
-                    break
-            except (ValueError, TypeError):
-                continue
+    for ia in inbound_ints:
+        for lb in listing_ints:
+            if (ia ^ lb).bit_count() <= max_hamming:
+                count += 1
+                break
     return count
 
 
@@ -314,8 +388,11 @@ def _clip_match(
     return count, mean_top
 
 
-def _passes_text_check(parsed: ParsedInbound, listing: Listing, settings) -> bool:
+def _passes_text_check(parsed: ParsedInbound, listing, settings) -> bool:
     """Reject candidate if inbound caption is incompatible with the listing.
+
+    `listing` is anything with price_eur/area_m2/district attributes — a Listing ORM object
+    or the lightweight scan Row used by match_inbound.
 
     Permissive on missing data (one side unknown → pass). Three signals:
     - Price within ±cross_check_price_tolerance_pct (default 25%).

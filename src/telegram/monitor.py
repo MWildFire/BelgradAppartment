@@ -172,6 +172,18 @@ async def backfill(
 
 OnInboundCallable = "callable"  # type alias hint — runtime: any coroutine taking int
 
+# One matcher pipeline at a time — a full pass loads CLIP embeddings (memory + CPU),
+# so concurrent live posts must queue rather than stack.
+_pipeline_semaphore = asyncio.Semaphore(1)
+
+
+def _log_flush_exception(task: "asyncio.Task[None]") -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("album _flush task crashed", exc_info=exc)
+
 
 def register_live_handler(
     client: TelegramClient,
@@ -207,7 +219,8 @@ def register_live_handler(
             if on_inbound is None:
                 continue
             try:
-                await on_inbound(post.id)
+                async with _pipeline_semaphore:
+                    await on_inbound(post.id)
             except Exception:
                 logger.exception("on_inbound callback failed for live post %s", post.id)
 
@@ -221,7 +234,9 @@ def register_live_handler(
         if gid is not None:
             album_buffers.setdefault(gid, []).append(msg)
             if gid not in flush_tasks:
-                flush_tasks[gid] = asyncio.create_task(_flush(gid, source.id))
+                task = asyncio.create_task(_flush(gid, source.id))
+                task.add_done_callback(_log_flush_exception)
+                flush_tasks[gid] = task
             return
         # standalone message
         if not _has_photo([msg]) and not is_digest_post(msg):
@@ -231,7 +246,8 @@ def register_live_handler(
             if on_inbound is None:
                 continue
             try:
-                await on_inbound(post.id)
+                async with _pipeline_semaphore:
+                    await on_inbound(post.id)
             except Exception:
                 logger.exception("on_inbound callback failed for live post %s", post.id)
 
@@ -408,6 +424,7 @@ async def _persist_digest_inbound(source_id: int, leader: Message) -> list[Inbou
 
     settings = get_settings()
     created: list[InboundPost] = []
+    any_fetch_ok = False
 
     for idx, line in enumerate(lines):
         # One sub-directory per share so LLM validator and downstream code can locate the
@@ -423,6 +440,7 @@ async def _persist_digest_inbound(source_id: int, leader: Message) -> list[Inbou
         except Exception:
             logger.exception("[monitor] unexpected error fetching yonote share %s", line.share_id)
             continue
+        any_fetch_ok = True
 
         photo_paths, photo_hashes = await _download_yonote_photos(yonote_doc, target_dir)
         if not photo_paths:
@@ -471,6 +489,15 @@ async def _persist_digest_inbound(source_id: int, leader: Message) -> list[Inbou
     # Only advance the watermark once the whole digest is done — if a previous run crashed
     # mid-digest, this lets us re-enter the same leader.id and pick up the missed shares
     # (the per-line `existing` check makes the re-entry idempotent for shares we already saved).
+    # If EVERY YoNote fetch failed (outage), keep the watermark behind so the next pass retries
+    # instead of permanently losing the digest.
+    if not any_fetch_ok:
+        logger.warning(
+            "[monitor] digest msg %s: all %d yonote fetches failed — watermark not advanced",
+            leader.id, len(lines),
+        )
+        return created
+
     async with get_session() as s:
         await _advance_watermark(s, source_id, leader.id)
 

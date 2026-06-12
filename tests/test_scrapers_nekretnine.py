@@ -102,7 +102,7 @@ def test_extract_next_data_tolerates_nonce_attribute() -> None:
 # MockTransport client — no network. (The original incident was exactly this layer failing silently.)
 
 
-def _list_html(ids: list[int], max_pages: int = 99) -> str:
+def _list_html(ids: list[int], max_pages: int = 99, total_ads: int | None = None) -> str:
     results = [
         {
             "realEstate": {"id": i, "title": f"Stan {i}"},
@@ -110,11 +110,14 @@ def _list_html(ids: list[int], max_pages: int = 99) -> str:
         }
         for i in ids
     ]
+    payload: dict = {"results": results, "maxPages": max_pages}
+    if total_ads is not None:
+        payload["totalAds"] = total_ads
     data = {
         "props": {
             "pageProps": {
                 "dehydratedState": {
-                    "queries": [{"state": {"data": {"results": results, "maxPages": max_pages}}}]
+                    "queries": [{"state": {"data": payload}}]
                 }
             }
         }
@@ -207,6 +210,123 @@ async def test_list_recent_aborts_after_consecutive_failures() -> None:
     assert sc._skipped_pages == sc.max_consecutive_failures == 3
     # 3 skipped pages × fetch_attempts each, then abort — must not walk all 100 pages.
     assert calls["n"] == sc.max_consecutive_failures * sc.fetch_attempts
+
+
+@pytest.mark.asyncio
+async def test_list_recent_segments_by_price_when_capped() -> None:
+    """Full walk (max_pages > page_cap) must fall back to price bands when the site caps the
+    unfiltered search — the bug that kept the nightly at ~2000 of ~7700 listings."""
+    band_requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.params
+        page = int(p.get("pag", "1"))
+        if "prezzoMinimo" in p:
+            band_requests.append(f"{p.get('prezzoMinimo')}-{p.get('prezzoMassimo', 'inf')}")
+            if page > 1:
+                return httpx.Response(404)
+            band_ids = {"0": [101, 102, 103], "500": [20, 201, 202]}  # 20 overlaps the base walk
+            return httpx.Response(200, text=_list_html(band_ids[p["prezzoMinimo"]], total_ads=3))
+        if page > 2:
+            return httpx.Response(404)  # the site's pagination cap
+        ids = [page * 10 + i for i in range(5)]  # page1: 10..14, page2: 20..24
+        return httpx.Response(200, text=_list_html(ids, total_ads=120))
+
+    sc = _make_scraper(handler)
+    sc.page_cap = 2
+    sc.price_bands = ((0, 500), (500, None))
+    previews = await sc.list_recent(max_pages=500)
+
+    ids = {p.external_id for p in previews}
+    # 10 unfiltered + 3 + 3 from bands, minus the duplicate "20" = 15 unique.
+    assert len(previews) == len(ids) == 15
+    assert {"101", "102", "103", "201", "202"} <= ids
+    assert sc._site_total == 120
+    assert sorted(set(band_requests)) == ["0-500", "500-inf"], "both bands must be walked"
+    assert sc._skipped_pages == 0, "the cap 404 is end-of-walk, not a skipped page"
+
+
+@pytest.mark.asyncio
+async def test_band_walk_continues_past_all_duplicate_page() -> None:
+    """REGRESSION: a band's first page often fully overlaps the unfiltered pass (newest listings
+    appear in both). That page must NOT be mistaken for end-of-pagination — the original
+    segmentation rollout collected +0 from every band because of exactly this."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.params
+        page = int(p.get("pag", "1"))
+        if "prezzoMinimo" in p:
+            # Band page 1 = pure overlap with the base walk; page 2 holds the new tail.
+            ids = [10, 11, 12, 13, 14] if page == 1 else [900, 901]
+            return httpx.Response(200, text=_list_html(ids, max_pages=2, total_ads=7))
+        if page > 2:
+            return httpx.Response(404)
+        ids = [page * 10 + i for i in range(5)]
+        return httpx.Response(200, text=_list_html(ids, total_ads=50))
+
+    sc = _make_scraper(handler)
+    sc.page_cap = 2
+    sc.price_bands = ((0, None),)
+    previews = await sc.list_recent(max_pages=500)
+    ids = {p.external_id for p in previews}
+    assert {"900", "901"} <= ids, "band walk must continue past the all-duplicate first page"
+    assert len(ids) == 12  # 10 base + 2 band tail
+
+
+@pytest.mark.asyncio
+async def test_walk_stops_when_site_ignores_pag_param() -> None:
+    """currentPage mismatch (site re-serving page 1 for every ?pag=N) must stop the walk."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        # Always serves currentPage=1 regardless of ?pag — the original migration bug class.
+        data = json.loads(_list_html([1, 2, 3], total_ads=500).split('json">')[1].split("</script>")[0])
+        data["props"]["pageProps"]["dehydratedState"]["queries"][0]["state"]["data"]["currentPage"] = 1
+        blob = json.dumps(data)
+        return httpx.Response(
+            200,
+            text=f'<html><script id="__NEXT_DATA__" type="application/json">{blob}</script></html>',
+        )
+
+    sc = _make_scraper(handler)
+    previews = await sc.list_recent(max_pages=50)
+    assert {p.external_id for p in previews} == {"1", "2", "3"}
+    assert calls["n"] == 2, "walk must stop right after detecting the page-2 mismatch"
+
+
+@pytest.mark.asyncio
+async def test_list_recent_incremental_never_segments() -> None:
+    """Small max_pages (the 15-min incremental path) must stay a single cheap walk."""
+    saw_band_request = {"v": False}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "prezzoMinimo" in request.url.params:
+            saw_band_request["v"] = True
+        page = int(request.url.params.get("pag", "1"))
+        return httpx.Response(200, text=_list_html([page * 10 + i for i in range(3)], total_ads=99999))
+
+    sc = _make_scraper(handler)
+    await sc.list_recent(max_pages=2)
+    assert saw_band_request["v"] is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_404_short_circuits_without_retries() -> None:
+    """404 = past the pagination cap — semantic stop, not a transient failure to retry."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params.get("pag", "1"))
+        if page >= 2:
+            calls["n"] += 1
+            return httpx.Response(404)
+        return httpx.Response(200, text=_list_html([1, 2, 3]))
+
+    sc = _make_scraper(handler)
+    previews = await sc.list_recent(max_pages=10)
+    assert {p.external_id for p in previews} == {"1", "2", "3"}
+    assert calls["n"] == 1, "404 must not be retried"
+    assert sc._skipped_pages == 0
 
 
 @pytest.mark.asyncio

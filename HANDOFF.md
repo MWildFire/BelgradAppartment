@@ -153,8 +153,8 @@ ssh root@90.156.254.159 'cp /opt/otz/data/otz.db /opt/otz/data/backups/otz-$(dat
 
 | Платформа | Особенности |
 |---|---|
-| `nekretnine.rs` | Чистый httpx + selectolax. **Pagination через `/stranica/N/`** (с слэшем — иначе сервер тихо отдаёт страницу 1). Адрес: `.property__location > ul > li`, последний `<li>` — улица (UPPER-CASE). Координаты в инлайн-JS: `Lat = ...; Lng = ...`. Photos: подписанные URL с `?st=...&ts=...&e=0` — без query CDN отвечает 403. |
-| `4zida.rs` | httpx + JSON-API. District встречается в полях типа `Vracar Centar` или `Centar Uzi`. |
+| `nekretnine.rs` | Next.js app (с ~мая 2026): все данные в `<script id="__NEXT_DATA__">` JSON — чистый httpx, без DOM scraping. Details: `/oglasi/<id>/`. Photos: `pic.nekretnine.rs/image/<id>/xxl.jpg` (без подписанных токенов). **Pagination через `?pag=N`** на каноничном list URL (старый `/stambeni-objekti/...` URL 301-редиректит и теряет query params). Cap 80 страниц × 25 = 2000 результатов — обходится сегментацией по ценовым диапазонам (`?prezzoMinimo`/`?prezzoMassimo`). |
+| `4zida.rs` | httpx + JSON-LD. District встречается в полях типа `Vracar Centar` или `Centar Uzi`. Аналогичный cap ~2000 результатов на поиск — обходится ценовыми диапазонами `?skuplje_od`/`?jeftinije_od`. |
 | `halooglasi.com` | **Playwright + playwright-stealth + xvfb-run** для обхода Cloudflare. Запускается в headed mode. Поэтому `otz-monitor.service` и `otz-nightly-refresh.service` стартуют через `xvfb-run -a`. |
 
 **Запуск scrape вручную:**
@@ -168,7 +168,7 @@ ssh root@90.156.254.159 'otz-bg nightly-refresh'                  # полный
 Каждая платформа использует `known_ids` (set всех `external_id` из БД) и **early-stop**: если 2 страницы подряд содержат только known IDs, прекращаем. Делает ежедневный inkrement быстрым (1-5 мин вместо часов).
 
 ### 7.2 Photo download
-Через [src/scrapers/photo_dl.py](src/scrapers/photo_dl.py). Лог скачиваний — JSON-lines в `data/logs/photo_downloads.jsonl`. Просмотр: `otz-bg photo-stats`.
+Внутри [src/scrapers/orchestrator.py](src/scrapers/orchestrator.py) (`_download_photos`). Лог скачиваний — JSON-lines в `data/logs/photo_downloads.jsonl`. Просмотр: `otz-bg photo-stats`.
 
 ---
 
@@ -244,7 +244,7 @@ MIN_MATCHED_PHOTOS=2
 
 ```bash
 # отредактируй файлы локально
-.venv/bin/python -m pytest tests/ -q     # 52 теста, должны пройти
+.venv/bin/python -m pytest tests/ -q     # 100+ тестов, должны пройти
 
 # rsync code → VPS (excludes data/, .env, .venv, .session, halooglasi fixtures)
 bash scripts/deploy_sync.sh
@@ -296,7 +296,7 @@ Telethon хранит auth_key в `.session` (SQLite). Два процесса �
 [src/jobs/pipeline.py](src/jobs/pipeline.py) — раньше тихо пропускал доставку при `client is None`. Сейчас проверяет mode: пропуск только если `mode == userbot AND client is None`. В bot mode delivery вызывается всегда.
 
 ### 13.4 LLM validator non-determinism
-Claude может разный verdict давать на одну и ту же пару фото. На практике stable enough для 0.95 conf threshold, но `test-batch` повторно может дать другую раскладку matched/no_match.
+Claude может разный verdict давать на одну и ту же пару фото. На практике stable enough для 0.7 conf threshold, но `test-batch` повторно может дать другую раскладку matched/no_match.
 
 ### 13.5 Telegram Bot API rate limits
 - 30 msg/sec глобально для бота
@@ -409,11 +409,10 @@ src/
 │   └── session.py                  # async session factory
 ├── scrapers/
 │   ├── base.py                     # Scraper ABC, ListingPreview/Detail
-│   ├── orchestrator.py             # scrape_all_with_throttle, mark_stale_inactive
+│   ├── orchestrator.py             # scrape_all_with_throttle, mark_stale_inactive, photo download
 │   ├── nekretnine.py
 │   ├── cetiri_zida.py
-│   ├── halooglasi.py               # playwright + stealth + xvfb
-│   └── photo_dl.py                 # download + JSON-lines logger
+│   └── halooglasi.py               # playwright + stealth + xvfb
 ├── matching/
 │   ├── matcher.py                  # match_inbound — pipeline
 │   ├── phash.py                    # imagehash wrappers
@@ -442,7 +441,7 @@ data/
 └── districts.yaml                  # район → хэштег (единственный синкаемый data-файл)
 
 tests/
-├── test_*.py                       # 52 теста, должны проходить
+├── test_*.py                       # 100+ тестов, должны проходить
 └── fixtures/                       # HTML fixtures для скраперов
 
 alembic/
@@ -457,4 +456,4 @@ alembic/
 - **Расширить районы**: при появлении новых micro-locations в халооглази/4zida — добавить в `data/districts.yaml`.
 - **Алерты при сбоях monitor**: `OnFailure=` хук в `otz-monitor.service` → шлёт alert через `ship-log` или `send_text_to_recipients`.
 - **Метрики**: уже есть `photo_downloads.jsonl`. Можно завести dashboard (Grafana / простой HTML отчёт).
-- **Тюнинг LLM threshold**: сейчас 0.95 — иногда зарезает легитимные матчи (см. логи `REJECTED by LLM`).
+- **Тюнинг LLM threshold**: сейчас 0.7 (`LLM_VALIDATION_MIN_CONFIDENCE`) — иногда зарезает легитимные матчи (см. логи `REJECTED by LLM`).

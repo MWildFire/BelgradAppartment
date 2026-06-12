@@ -95,6 +95,7 @@ class ScrapeResult:
     photos_downloaded: int = 0
     errors: int = 0
     skipped_pages: int = 0  # list pages we couldn't fetch and walked past (partial under-run signal)
+    site_total: int | None = None  # listings the SITE says exist for the search (coverage denominator)
 
 
 async def scrape_platform(
@@ -130,9 +131,10 @@ async def scrape_platform(
     previews = await scraper.list_recent(max_pages=max_pages, known_ids=known_ids)
     result.previewed = len(previews)
     result.skipped_pages = getattr(scraper, "_skipped_pages", 0)
+    result.site_total = getattr(scraper, "_site_total", None)
     logger.info(
-        "[%s] list_recent → %d previews (skipped_pages=%d)",
-        scraper.platform.value, len(previews), result.skipped_pages,
+        "[%s] list_recent → %d previews (skipped_pages=%d, site_total=%s)",
+        scraper.platform.value, len(previews), result.skipped_pages, result.site_total,
     )
 
     new_count = 0
@@ -140,7 +142,7 @@ async def scrape_platform(
         if max_new is not None and new_count >= max_new:
             break
         try:
-            inserted = await _process_one(
+            inserted, photos = await _process_one(
                 scraper, prev.url, prev.external_id, download_photos=download_photos
             )
         except Exception:
@@ -149,6 +151,7 @@ async def scrape_platform(
             continue
 
         result.fetched += 1
+        result.photos_downloaded += photos
         if inserted is True:
             result.inserted += 1
             new_count += 1
@@ -159,8 +162,9 @@ async def scrape_platform(
 
 async def _process_one(
     scraper: Scraper, url: str, external_id: str, *, download_photos: bool
-) -> bool | None:
-    """Return True if a new Listing was inserted, False if existing was refreshed, None if skipped."""
+) -> tuple[bool | None, int]:
+    """Return (inserted, photos_downloaded): inserted is True for a new Listing, False when an
+    existing row was refreshed, None if skipped."""
     async with get_session() as session:
         existing = (
             await session.execute(
@@ -182,9 +186,16 @@ async def _process_one(
             # active listings.
             if not row.is_active:
                 row.is_active = True
-        return False
+        return False, 0
 
     detail = await scraper.fetch_detail(url)
+
+    if not detail.photo_urls and detail.price_eur is None and detail.title is None:
+        # All-None shell — the detail fetch "succeeded" on a challenge/error page or a payload
+        # the parser no longer understands. Inserting it would freeze the listing forever
+        # (existing rows are never detail-refreshed): no photos → invisible to the matcher,
+        # while its external_id blocks any future re-fetch. Fail so the next walk retries.
+        raise RuntimeError(f"empty detail payload for {url} — not inserting a dead row")
 
     photo_paths: list[Path] = []
     photo_hashes: list[str] = []
@@ -212,7 +223,7 @@ async def _process_one(
             raw_payload=detail.raw_payload,
         )
         session.add(listing)
-    return True
+    return True, len(photo_paths)
 
 
 async def _download_photos(
@@ -318,19 +329,22 @@ async def mark_stale_inactive(
     Default 10 days = 7-day cadence + 3-day grace, so a missed weekly run doesn't false-positive
     everything.
     """
+    from sqlalchemy import update
+
     cutoff = datetime.now(timezone.utc) - timedelta(days=inactive_after_days)
     async with get_session() as session:
+        # Plain UPDATE — loading full ORM rows here pulls every photo_embeddings BLOB
+        # (hundreds of MB after an outage backlog) just to flip a boolean.
         stmt = (
-            select(Listing)
+            update(Listing)
             .where(Listing.is_active.is_(True))
             .where(Listing.last_seen_at < cutoff)
+            .values(is_active=False)
         )
         if platform is not None:
             stmt = stmt.where(Listing.platform == platform)
-        rows = (await session.execute(stmt)).scalars().all()
-        for row in rows:
-            row.is_active = False
-        marked = len(rows)
+        res = await session.execute(stmt)
+        marked = res.rowcount or 0
     logger.info(
         "[stale-sweep] marked %d listings inactive (cutoff=%s, platform=%s)",
         marked, cutoff.date(), platform.value if platform else "all",

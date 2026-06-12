@@ -213,6 +213,25 @@ async def test_notify_no_match_returns_a_task(db):
 
 
 @pytest.mark.asyncio
+async def test_notify_no_match_keeps_strong_task_reference(db):
+    """Task is held in _background_tasks until done (GC-safety), then discarded."""
+    import src.telegram.telemetry as tele
+    from src.telegram.telemetry import notify_no_match
+
+    iid = await _seed_inbound(db)
+    patcher, _ = _patch_telethon_client()
+    with patcher:
+        task = notify_no_match(
+            iid, best_count=1, threshold=2, method=METHOD_CLIP, confidence=0.5
+        )
+        assert task in tele._background_tasks
+        await task
+    # done-callbacks run via call_soon — give the loop one tick
+    await asyncio.sleep(0)
+    assert task not in tele._background_tasks
+
+
+@pytest.mark.asyncio
 async def test_notify_handles_post_without_text(db):
     """raw_text='' → uses placeholder, doesn't crash on splitlines()[0]."""
     from src.telegram.telemetry import _do_notify_no_match
