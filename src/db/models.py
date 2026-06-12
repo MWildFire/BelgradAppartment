@@ -27,6 +27,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -94,6 +95,15 @@ class InboundPost(Base):
             "source_channel_id", "tg_message_id", "digest_share_id",
             name="uq_inbound_channel_msg",
         ),
+        # SQLite UNIQUE treats NULLs as distinct, so the triple key above misses
+        # duplicates with digest_share_id IS NULL — this partial index catches them.
+        Index(
+            "uq_inbound_chan_msg_nodigest",
+            "source_channel_id",
+            "tg_message_id",
+            unique=True,
+            sqlite_where=text("digest_share_id IS NULL"),
+        ),
         Index("ix_inbound_status", "status"),
         Index("ix_inbound_received_at", "received_at"),
     )
@@ -134,9 +144,11 @@ class Listing(Base):
     __tablename__ = "listings"
     __table_args__ = (
         UniqueConstraint("platform", "external_id", name="uq_listing_platform_external"),
-        Index("ix_listing_platform", "platform"),
+        # No single-column platform index: ix_listings_platform_active covers it as a left prefix.
         Index("ix_listing_is_active", "is_active"),
         Index("ix_listing_scraped_at", "scraped_at"),
+        Index("ix_listings_last_seen_at", "last_seen_at"),
+        Index("ix_listings_platform_active", "platform", "is_active"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -165,6 +177,8 @@ class Listing(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # NULL = details never re-fetched; rolling refresh sorts ASC (SQLite puts NULLs first).
+    details_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     matches: Mapped[list[Match]] = relationship(back_populates="listing")
 
@@ -199,6 +213,21 @@ class Match(Base):
     inbound_post: Mapped[InboundPost] = relationship(back_populates="matches")
     listing: Mapped[Listing] = relationship(back_populates="matches")
     published_post: Mapped[PublishedPost | None] = relationship(back_populates="match", uselist=False)
+
+
+class DailyMetrics(Base):
+    """Daily per-platform snapshot of listing counts — for active-drop alerts and dashboards."""
+
+    __tablename__ = "daily_metrics"
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "platform", name="uq_daily_metrics_date_platform"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    snapshot_date: Mapped[str] = mapped_column(String(10), nullable=False)  # ISO YYYY-MM-DD
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    active_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    no_photo_count: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class PublishedPost(Base):
