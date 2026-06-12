@@ -4,13 +4,31 @@
 
 ---
 
-## 0. ТЕКУЩИЙ СТАТУС + ПЛАН РАЗРАБОТКИ (handoff 2026-06-12)
+## 0. ТЕКУЩИЙ СТАТУС + ПЛАН РАЗРАБОТКИ (handoff 2026-06-12, вечер — этап H1)
 
 > Эта секция — рабочий handoff последней сессии. Остальной документ — общий runbook.
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
-### 0.1 Что сделано (12.06.2026, коммиты `3169d92`, `32f5c67` → github.com/MWildFire/BelgradAppartment)
+### 0.1 Что сделано: этап H1 «Hardening & Intelligence» (12.06.2026, ветка `stage-h1` → main)
+
+План этапа: `FEATURE_PLAN.md` (волны W0-W5). Исполнено мультиагентно, каждая волна — spec+quality ревью, gate `pytest -q`. Тестов 105 → **207**. Деплой на VPS + миграция 0005 — см. 0.2.
+
+1. **Миграция 0005** (`alembic/versions/20260612_0005_indexes_dedup_metrics.py`): индексы `ix_listings_last_seen_at`, `ix_listings_platform_active` (избыточный `ix_listing_platform` удалён); partial unique `uq_inbound_chan_msg_nodigest` (закрывает гонку дедупа inbound при NULL digest_share_id; перед созданием — дедуп существующих дублей с каскадом и логом); `listings.details_refreshed_at`; таблица `daily_metrics`.
+2. **Монитор** (`src/telegram/monitor.py`): persist обёрнут в `try/except IntegrityError` — проигравший гонку дедупа не запускает pipeline (нет дубль-доставки Дарье). Лог-маркер: «already persisted concurrently».
+3. **Ночные шаги** (`src/cli.py::_run_nightly_steps` + `src/scrapers/orchestrator.py`), все env-отключаемы (`=0`), падение шага → 🚨-строка в сводке, nightly выживает:
+   - auto-heal битых строк (`NIGHTLY_HEAL_LIMIT=500`, с ротацией мёртвых через `details_refreshed_at`);
+   - rolling re-fetch деталей/цен (`NIGHTLY_DETAIL_REFRESH=200`, NULLs first, поровну по платформам) → контракт `PriceChange`;
+   - прунинг `photo_embeddings` неактивных >30 дней (`NIGHTLY_PRUNE_EMBEDDINGS=1`; файл БД не сожмётся без ручного VACUUM — см. §15.7);
+   - snapshot `daily_metrics` + 🚨-алерт при падении active >20% против прошлого снапшота (`NIGHTLY_METRICS=1`).
+4. **Матчер**: CPU-скан (pHash/CLIP/выбор) вынесен в `asyncio.to_thread` (бит-в-бит эквивалентно, квирк best_score сохранён и запинен тестом); кэш кандидатов `src/matching/candidates.py` для match-all/rematch-all — 1 SELECT на батч вместо N (live-monitor путь не тронут, embeddings в кэш НЕ кладутся — RAM).
+5. **Алерты systemd**: шаблон `otz-notify-failure@.service` + `OnFailure=` у monitor/nightly/daily-summary юнитов; у монитора явные `StartLimitIntervalSec=600`/`StartLimitBurst=5` (иначе OnFailure не сработал бы никогда). Smoke: `systemctl start otz-notify-failure@smoke.service`. Docs: PHASE5_DEPLOY §5.4.
+6. **Admin** (`src/admin/`): Reject / Mark-posted (DB-only, идемпотентно, бот ничего не шлёт), CSRF fail-closed (per-process токен — только single-worker uvicorn), страница `/metrics` (Chart.js по `daily_metrics`). Доставка больше не воскрешает человеческий REJECTED (`resolve_post_send_status`).
+7. **Product-intel**: лог LLM-вердиктов `data/logs/llm_decisions.jsonl` (с DB id) + `otz llm-report --days N` (гистограмма confidence, what-if пороги 0.6/0.65/0.7, пограничные 0.55-0.75 с url); `otz districts-report` (незамапленные районы + готовые yaml-строки); price-drop алерты в nightly (≥`PRICE_DROP_MIN_PCT=5`%, только listings с PENDING/PUBLISHED match, cap 10 сообщений/ночь). Порог LLM 0.7 НЕ менялся — решение после 2-3 недель данных llm-report.
+8. **Тесты**: stages 2-4 матчера (`test_matcher_stages.py`), event-handling монитора (`test_monitor_events.py`), дедуп-гонка, миграция 0005 upgrade/downgrade, nightly-шаги, эквивалентность перфоманс-рефактора, admin actions/CSRF, отчёты, price-drop, delivery-guard.
+9. W0-бэкфилл обложек 4zida (`refetch-details --platform cetiri_zida --all`) выполнен 12.06; heal-юнит прошлой сессии завершился (битых осталось ~489 — мёртвые URL, добьёт ночной auto-heal ротацией).
+
+### 0.1.1 Что сделано (12.06.2026 днём, коммиты `3169d92`, `32f5c67`)
 
 1. **Полнота базы решена.** nekretnine и 4zida режут ЛЮБОЙ поиск на ~2000 результатов
    (nekretnine: 80 стр × 25, стр. 81+ → 404; 4zida: ~99 × 20, дальше повторы). Полные обходы
@@ -32,61 +50,50 @@
 3. Тесты: **105 passed** (`pytest -q`). Деплой на VPS сделан, monitor перезапущен, юниты
    systemd на сервере пропатчены.
 
-### 0.2 Незавершённое / проверить в начале следующей сессии
+### 0.2 Проверить утром 13.06 (после первого ночного прогона с H1)
 
-- [ ] **Ночная сводка за 13.06** (таймер 03:14 UTC): «Обновлено (active)» должно быть ~20-21k;
-      у всех трёх площадок строка «покрытие N% из M» (halooglasi теперь тоже шлёт TotalCount).
-      Если 🚨 или «Sweep пропущен» — смотреть `/var/log/otz/nightly-refresh.log`.
-- [ ] **Heal-юнит** `otz-adhoc-20260612-075956` (refetch-details, ~594 битые строки):
-      проверить завершение и остаток битых:
-      `sqlite3 data/otz.db "SELECT platform, SUM(photo_phashes='[]') FROM listings WHERE is_active=1 GROUP BY platform"`.
-- [ ] **Бэкфилл обложек 4zida для СТАРЫХ строк** (новые получают обложку автоматически):
-      `ssh root@90.156.254.159 'otz-bg refetch-details --platform cetiri_zida --all'` — ~7ч,
-      запускать утром, чтобы не пересечься с ночным таймером. После него можно `rematch-all`
-      для перепроверки старых NO_MATCH inbound'ов.
-- [ ] Убедиться, что matcher на проде быстрый: в `/var/log/otz/monitor.log` матчи новых
-      inbound должны проходить за секунды (раньше 40-75с на пост).
+- [ ] **Ночная сводка за 13.06** (таймер 03:14 UTC): «Обновлено (active)» ~20-21k; у всех трёх
+      площадок «покрытие N% из M»; НОВЫЕ строки: «heal: исправлено X / осталось Y»,
+      «деталей обновлено N, цен изменилось M», прунинг embeddings, метрики. Без 🚨-строк шагов.
+      Время прогона: ожидаем +20-80 мин к обычному (heal 500 + rolling 200 fetch'ей).
+- [ ] **Drop-алерт НЕ должен сработать** в первую ночь (daily_metrics была пуста — сравнивать
+      не с чем). Если сработал — баг, смотреть `daily_metrics`.
+- [ ] **Price-drop сообщения**: ≤10, цены/ссылки осмысленные. Первые ночи трогают самые
+      протухшие listings — пик сейчас, дальше спадёт. Если шумно для Дарьи — поднять
+      `PRICE_DROP_MIN_PCT` в `.env`.
+- [ ] **Диск/WAL после первого прунинга**: `ls -lh /opt/otz/data/otz.db*` — WAL мог разово
+      вырасти на сотни МБ; при случае ручной VACUUM (§15.7).
+- [ ] `monitor.log`: матчи по-прежнему за секунды; нет «database is locked» в окно 03:00-05:00;
+      heal-ошибок много в первую ночь — норм (мёртвые строки), должно падать ночь к ночи.
+- [ ] `llm_decisions.jsonl` появился после первого LLM-матча; `otz llm-report --days 1` парсит.
+- [ ] **W0-5 (не сделано, требует согласования с Дарьей):** `otz-bg rematch-all` после
+      бэкфилла обложек — перепроверит старые NO_MATCH, СГЕНЕРИТ ДОСТАВКИ Дарье. Предупредить её.
 
-### 0.3 Бэклог — оставшиеся находки ревью (приоритизировано)
+### 0.3 Бэклог (после H1, приоритизировано)
 
-**P1 — целостность данных:**
-- Автоматизировать heal: запускать `refetch-details` (broken-only) после ночного скрапа или
-  weekly-таймером — сейчас только вручную.
-- Гонка дедупликации inbound: UNIQUE по `(source_channel_id, tg_message_id, digest_share_id)`
-  неэффективен при NULL digest_share_id → возможен дубль-пост и двойная доставка
-  (`src/telegram/monitor.py:354-382`, `src/db/models.py:92-96`). Нужен conditional unique index
-  или pre-insert check c обработкой гонки.
-- Индексы: нет индекса на `last_seen_at` (sweep сканирует 30k+ строк) и составного
-  `(platform, is_active)` — alembic-миграция.
-- Детали существующих listings никогда не обновляются (цена поменялась на сайте — у нас
-  старая). `refetch-details --all` это чинит вручную; решить: периодический re-fetch N самых
-  старых активных (например, 200/ночь) внутри nightly.
+**Закрыто в H1:** весь P1 (heal, гонка дедупа, индексы, rolling re-fetch) и весь P2
+(column-select, прунинг, кэш match-all, to_thread) из прошлого handoff'а.
 
-**P2 — память/перфоманс:**
-- `embed-all` / `hash-listings` грузят полные ORM-строки с BLOB'ами только чтобы выбрать id
-  (`src/cli.py:~694-772`) — перейти на выборку колонок.
-- Прунинг `photo_embeddings` неактивных listings (~60% из 415МБ BLOB'ов — мёртвый вес,
-  растёт бесконечно): `UPDATE listings SET photo_embeddings=NULL WHERE is_active=0 AND
-  last_seen_at < date('now','-30 day')` + шаг в nightly.
-- `match_all_pending` делает полный SELECT на каждый inbound — кэшировать lightweight-строки
-  на один батч.
-- Остаточный ~1с CPU матчера всё ещё в event loop — вынести скан в `asyncio.to_thread`.
+**Осталось / новое из ревью H1:**
+- `send_text_via_bot` без flood-wait retry (в отличие от альбомного пути) — при 429 текстовый
+  алерт молча теряется (только лог). Добавить retry-хелпер как у `_send_album_with_floodwait`.
+- llm-report слеп к fail-open матчам: при LLM-фейле (529 и т.п.) строка в jsonl не пишется —
+  на деградированных ночах отчёт недосчитывает. Можно писать строку с verdict=null.
+- `alembic/env.py`: на пути «нет DML» DDL автокоммитится постатементно (нет явного BEGIN) —
+  упавшая посреди миграция оставляет частичную схему. Перейти на явные BEGIN-хуки SQLAlchemy.
+- `orchestrator.py` вырос вдвое; `prune_inactive_embeddings`/`snapshot_daily_metrics` — чистый
+  DB-maintenance, просится `src/maintenance.py`. Механический перенос.
+- ruff: добавить `RUF001/2/3` в ignore (русские строки продукта), почистить UP017/E501 хвосты.
+- Финальный 55с backoff в `llm_validator` после ПОСЛЕДНЕЙ неудачной попытки — бессмысленное
+  ожидание перед giving up (latency nit).
+- Watermark не двигается мимо хвостовых text-only сообщений (backfill вечно их перечитывает,
+  идемпотентно) — задокументировано в `test_monitor_events.py`, чинить лениво.
+- W4-T3: детерминизация pHash-vs-CLIP выбора — отдельный PR со сменой семантики (квирк
+  запинен тестом `test_select_best_preserves_order_dependent_quirk`).
+- Throttle-маркер / ротация halooglasi mid-walk — принято как есть (не чинить).
 
-**P3 — гигиена:**
-- CSRF на admin POST-роутах (`src/admin/routes.py:94-142`) — риск низкий (localhost + basic auth).
-- `notify-failure` (cli.py:~1489): докстринг обещает `OnFailure=`-wiring, которого нет —
-  либо добавить `OnFailure=otz-notify-failure@%n.service` в юниты, либо поправить докстринг.
-- Тесты: stages 2-4 матчера (CLIP/text-check/LLM-гейт) и event-handling монитора (альбомы,
-  watermark, flush) не покрыты.
-- Throttle-маркер не предотвращает параллельные скрапы (nightly его игнорирует) — известно, ок.
-- halooglasi теряет ~200 объявлений за обход из-за ротации выдачи mid-walk — самолечится
-  3-дневным grace; принято как есть.
-- Quirk: выбор pHash-vs-CLIP сигнала зависит от порядка обхода listings (сравнение с running
-  `best_score`, `src/matching/matcher.py`) — поведение сохранено сознательно при рефакторе;
-  при желании детерминировать отдельным PR с осознанной сменой семантики.
-
-**Идеи развития (не из ревью):** см. §18; плюс — алерт в бот при `is_active`-просадке >20% за
-сутки; покрытие фотографиями (списки без фото) в daily-summary.
+**Идеи развития:** см. §18; тюнинг `LLM_VALIDATION_MIN_CONFIDENCE` — только после 2-3 недель
+данных `llm-report`.
 
 ### 0.4 Критичные правила (не нарушать)
 
@@ -330,6 +337,13 @@ ENABLE_LLM_VALIDATION=true
 CLIP_SIMILARITY_THRESHOLD=0.92
 PHASH_MAX_HAMMING=6
 MIN_MATCHED_PHOTOS=2
+# --- этап H1 (дефолты в config.py боевые; в .env можно не задавать) ---
+NIGHTLY_HEAL_LIMIT=500            # 0 = пропустить auto-heal
+NIGHTLY_DETAIL_REFRESH=200        # 0 = пропустить rolling re-fetch цен
+NIGHTLY_PRUNE_EMBEDDINGS=1        # 0 = не прунить embeddings неактивных
+NIGHTLY_METRICS=1                 # 0 = не писать daily_metrics / drop-алерт
+PRICE_DROP_ALERTS=true
+PRICE_DROP_MIN_PCT=5
 ```
 
 Шаблон: [.env.example](.env.example).
@@ -479,6 +493,26 @@ ssh root@90.156.254.159 'sqlite3 /opt/otz/data/otz.db "SELECT COUNT(*) FROM matc
 ### 15.6 Восстановить ownership на VPS если что-то сломалось
 ```bash
 ssh root@90.156.254.159 'chown -R otz:otz /opt/otz'
+```
+
+### 15.7 Ручной VACUUM (файл БД не сжимается сам после прунинга embeddings)
+```bash
+# ТОЛЬКО руками: backup + остановленный monitor, иначе session lock / огромный WAL
+ssh root@90.156.254.159 'systemctl stop otz-monitor && \
+  cp /opt/otz/data/otz.db /opt/otz/data/backups/otz-$(date +%F-%H%M).db && \
+  sudo -u otz sqlite3 /opt/otz/data/otz.db "VACUUM;" && \
+  systemctl start otz-monitor'
+```
+
+### 15.8 Новые отчёты (H1)
+```bash
+ssh root@90.156.254.159 'otz-bg llm-report --days 14'   # тюнинг LLM-порога: гистограмма + what-if
+ssh root@90.156.254.159 'otz-bg districts-report'        # незамапленные районы + yaml-строки
+```
+
+### 15.9 Smoke OnFailure-алертов
+```bash
+ssh root@90.156.254.159 'systemctl start otz-notify-failure@smoke.service'  # 🚨 в бот
 ```
 
 ---

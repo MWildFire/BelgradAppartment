@@ -383,6 +383,19 @@ CLI `otz deliver-all` — однократный re-trigger для PENDING ма�
 - [ ] Уведомления Дарье в личку, когда появился новый кандидат.
 - [ ] Аналитика: % published / rejected, средняя цена и т.д.
 
+### Этап H1 — «Hardening & Intelligence» (12.06.2026) — ✅ закрыт
+План: `FEATURE_PLAN.md`; итоги: `HANDOFF.md` §0.1. Кратко:
+- [x] Миграция 0005: индексы listings, partial unique против гонки дедупа inbound,
+      `details_refreshed_at`, таблица `daily_metrics`.
+- [x] Монитор: IntegrityError-safe persist (нет дубль-доставки при гонке).
+- [x] Nightly: auto-heal битых строк · rolling re-fetch цен · прунинг embeddings ·
+      snapshot метрик + алерт просадки active >20% · photo coverage в daily-summary.
+- [x] Матчер: CPU-скан в `asyncio.to_thread` · кэш кандидатов для match-all (1 SELECT/батч).
+- [x] systemd: `otz-notify-failure@.service` + `OnFailure=` во всех юнитах.
+- [x] Admin: Reject / Mark-posted · CSRF · `/metrics` (Chart.js).
+- [x] Intel: лог LLM-вердиктов + `llm-report` · `districts-report` · price-drop алерты.
+- [x] Тесты 105 → 207 (stages 2-4 матчера, события монитора, миграция, nightly, admin).
+
 ---
 
 ## 8. Риски и открытые вопросы
