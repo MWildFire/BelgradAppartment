@@ -22,6 +22,7 @@ and brightness shifts — which is exactly how owners' photos differ from platfo
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -35,6 +36,14 @@ from src.db import (
     Match,
     MatchStatus,
     get_session,
+)
+from src.matching.candidates import (
+    CandidateCache,
+    CandidateRow,
+    candidate_scan_select,
+    load_candidate_cache,
+    parse_phashes,
+    scan_rows_from_db,
 )
 from src.matching.clip_embed import unpack_embeddings
 from src.matching.inbound_parser import ParsedInbound, parse_inbound_text
@@ -63,10 +72,14 @@ class MatchResult:
     method: str = METHOD_CLIP
 
 
-async def match_inbound(inbound_id: int) -> MatchResult:
+async def match_inbound(inbound_id: int, cache: CandidateCache | None = None) -> MatchResult:
     """Run the multi-stage matcher for one inbound post; persist Match on success.
 
     Pipeline: pHash pre-screen → CLIP cosine → text cross-check → (optional) Claude LLM vision check.
+
+    `cache` — optional batch-level candidate snapshot (see candidates.py); default None keeps
+    the per-call candidates SELECT exactly as before (the live monitor path is unchanged).
+    The CPU scan itself always runs in a worker thread so the event loop stays responsive.
     """
     settings = get_settings()
     clip_thr = settings.clip_similarity_threshold
@@ -108,20 +121,14 @@ async def match_inbound(inbound_id: int) -> MatchResult:
             )
             return MatchResult(inbound_id, None, 0, 0.0, STATUS_NO_MATCH)
 
-        # Lightweight scan rows only — photo_embeddings BLOBs (~20 KB/row, hundreds of MB total)
-        # are fetched separately in chunks during stage 2, never all at once.
-        rows = (
-            await s.execute(
-                select(
-                    Listing.id,
-                    Listing.photo_phashes,
-                    Listing.price_eur,
-                    Listing.area_m2,
-                    Listing.district,
-                    Listing.photo_embeddings.isnot(None).label("has_embs"),
-                ).where(Listing.is_active.is_(True))
-            )
-        ).all()
+        if cache is not None:
+            rows = cache.rows
+        else:
+            # Lightweight scan rows only — photo_embeddings BLOBs (~20 KB/row, hundreds of MB
+            # total) are fetched separately in chunks during stage 2, never all at once.
+            db_rows = (await s.execute(candidate_scan_select())).all()
+            # Hex→int pHash parsing over ~20k rows is CPU — off the loop like the scan stages.
+            rows = await asyncio.to_thread(scan_rows_from_db, db_rows)
 
         # Parse price/area from inbound caption — used to reject CLIP false-positives.
         parsed = parse_inbound_text(inbound.raw_text)
@@ -129,15 +136,12 @@ async def match_inbound(inbound_id: int) -> MatchResult:
         # Stage 1 — pHash pre-screen for every listing. Plain 64-bit XOR+popcount: identical
         # result to imagehash's hamming distance but ~40x faster — the old per-call
         # hex_to_hash() parsing froze the event loop for 40-75s per inbound at 20k listings.
-        inbound_ints = _parse_hashes(inbound_phashes)
-        ph_counts: dict[int, int] = {}
-        for row in rows:
-            if row.photo_phashes:
-                ph_counts[row.id] = _count_phash_matches(
-                    inbound_ints, list(row.photo_phashes), phash_thr
-                )
+        # Runs in a worker thread (pure CPU, no session) so the live monitor keeps ticking.
+        inbound_ints = parse_phashes(inbound_phashes)
+        ph_counts = await asyncio.to_thread(_phash_prescreen, inbound_ints, rows, phash_thr)
 
-        # Stage 2 — CLIP cosine for every listing that has embeddings, fetched in bounded chunks.
+        # Stage 2 — CLIP cosine for every listing that has embeddings: BLOBs fetched on the
+        # loop in bounded chunks, unpack + matmul per chunk handed to a worker thread.
         clip_results: dict[int, tuple[int, float]] = {}
         if inbound_embs:
             emb_ids = [row.id for row in rows if row.has_embs]
@@ -149,53 +153,14 @@ async def match_inbound(inbound_id: int) -> MatchResult:
                         .where(Listing.id.in_(chunk_ids))
                     )
                 ).all()
-                for lid, blob in blob_rows:
-                    if not blob:
-                        continue
-                    try:
-                        listing_embs = unpack_embeddings(blob)
-                    except Exception:
-                        # One corrupt BLOB must not take the whole matcher down for every inbound.
-                        logger.warning("[match] corrupt photo_embeddings for listing=%s — skipped", lid)
-                        continue
-                    if listing_embs:
-                        clip_results[lid] = _clip_match(inbound_embs, listing_embs, clip_thr)
-
-        best_id: int | None = None
-        best_count = 0
-        best_score = 0.0
-        best_method = METHOD_CLIP
-
-        for row in rows:
-            ph_count = ph_counts.get(row.id, 0)
-            clip_count, clip_score = clip_results.get(row.id, (0, 0.0))
-            if ph_count == 0 and clip_count == 0 and clip_score == 0.0:
-                continue
-
-            # Pick the stronger signal per listing.
-            if clip_count > ph_count or (
-                clip_count == ph_count and clip_score > best_score
-            ):
-                cand_count, cand_score, cand_method = clip_count, clip_score, METHOD_CLIP
-            else:
-                cand_count, cand_score, cand_method = (
-                    ph_count, float(ph_count) / max(len(inbound_phashes), 1), METHOD_PHASH
+                clip_results.update(
+                    await asyncio.to_thread(_clip_score_chunk, inbound_embs, blob_rows, clip_thr)
                 )
 
-            # Stage 3 — text cross-check (rejects CLIP false positives between unrelated apartments
-            # that happen to have similar-looking interiors). Only applies to CLIP-based candidates;
-            # pHash with ≥2 matches is already strong enough on its own.
-            if cand_method == METHOD_CLIP and not _passes_text_check(parsed, row, settings):
-                continue
-
-            # Track best across listings (prefer higher count; tie-break by score).
-            if cand_count > best_count or (
-                cand_count == best_count and cand_score > best_score
-            ):
-                best_id = row.id
-                best_count = cand_count
-                best_score = cand_score
-                best_method = cand_method
+        # Stage 3 + winner selection — pure CPU, also off the loop.
+        best_id, best_count, best_score, best_method = await asyncio.to_thread(
+            _select_best, rows, ph_counts, clip_results, parsed, len(inbound_phashes), settings,
+        )
 
         best_listing: Listing | None = (
             await s.get(Listing, best_id) if best_id is not None else None
@@ -307,8 +272,12 @@ async def _run_llm_validation(
     return True
 
 
-async def match_all_pending() -> list[MatchResult]:
-    """Run matcher for every InboundPost in NEW status. Useful for batch backfill."""
+async def match_all_pending(cache: CandidateCache | None = None) -> list[MatchResult]:
+    """Run matcher for every InboundPost in NEW status. Useful for batch backfill.
+
+    Builds the candidate snapshot ONCE (unless the caller already passes one), so a batch
+    of N inbounds does a single candidates SELECT instead of N full table scans.
+    """
     async with get_session() as s:
         ids = list(
             (
@@ -319,9 +288,11 @@ async def match_all_pending() -> list[MatchResult]:
                 )
             ).scalars().all()
         )
+        if ids and cache is None:
+            cache = await load_candidate_cache(s)
     results: list[MatchResult] = []
     for inbound_id in ids:
-        results.append(await match_inbound(inbound_id))
+        results.append(await match_inbound(inbound_id, cache=cache))
     return results
 
 
@@ -329,37 +300,24 @@ async def match_all_pending() -> list[MatchResult]:
 _CLIP_CHUNK = 500
 
 
-def _parse_hashes(hex_hashes: list[str]) -> list[int]:
-    """Hex pHashes → 64-bit ints, silently dropping malformed entries.
-
-    Every pHash in this system is str(imagehash.phash()) = exactly 16 hex chars; anything else
-    is a corrupt row whose short hash would XOR into phantom near-zero distances — skip it
-    (the old imagehash path raised on length mismatch, which skipped the pair too).
-    """
-    out: list[int] = []
-    for h in hex_hashes:
-        if not isinstance(h, str) or len(h) != 16:
-            continue
-        try:
-            out.append(int(h, 16))
-        except ValueError:
-            continue
-    return out
+# ---------------------------------------------------------------------------
+# Pure-CPU scan stages. No session/ORM/await inside — they run via asyncio.to_thread
+# so the per-inbound ~1s of XOR/popcount + cosine math never blocks the event loop.
+# ---------------------------------------------------------------------------
 
 
 def _count_phash_matches(
-    inbound_ints: list[int], listing_hashes: list[str], max_hamming: int
+    inbound_ints: list[int], listing_ints: tuple[int, ...] | list[int], max_hamming: int
 ) -> int:
     """How many inbound photos have at least one near-duplicate in the listing (pHash).
 
     Hamming distance via int XOR + popcount — bit-identical to imagehash's `hash1 - hash2`
     (both count differing bits of the same 64-bit hash) but ~40x faster, because it skips
     re-parsing hex into numpy bool arrays on every one of the ~1M comparisons per inbound.
+    Hex→int parsing (with the same malformed-entry skipping as the old imagehash path)
+    happens once per scan row in candidates.parse_phashes.
     """
-    if not inbound_ints or not listing_hashes:
-        return 0
-    listing_ints = _parse_hashes(listing_hashes)
-    if not listing_ints:
+    if not inbound_ints or not listing_ints:
         return 0
     count = 0
     for ia in inbound_ints:
@@ -368,6 +326,89 @@ def _count_phash_matches(
                 count += 1
                 break
     return count
+
+
+def _phash_prescreen(
+    inbound_ints: list[int], rows: list[CandidateRow], max_hamming: int
+) -> dict[int, int]:
+    """Stage 1 over all candidate rows. Pure CPU — runs in a worker thread."""
+    counts: dict[int, int] = {}
+    for row in rows:
+        if row.phash_ints:
+            counts[row.id] = _count_phash_matches(inbound_ints, row.phash_ints, max_hamming)
+    return counts
+
+
+def _clip_score_chunk(
+    inbound_embs: list, blob_rows: list, threshold: float
+) -> dict[int, tuple[int, float]]:
+    """Stage 2 for one pre-fetched chunk of (listing_id, blob). Pure CPU — worker thread."""
+    out: dict[int, tuple[int, float]] = {}
+    for lid, blob in blob_rows:
+        if not blob:
+            continue
+        try:
+            listing_embs = unpack_embeddings(blob)
+        except Exception:
+            # One corrupt BLOB must not take the whole matcher down for every inbound.
+            logger.warning("[match] corrupt photo_embeddings for listing=%s — skipped", lid)
+            continue
+        if listing_embs:
+            out[lid] = _clip_match(inbound_embs, listing_embs, threshold)
+    return out
+
+
+def _select_best(
+    rows: list[CandidateRow],
+    ph_counts: dict[int, int],
+    clip_results: dict[int, tuple[int, float]],
+    parsed: ParsedInbound,
+    n_inbound_phashes: int,
+    settings,
+) -> tuple[int | None, int, float, str]:
+    """Stage 3 text cross-check + winner selection. Pure CPU — runs in a worker thread.
+
+    NOTE: the pHash-vs-CLIP signal choice reads the RUNNING best_score, so it depends on
+    listing iteration order. Preserved bit-for-bit on purpose — determinization is
+    explicitly deferred to a separate PR.
+    """
+    best_id: int | None = None
+    best_count = 0
+    best_score = 0.0
+    best_method = METHOD_CLIP
+
+    for row in rows:
+        ph_count = ph_counts.get(row.id, 0)
+        clip_count, clip_score = clip_results.get(row.id, (0, 0.0))
+        if ph_count == 0 and clip_count == 0 and clip_score == 0.0:
+            continue
+
+        # Pick the stronger signal per listing.
+        if clip_count > ph_count or (
+            clip_count == ph_count and clip_score > best_score
+        ):
+            cand_count, cand_score, cand_method = clip_count, clip_score, METHOD_CLIP
+        else:
+            cand_count, cand_score, cand_method = (
+                ph_count, float(ph_count) / max(n_inbound_phashes, 1), METHOD_PHASH
+            )
+
+        # Stage 3 — text cross-check (rejects CLIP false positives between unrelated apartments
+        # that happen to have similar-looking interiors). Only applies to CLIP-based candidates;
+        # pHash with ≥2 matches is already strong enough on its own.
+        if cand_method == METHOD_CLIP and not _passes_text_check(parsed, row, settings):
+            continue
+
+        # Track best across listings (prefer higher count; tie-break by score).
+        if cand_count > best_count or (
+            cand_count == best_count and cand_score > best_score
+        ):
+            best_id = row.id
+            best_count = cand_count
+            best_score = cand_score
+            best_method = cand_method
+
+    return best_id, best_count, best_score, best_method
 
 
 def _clip_match(
@@ -392,7 +433,7 @@ def _passes_text_check(parsed: ParsedInbound, listing, settings) -> bool:
     """Reject candidate if inbound caption is incompatible with the listing.
 
     `listing` is anything with price_eur/area_m2/district attributes — a Listing ORM object
-    or the lightweight scan Row used by match_inbound.
+    or the lightweight CandidateRow used by the scan.
 
     Permissive on missing data (one side unknown → pass). Three signals:
     - Price within ±cross_check_price_tolerance_pct (default 25%).

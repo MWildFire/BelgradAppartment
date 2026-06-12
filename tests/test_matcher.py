@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-import src.db.session as db_session
 from src.db.models import (
-    Base,
     InboundPost,
     InboundStatus,
     Listing,
@@ -19,25 +16,7 @@ from src.db.models import (
 )
 from src.matching.matcher import match_all_pending, match_inbound
 
-
-@pytest_asyncio.fixture
-async def db():
-    """Spin up a fresh in-memory SQLite DB, swap it in for the global session factory."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False, future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    orig_engine = db_session._engine
-    orig_factory = db_session._session_factory
-    db_session._engine = engine
-    db_session._session_factory = factory
-    try:
-        yield engine
-    finally:
-        await engine.dispose()
-        db_session._engine = orig_engine
-        db_session._session_factory = orig_factory
+# In-memory DB comes from the shared `db` fixture in tests/conftest.py.
 
 
 def make_phash(bits: str) -> str:

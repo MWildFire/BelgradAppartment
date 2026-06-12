@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     scraper_user_agent: str = ""
     scraper_proxy_url: str = ""
 
+    # --- Nightly maintenance steps (nightly-refresh) ---
+    # Every step is disableable via env (=0 → skip) and fault-isolated at runtime:
+    # a step failure adds a 🚨 line to the nightly summary, only the base scrape is fatal.
+    # Broken rows (active, no photo hashes) re-fetched per night; 0 = skip.
+    nightly_heal_limit: int = 500
+    nightly_detail_refresh: int = 200  # active rows for rolling detail re-fetch per night; 0 = skip
+    nightly_prune_embeddings: bool = True  # NIGHTLY_PRUNE_EMBEDDINGS=0 → skip embeddings prune
+    nightly_metrics: bool = True  # NIGHTLY_METRICS=0 → skip daily_metrics snapshot + drop alert
+
     # --- Source channels ---
     source_default_start_date: str = "2026-05-15"  # ISO date — earliest message to backfill from
 

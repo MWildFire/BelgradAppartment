@@ -15,16 +15,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from src.config import get_settings
 from src.db import Listing, get_session
-from src.db.models import Platform
+from src.db.models import DailyMetrics, Platform
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, Scraper
 
@@ -221,6 +224,9 @@ async def _process_one(
             photo_phashes=photo_hashes,
             photo_embeddings=embeddings_blob,
             raw_payload=detail.raw_payload,
+            # Details were just fetched — start the rolling-refresh clock now instead of
+            # leaving NULL (NULL = "never fetched", which jumps the refresh queue).
+            details_refreshed_at=datetime.now(timezone.utc),
         )
         session.add(listing)
     return True, len(photo_paths)
@@ -329,8 +335,6 @@ async def mark_stale_inactive(
     Default 10 days = 7-day cadence + 3-day grace, so a missed weekly run doesn't false-positive
     everything.
     """
-    from sqlalchemy import update
-
     cutoff = datetime.now(timezone.utc) - timedelta(days=inactive_after_days)
     async with get_session() as session:
         # Plain UPDATE — loading full ORM rows here pulls every photo_embeddings BLOB
@@ -350,3 +354,422 @@ async def mark_stale_inactive(
         marked, cutoff.date(), platform.value if platform else "all",
     )
     return StaleSweepResult(platform=platform, marked_inactive=marked)
+
+
+# ------------------------------------------------------------------ nightly maintenance steps
+
+
+class PriceChange(NamedTuple):
+    """W2-C2 cross-wave contract (consumed by the Wave-3 price-drop alert): one entry per
+    updated listing whose price_eur changed. None ⇄ value transitions included; entries
+    follow processing order."""
+
+    listing_id: int
+    old_price_eur: int | None
+    new_price_eur: int | None
+
+
+@dataclass
+class DetailRefetchStats:
+    """Outcome of a batch detail re-fetch (refetch-details CLI, heal & rolling steps)."""
+
+    selected: int = 0
+    updated: int = 0
+    photos: int = 0
+    errors: int = 0
+    price_changes: list[PriceChange] = field(default_factory=list)  # see PriceChange
+
+
+@dataclass
+class _RefetchOutcome:
+    photos_added: int
+    old_price: int | None
+    new_price: int | None
+
+
+async def refetch_listing_details(
+    rows: Sequence[Any],
+    *,
+    download_photos: bool = True,
+    touch_refreshed_at: bool = False,
+    touch_on_error: bool = False,
+    sleep_between: float = 0.3,
+    scrapers: Mapping[Platform, type[Scraper]] | None = None,
+    progress: Callable[[DetailRefetchStats, Any, Exception | None], None] | None = None,
+) -> DetailRefetchStats:
+    """Re-fetch detail pages for `rows` of (id, platform, url) and update the stored listings.
+
+    Shared core of the `refetch-details` CLI command and the nightly heal / rolling-refresh
+    steps. `touch_on_error=True` bumps `details_refreshed_at` even on failures so the rolling
+    queue rotates past permanently-dead rows (404 etc.) instead of starving on them forever.
+    `progress(stats, row, error)` is called after every row attempt (error=None on success).
+    """
+    if scrapers is None:
+        from src.scrapers import SCRAPERS  # lazy: avoids circular import
+
+        scrapers = SCRAPERS
+
+    stats = DetailRefetchStats(selected=len(rows))
+    by_platform: dict[Platform, list[Any]] = {}
+    for row in rows:
+        by_platform.setdefault(row.platform, []).append(row)
+
+    for plat, plat_rows in by_platform.items():
+        scraper_cls = scrapers[plat]
+        attempted = 0
+        try:
+            async with scraper_cls() as scraper:
+                for row in plat_rows:
+                    attempted += 1
+                    try:
+                        outcome = await _refetch_one_listing(
+                            scraper,
+                            row.id,
+                            row.url,
+                            download_photos=download_photos,
+                            touch_refreshed_at=touch_refreshed_at,
+                        )
+                        if outcome is None:
+                            continue  # row deleted meanwhile
+                        stats.updated += 1
+                        stats.photos += outcome.photos_added
+                        if outcome.old_price != outcome.new_price:
+                            stats.price_changes.append(
+                                PriceChange(row.id, outcome.old_price, outcome.new_price)
+                            )
+                        if progress is not None:
+                            with suppress(Exception):
+                                progress(stats, row, None)
+                        if sleep_between:
+                            await asyncio.sleep(sleep_between)
+                    except Exception as e:
+                        stats.errors += 1
+                        logger.warning(
+                            "[refetch %s] #%s (%s) failed: %s: %s",
+                            plat.value, row.id, row.url, type(e).__name__, e,
+                        )
+                        if touch_on_error:
+                            async with get_session() as s:
+                                await s.execute(
+                                    update(Listing)
+                                    .where(Listing.id == row.id)
+                                    .values(details_refreshed_at=datetime.now(timezone.utc))
+                                )
+                        if progress is not None:
+                            with suppress(Exception):
+                                progress(stats, row, e)
+        except Exception:
+            # Scraper construction/teardown blew up — rows never attempted count as errors.
+            stats.errors += max(len(plat_rows) - attempted, 0)
+            logger.exception("[refetch %s] platform failed", plat.value)
+    return stats
+
+
+async def _refetch_one_listing(
+    scraper: Scraper,
+    listing_id: int,
+    url: str,
+    *,
+    download_photos: bool,
+    touch_refreshed_at: bool,
+) -> _RefetchOutcome | None:
+    detail = await scraper.fetch_detail(url)
+    if not detail.photo_urls and detail.price_eur is None and detail.title is None:
+        raise RuntimeError("still an empty payload")
+
+    # Read current state and DOWNLOAD photos before touching the row: committing the new
+    # photo_urls first would make a failed download undetectable forever (urls match,
+    # phashes non-empty → no filter ever selects the row again).
+    async with get_session() as s:
+        current = await s.get(Listing, listing_id)
+        if current is None:
+            return None
+        old_urls = list(current.photo_urls or [])
+        old_phash_count = len(current.photo_phashes or [])
+        old_price = current.price_eur
+
+    need_photos = bool(
+        download_photos
+        and detail.photo_urls
+        and (
+            list(detail.photo_urls) != old_urls
+            or old_phash_count < len(detail.photo_urls)
+        )
+    )
+    hashes: list[str] = []
+    emb: bytes | None = None
+    if need_photos:
+        _paths, hashes, emb = await _download_photos(detail)
+        if not hashes:
+            raise RuntimeError("photo download produced no hashes — row left untouched")
+
+    async with get_session() as s:
+        listing = await s.get(Listing, listing_id)
+        if listing is None:
+            return None
+        listing.price_eur = detail.price_eur
+        listing.area_m2 = detail.area_m2
+        listing.rooms = detail.rooms
+        listing.district = detail.district
+        listing.address_raw = detail.address_raw
+        listing.lat = detail.lat
+        listing.lon = detail.lon
+        listing.title = detail.title
+        listing.description = detail.description
+        listing.raw_payload = detail.raw_payload
+        if need_photos:
+            listing.photo_urls = detail.photo_urls
+            listing.photo_phashes = hashes
+            listing.photo_embeddings = emb
+        if touch_refreshed_at:
+            listing.details_refreshed_at = datetime.now(timezone.utc)
+    return _RefetchOutcome(
+        photos_added=len(hashes), old_price=old_price, new_price=detail.price_eur
+    )
+
+
+@dataclass
+class HealResult:
+    """W2-C1 outcome: «heal: исправлено {fixed} / осталось {remaining}»."""
+
+    selected: int
+    fixed: int
+    remaining: int
+    errors: int
+
+
+# "Broken" = active listing the matcher can't see: no photo hashes at all.
+_BROKEN_LISTING = (Listing.is_active.is_(True), Listing.photo_phashes == [])
+
+
+async def heal_broken_listings(
+    *,
+    limit: int = 500,
+    scrapers: Mapping[Platform, type[Scraper]] | None = None,
+) -> HealResult:
+    """W2-C1: re-fetch details/photos for up to `limit` broken active listings.
+
+    `fixed` counts selected rows that are no longer broken afterwards; `remaining` is the
+    total broken count left in the DB (selected-but-unfixed + never-selected overflow).
+    """
+    async with get_session() as s:
+        # Rotate, don't starve: touch_on_error stamps failed rows' details_refreshed_at, and
+        # selecting oldest-stamp-first pushes permanently-dead rows (404s, photo-less listings)
+        # behind never-tried ones instead of re-fetching the same dead head every night.
+        rows = (
+            await s.execute(
+                select(Listing.id, Listing.platform, Listing.url)
+                .where(*_BROKEN_LISTING)
+                .order_by(Listing.details_refreshed_at.asc().nulls_first(), Listing.id)
+                .limit(limit)
+            )
+        ).all()
+
+    stats = await refetch_listing_details(
+        rows,
+        download_photos=True,
+        touch_refreshed_at=True,
+        touch_on_error=True,
+        scrapers=scrapers,
+    )
+
+    selected_ids = [r.id for r in rows]
+    async with get_session() as s:
+        still_broken_selected = 0
+        if selected_ids:
+            still_broken_selected = (
+                await s.execute(
+                    select(func.count(Listing.id)).where(
+                        *_BROKEN_LISTING, Listing.id.in_(selected_ids)
+                    )
+                )
+            ).scalar_one()
+        remaining = (
+            await s.execute(select(func.count(Listing.id)).where(*_BROKEN_LISTING))
+        ).scalar_one()
+    logger.info(
+        "[heal] selected=%d fixed=%d remaining=%d errors=%d",
+        len(rows), len(rows) - still_broken_selected, remaining, stats.errors,
+    )
+    return HealResult(
+        selected=len(rows),
+        fixed=len(rows) - still_broken_selected,
+        remaining=remaining,
+        errors=stats.errors,
+    )
+
+
+@dataclass
+class RollingRefreshResult:
+    """W2-C2 outcome — `price_changes` is the return contract for the Wave-3 price-drop
+    alert, see PriceChange."""
+
+    selected: int
+    refreshed: int
+    errors: int
+    price_changes: list[PriceChange]
+
+
+async def rolling_detail_refresh(
+    *,
+    limit: int = 200,
+    scrapers: Mapping[Platform, type[Scraper]] | None = None,
+) -> RollingRefreshResult:
+    """W2-C2: re-fetch details for the `limit` ACTIVE listings with the oldest
+    `details_refreshed_at` (NULL = never → first), split evenly across platforms.
+
+    Per-platform quota is limit//n (+1 for the first limit%n platforms); a platform with
+    fewer rows than its quota does NOT donate the leftover to others — keeps selection simple
+    and the nightly budget bounded.
+    """
+    if scrapers is None:
+        from src.scrapers import SCRAPERS  # lazy: avoids circular import
+
+        scrapers = SCRAPERS
+
+    platforms = list(scrapers.keys())
+    base, rem = divmod(max(limit, 0), len(platforms))
+    rows: list[Any] = []
+    async with get_session() as s:
+        for i, plat in enumerate(platforms):
+            quota = base + (1 if i < rem else 0)
+            if quota <= 0:
+                continue
+            plat_rows = (
+                await s.execute(
+                    select(Listing.id, Listing.platform, Listing.url)
+                    .where(Listing.platform == plat, Listing.is_active.is_(True))
+                    .order_by(Listing.details_refreshed_at.asc().nulls_first(), Listing.id)
+                    .limit(quota)
+                )
+            ).all()
+            rows.extend(plat_rows)
+
+    stats = await refetch_listing_details(
+        rows,
+        download_photos=True,  # only re-downloads when the photo set actually changed
+        touch_refreshed_at=True,
+        touch_on_error=True,
+        scrapers=scrapers,
+    )
+    logger.info(
+        "[rolling-refresh] selected=%d refreshed=%d price_changes=%d errors=%d",
+        len(rows), stats.updated, len(stats.price_changes), stats.errors,
+    )
+    return RollingRefreshResult(
+        selected=len(rows),
+        refreshed=stats.updated,
+        errors=stats.errors,
+        price_changes=stats.price_changes,
+    )
+
+
+async def prune_inactive_embeddings(*, older_than_days: int = 30) -> int:
+    """W2-C3: NULL out photo_embeddings of listings inactive for > `older_than_days`.
+
+    Frees pages INSIDE otz.db only — the file shrinks solely after a manual VACUUM
+    (backup + stopped monitor required; see docs/PHASE5_DEPLOY.md §9). Never automated.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    async with get_session() as s:
+        res = await s.execute(
+            update(Listing)
+            .where(
+                Listing.is_active.is_(False),
+                Listing.last_seen_at < cutoff,
+                Listing.photo_embeddings.is_not(None),
+            )
+            .values(photo_embeddings=None)
+        )
+        pruned = res.rowcount or 0
+    logger.info("[prune-embeddings] cleared %d rows (inactive > %d days)", pruned, older_than_days)
+    return pruned
+
+
+@dataclass
+class MetricsSnapshotResult:
+    """W2-C5 outcome. `drops`: (platform_value, prev_active, cur_active, prev_snapshot_date)
+    per platform whose active_count fell by more than `drop_threshold` vs its most recent
+    earlier snapshot (which can be days old after an outage — hence the date)."""
+
+    snapshot_date: str
+    rows_written: int
+    drops: list[tuple[str, int, int, str]]
+    drop_threshold: float
+
+
+async def snapshot_daily_metrics(
+    *,
+    drop_threshold: float = 0.2,
+    snapshot_date: str | None = None,
+) -> MetricsSnapshotResult:
+    """W2-C5: upsert today's per-platform (active_count, no_photo_count) into daily_metrics
+    and detect >threshold day-over-day active-count drops ("scraper silently died, sweep
+    deactivated everything" guard)."""
+    today = snapshot_date or datetime.now(timezone.utc).date().isoformat()
+    drops: list[tuple[str, int, int, str]] = []
+    written = 0
+    async with get_session() as s:
+        for plat in Platform:
+            active = (
+                await s.execute(
+                    select(func.count(Listing.id)).where(
+                        Listing.platform == plat, Listing.is_active.is_(True)
+                    )
+                )
+            ).scalar_one()
+            no_photo = (
+                await s.execute(
+                    select(func.count(Listing.id)).where(
+                        Listing.platform == plat,
+                        Listing.is_active.is_(True),
+                        Listing.photo_phashes == [],
+                    )
+                )
+            ).scalar_one()
+
+            prev = (
+                await s.execute(
+                    select(DailyMetrics)
+                    .where(
+                        DailyMetrics.platform == plat.value,
+                        DailyMetrics.snapshot_date < today,
+                    )
+                    .order_by(DailyMetrics.snapshot_date.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if (
+                prev is not None
+                and prev.active_count > 0
+                and active < (1 - drop_threshold) * prev.active_count
+            ):
+                drops.append((plat.value, prev.active_count, active, prev.snapshot_date))
+
+            existing = (
+                await s.execute(
+                    select(DailyMetrics).where(
+                        DailyMetrics.platform == plat.value,
+                        DailyMetrics.snapshot_date == today,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                existing.active_count = active
+                existing.no_photo_count = no_photo
+            else:
+                s.add(
+                    DailyMetrics(
+                        snapshot_date=today,
+                        platform=plat.value,
+                        active_count=active,
+                        no_photo_count=no_photo,
+                    )
+                )
+            written += 1
+    logger.info(
+        "[daily-metrics] snapshot %s: %d rows, %d drop alert(s)", today, written, len(drops)
+    )
+    return MetricsSnapshotResult(
+        snapshot_date=today, rows_written=written, drops=drops, drop_threshold=drop_threshold
+    )

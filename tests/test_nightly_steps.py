@@ -1,0 +1,515 @@
+"""Unit tests for the nightly maintenance steps (W2-C1..C6).
+
+In-memory SQLite + fake scrapers — no network, no real photo downloads.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from sqlalchemy import select
+
+import src.db.session as db_session
+from src.db.models import DailyMetrics, InboundPost, Listing, Platform, SourceChannel
+from src.scrapers import orchestrator
+from src.scrapers.base import ListingDetail
+
+# In-memory DB comes from the shared `db` fixture in tests/conftest.py.
+
+OLD = datetime(2020, 1, 1, tzinfo=UTC)
+RECENT = datetime(2026, 6, 1, tzinfo=UTC)
+
+
+async def seed_listing(
+    ext: str,
+    *,
+    platform: Platform = Platform.NEKRETNINE,
+    active: bool = True,
+    price: int | None = None,
+    phashes: list[str] | None = None,
+    urls: list[str] | None = None,
+    embeddings: bytes | None = None,
+    refreshed_at: datetime | None = None,
+    last_seen_at: datetime | None = None,
+    title: str | None = None,
+) -> int:
+    async with db_session.get_session() as s:
+        listing = Listing(
+            platform=platform,
+            external_id=ext,
+            url=f"https://example.com/{platform.value}/{ext}",
+            price_eur=price,
+            title=title,
+            photo_urls=urls or [],
+            photo_phashes=phashes or [],
+            photo_embeddings=embeddings,
+            is_active=active,
+            details_refreshed_at=refreshed_at,
+            last_seen_at=last_seen_at or datetime.now(UTC),
+        )
+        s.add(listing)
+        await s.flush()
+        return listing.id
+
+
+async def get_listing(listing_id: int) -> Listing:
+    async with db_session.get_session() as s:
+        row = await s.get(Listing, listing_id)
+        assert row is not None
+        return row
+
+
+def make_fake_scraper(platform: Platform, details: dict[str, ListingDetail], fail: set[str] | None = None):
+    """Class-factory: each test gets an isolated fake with call recording."""
+    fetched: list[str] = []
+    fail = fail or set()
+
+    class _Fake:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def fetch_detail(self, url: str) -> ListingDetail:
+            fetched.append(url)
+            if url in fail:
+                raise RuntimeError("fetch failed")
+            return details[url]
+
+    _Fake.fetched = fetched  # type: ignore[attr-defined]
+    return _Fake
+
+
+def detail_for(listing_url: str, platform: Platform, **kw) -> ListingDetail:
+    ext = listing_url.rsplit("/", 1)[-1]
+    return ListingDetail(platform=platform, external_id=ext, url=listing_url, **kw)
+
+
+async def fake_download_photos(detail: ListingDetail):
+    return ([Path("/tmp/fake.jpg")], ["ff00ff00ff00ff00"], None)
+
+
+# ------------------------------------------------------------------ W2-C1 heal
+
+
+async def test_heal_fixes_selected_and_counts_remaining(db, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
+    b1 = await seed_listing("b1")
+    b2 = await seed_listing("b2")
+    b3 = await seed_listing("b3")  # beyond limit → stays broken
+    await seed_listing("ok", phashes=["aa"])  # healthy, never selected
+
+    urls = {i: f"https://example.com/NEKRETNINE/b{n}" for n, i in ((1, b1), (2, b2), (3, b3))}
+    details = {
+        u: detail_for(u, Platform.NEKRETNINE, price_eur=500, photo_urls=["http://img/1.jpg"])
+        for u in urls.values()
+    }
+    fake = make_fake_scraper(Platform.NEKRETNINE, details)
+
+    res = await orchestrator.heal_broken_listings(
+        limit=2, scrapers={Platform.NEKRETNINE: fake}
+    )
+
+    assert res.selected == 2
+    assert res.fixed == 2
+    assert res.remaining == 1  # b3 untouched
+    assert res.errors == 0
+    assert fake.fetched == [urls[b1], urls[b2]]  # all-NULL refreshed_at → id order, capped by limit
+    healed = await get_listing(b1)
+    assert healed.photo_phashes == ["ff00ff00ff00ff00"]
+    assert healed.price_eur == 500
+    assert healed.details_refreshed_at is not None  # heal also stamps the rolling clock
+
+
+async def test_heal_counts_failures_honestly(db, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
+    await seed_listing("b1")
+    b2 = await seed_listing("b2")
+    u1 = "https://example.com/NEKRETNINE/b1"
+    u2 = "https://example.com/NEKRETNINE/b2"
+    details = {
+        u1: detail_for(u1, Platform.NEKRETNINE, price_eur=400, photo_urls=["http://img/1.jpg"]),
+    }
+    fake = make_fake_scraper(Platform.NEKRETNINE, details, fail={u2})
+
+    res = await orchestrator.heal_broken_listings(
+        limit=10, scrapers={Platform.NEKRETNINE: fake}
+    )
+
+    assert res.selected == 2
+    assert res.fixed == 1
+    assert res.remaining == 1  # b2 still broken
+    assert res.errors == 1
+    assert (await get_listing(b2)).photo_phashes == []
+
+
+async def test_heal_rotates_failed_rows_to_back_of_queue(db, monkeypatch):
+    """Anti-starvation: a heal-failed row gets details_refreshed_at stamped, so the next
+    night's nulls-first selection picks the NEXT broken batch instead of the same dead head."""
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
+    b1 = await seed_listing("b1")
+    b2 = await seed_listing("b2")
+    u1 = "https://example.com/NEKRETNINE/b1"
+    u2 = "https://example.com/NEKRETNINE/b2"
+
+    # Night 1: limit=1 → b1 (all NULL, id order); its detail fetch fails (e.g. 404).
+    fake1 = make_fake_scraper(Platform.NEKRETNINE, {}, fail={u1})
+    res1 = await orchestrator.heal_broken_listings(limit=1, scrapers={Platform.NEKRETNINE: fake1})
+    assert fake1.fetched == [u1]
+    assert (res1.fixed, res1.errors) == (0, 1)
+    assert (await get_listing(b1)).details_refreshed_at is not None  # error-stamped
+
+    # Night 2: same limit selects b2 (NULL stamp) — not the dead b1 again.
+    fake2 = make_fake_scraper(
+        Platform.NEKRETNINE,
+        {u2: detail_for(u2, Platform.NEKRETNINE, price_eur=300, photo_urls=["http://img/2.jpg"])},
+    )
+    res2 = await orchestrator.heal_broken_listings(limit=1, scrapers={Platform.NEKRETNINE: fake2})
+    assert fake2.fetched == [u2]
+    assert res2.fixed == 1
+    assert (await get_listing(b2)).photo_phashes == ["ff00ff00ff00ff00"]
+
+
+# ------------------------------------------------------------------ W2-C2 rolling refresh
+
+
+async def test_rolling_selects_nulls_first_and_splits_evenly(db):
+    # NEKRETNINE: never-refreshed, old, recent
+    n_null = await seed_listing("n-null", price=100, title="t")
+    n_old = await seed_listing("n-old", price=100, refreshed_at=OLD, title="t")
+    n_recent = await seed_listing("n-recent", price=100, refreshed_at=RECENT, title="t")
+    # CETIRI_ZIDA: same shape
+    c_null = await seed_listing("c-null", platform=Platform.CETIRI_ZIDA, price=100, title="t")
+    c_old = await seed_listing("c-old", platform=Platform.CETIRI_ZIDA, price=100, refreshed_at=OLD, title="t")
+    await seed_listing("c-recent", platform=Platform.CETIRI_ZIDA, price=100, refreshed_at=RECENT, title="t")
+    # inactive rows are never selected
+    await seed_listing("n-inactive", active=False, price=100, title="t")
+
+    def urls_for(plat: Platform, *exts: str) -> list[str]:
+        return [f"https://example.com/{plat.value}/{e}" for e in exts]
+
+    n_details = {
+        u: detail_for(u, Platform.NEKRETNINE, price_eur=100, title="t")
+        for u in urls_for(Platform.NEKRETNINE, "n-null", "n-old", "n-recent")
+    }
+    c_details = {
+        u: detail_for(u, Platform.CETIRI_ZIDA, price_eur=100, title="t")
+        for u in urls_for(Platform.CETIRI_ZIDA, "c-null", "c-old", "c-recent")
+    }
+    fake_n = make_fake_scraper(Platform.NEKRETNINE, n_details)
+    fake_c = make_fake_scraper(Platform.CETIRI_ZIDA, c_details)
+
+    res = await orchestrator.rolling_detail_refresh(
+        limit=4,
+        scrapers={Platform.NEKRETNINE: fake_n, Platform.CETIRI_ZIDA: fake_c},
+    )
+
+    # Even split 2+2; NULL details_refreshed_at first, then oldest.
+    assert fake_n.fetched == urls_for(Platform.NEKRETNINE, "n-null", "n-old")
+    assert fake_c.fetched == urls_for(Platform.CETIRI_ZIDA, "c-null", "c-old")
+    assert res.selected == 4
+    assert res.refreshed == 4
+    assert res.errors == 0
+    for lid in (n_null, n_old, c_null, c_old):
+        row = await get_listing(lid)
+        assert row.details_refreshed_at is not None
+        assert row.details_refreshed_at.replace(tzinfo=UTC) > RECENT
+    # Untouched rows keep their timestamps.
+    assert (await get_listing(n_recent)).details_refreshed_at.replace(tzinfo=UTC) == RECENT
+
+
+async def test_rolling_returns_price_change_contract(db):
+    l1 = await seed_listing("p1", price=500, title="t")
+    await seed_listing("p2", price=300, title="t")  # unchanged price → not in contract
+    l3 = await seed_listing("p3", price=None, title="t")
+    base = f"https://example.com/{Platform.NEKRETNINE.value}"
+    details = {
+        f"{base}/p1": detail_for(f"{base}/p1", Platform.NEKRETNINE, price_eur=450, title="t"),
+        f"{base}/p2": detail_for(f"{base}/p2", Platform.NEKRETNINE, price_eur=300, title="t"),
+        f"{base}/p3": detail_for(f"{base}/p3", Platform.NEKRETNINE, price_eur=250, title="t"),
+    }
+    fake = make_fake_scraper(Platform.NEKRETNINE, details)
+
+    res = await orchestrator.rolling_detail_refresh(
+        limit=3, scrapers={Platform.NEKRETNINE: fake}
+    )
+
+    # Contract: PriceChange(listing_id, old, new), only changed rows, None ⇄ value included.
+    assert res.price_changes == [(l1, 500, 450), (l3, None, 250)]
+    assert res.refreshed == 3
+    assert (await get_listing(l1)).price_eur == 450
+
+
+async def test_rolling_bumps_timestamp_on_error_to_rotate_queue(db):
+    dead = await seed_listing("dead", price=100, title="t")
+    url = f"https://example.com/{Platform.NEKRETNINE.value}/dead"
+    fake = make_fake_scraper(Platform.NEKRETNINE, {}, fail={url})
+
+    res = await orchestrator.rolling_detail_refresh(
+        limit=1, scrapers={Platform.NEKRETNINE: fake}
+    )
+
+    assert res.errors == 1
+    assert res.refreshed == 0
+    # Without the bump this dead row would head the queue every night forever.
+    assert (await get_listing(dead)).details_refreshed_at is not None
+
+
+# ------------------------------------------------------------------ W2-C3 prune
+
+
+async def test_prune_clears_only_long_inactive_embeddings(db):
+    old_seen = datetime.now(UTC) - timedelta(days=40)
+    fresh_seen = datetime.now(UTC) - timedelta(days=5)
+    target = await seed_listing("gone", active=False, embeddings=b"\x01\x02", last_seen_at=old_seen)
+    recent_inactive = await seed_listing("paused", active=False, embeddings=b"\x03", last_seen_at=fresh_seen)
+    active_old = await seed_listing("live", active=True, embeddings=b"\x04", last_seen_at=old_seen)
+    already_null = await seed_listing("empty", active=False, embeddings=None, last_seen_at=old_seen)
+
+    pruned = await orchestrator.prune_inactive_embeddings(older_than_days=30)
+
+    assert pruned == 1
+    assert (await get_listing(target)).photo_embeddings is None
+    assert (await get_listing(recent_inactive)).photo_embeddings == b"\x03"
+    assert (await get_listing(active_old)).photo_embeddings == b"\x04"
+    assert (await get_listing(already_null)).photo_embeddings is None
+
+
+# ------------------------------------------------------------------ W2-C5 metrics
+
+
+async def test_metrics_snapshot_upsert_and_drop_detection(db):
+    for i in range(4):
+        await seed_listing(f"n{i}", phashes=[] if i == 0 else ["aa"])
+    await seed_listing("n-off", active=False)
+    for i in range(4):
+        await seed_listing(f"c{i}", platform=Platform.CETIRI_ZIDA, phashes=["aa"])
+
+    yesterday = (datetime.now(UTC).date() - timedelta(days=1)).isoformat()
+    async with db_session.get_session() as s:
+        # NEKRETNINE collapsed 10 → 4 (>20% drop); CETIRI_ZIDA steady.
+        s.add(DailyMetrics(snapshot_date=yesterday, platform="NEKRETNINE", active_count=10, no_photo_count=0))
+        s.add(DailyMetrics(snapshot_date=yesterday, platform="CETIRI_ZIDA", active_count=4, no_photo_count=0))
+
+    res = await orchestrator.snapshot_daily_metrics()
+
+    assert res.rows_written == 3  # one per platform, incl. empty HALOOGLASI
+    assert res.drops == [("NEKRETNINE", 10, 4, yesterday)]
+    assert res.drop_threshold == 0.2
+
+    today = datetime.now(UTC).date().isoformat()
+    async with db_session.get_session() as s:
+        rows = (
+            await s.execute(select(DailyMetrics).where(DailyMetrics.snapshot_date == today))
+        ).scalars().all()
+        by_plat = {r.platform: r for r in rows}
+    assert len(rows) == 3
+    assert by_plat["NEKRETNINE"].active_count == 4
+    assert by_plat["NEKRETNINE"].no_photo_count == 1
+    assert by_plat["CETIRI_ZIDA"].active_count == 4
+    assert by_plat["HALOOGLASI"].active_count == 0
+
+    # Re-run same day → upsert, not duplicate rows.
+    async with db_session.get_session() as s:
+        row = (
+            await s.execute(select(Listing).where(Listing.external_id == "n1"))
+        ).scalar_one()
+        row.is_active = False
+    res2 = await orchestrator.snapshot_daily_metrics()
+    async with db_session.get_session() as s:
+        rows = (
+            await s.execute(select(DailyMetrics).where(DailyMetrics.snapshot_date == today))
+        ).scalars().all()
+    assert len(rows) == 3
+    assert {r.platform: r.active_count for r in rows}["NEKRETNINE"] == 3
+    assert res2.rows_written == 3
+
+
+async def test_metrics_no_drop_without_previous_snapshot(db):
+    await seed_listing("n0")
+    res = await orchestrator.snapshot_daily_metrics()
+    assert res.drops == []
+
+
+# ------------------------------------------------------------------ nightly step runner (cli)
+
+
+def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False):
+    calls: list[str] = []
+
+    async def fake_heal(*, limit):
+        calls.append(f"heal:{limit}")
+        if heal_raises:
+            raise RuntimeError("heal exploded")
+        return orchestrator.HealResult(selected=5, fixed=5, remaining=2, errors=0)
+
+    async def fake_rolling(*, limit):
+        calls.append(f"rolling:{limit}")
+        return orchestrator.RollingRefreshResult(
+            selected=10, refreshed=10, errors=0,
+            price_changes=[
+                orchestrator.PriceChange(1, 500, 450),
+                orchestrator.PriceChange(2, None, 300),
+                orchestrator.PriceChange(3, 400, 410),
+            ],
+        )
+
+    async def fake_metrics():
+        calls.append("metrics")
+        return orchestrator.MetricsSnapshotResult(
+            snapshot_date="2026-06-12", rows_written=3,
+            drops=[("NEKRETNINE", 100, 70, "2026-06-11")], drop_threshold=0.2,
+        )
+
+    async def fake_prune():
+        calls.append("prune")
+        return 7
+
+    monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
+    monkeypatch.setattr(orchestrator, "snapshot_daily_metrics", fake_metrics)
+    monkeypatch.setattr(orchestrator, "prune_inactive_embeddings", fake_prune)
+    return calls
+
+
+async def test_run_nightly_steps_assembles_summary_lines(monkeypatch):
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 500)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 200)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", True)
+    monkeypatch.setattr(settings, "nightly_metrics", True)
+    calls = _canned_step_stubs(monkeypatch)
+
+    lines, price_changes, alerts = await _run_nightly_steps()
+
+    assert calls == ["heal:500", "rolling:200", "metrics", "prune"]
+    assert "heal: исправлено 5 / осталось 2" in lines
+    assert "деталей обновлено: 10, цен изменилось: 3" in lines
+    assert "embeddings очищено (неактивные >30 дн): 7" in lines
+    drop_lines = [ln for ln in lines if ln.startswith("🚨 NEKRETNINE: active 100 → 70")]
+    assert len(drop_lines) == 1
+    # Percentage derives from drop_threshold; the date names the actual comparison snapshot
+    # (could be days back after an outage — not «за сутки»).
+    assert "падение >20% против прошлого снапшота 2026-06-11" in drop_lines[0]
+    assert alerts == drop_lines  # drop alert also goes out standalone
+    # W2-C2 contract surfaces unchanged for the Wave-3 price-drop hook.
+    assert price_changes == [(1, 500, 450), (2, None, 300), (3, 400, 410)]
+
+
+async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 100)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 100)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", True)
+    monkeypatch.setattr(settings, "nightly_metrics", True)
+    calls = _canned_step_stubs(monkeypatch, heal_raises=True)
+
+    lines, price_changes, alerts = await _run_nightly_steps()
+
+    assert "🚨 heal-шаг упал — см. логи" in lines
+    # The remaining steps still ran after the failure.
+    assert calls == ["heal:100", "rolling:100", "metrics", "prune"]
+    assert "деталей обновлено: 10, цен изменилось: 3" in lines
+    assert price_changes  # rolling result still propagated
+    assert alerts  # drop alert from metrics still emitted
+
+
+async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    calls = _canned_step_stubs(monkeypatch)
+
+    lines, price_changes, alerts = await _run_nightly_steps()
+
+    assert calls == []
+    assert lines == []
+    assert price_changes == []
+    assert alerts == []
+
+
+# ------------------------------------------------------------------ W2-C4 column-only selections
+
+
+async def test_listing_ids_needing_embeddings_matches_old_semantics(db):
+    from src.cli import _listing_ids_needing_embeddings
+
+    sel1 = await seed_listing("e1", phashes=["aa"], embeddings=None)
+    no_need = await seed_listing("e2", phashes=["aa"], embeddings=b"\x01")
+    no_phash = await seed_listing("e3", phashes=[], embeddings=None)
+    inactive = await seed_listing("e4", active=False, phashes=["aa"], embeddings=None)
+    sel2 = await seed_listing("e5", phashes=["aa"], embeddings=b"")  # empty blob == missing
+
+    assert await _listing_ids_needing_embeddings(force=False) == [sel1, sel2]
+    # force → every ACTIVE id, like the old full-ORM filter did.
+    assert await _listing_ids_needing_embeddings(force=True) == [sel1, no_need, no_phash, sel2]
+    assert inactive not in await _listing_ids_needing_embeddings(force=True)
+
+
+async def test_inbound_ids_needing_embeddings_matches_old_semantics(db):
+    from src.cli import _inbound_ids_needing_embeddings
+
+    async with db_session.get_session() as s:
+        ch = SourceChannel(tg_id=-100500, username="src", is_active=True)
+        s.add(ch)
+        await s.flush()
+        i1 = InboundPost(source_channel_id=ch.id, tg_message_id=1, photo_paths=["/p/1.jpg"])
+        i2 = InboundPost(source_channel_id=ch.id, tg_message_id=2, photo_paths=["/p/2.jpg"], photo_embeddings=b"\x01")
+        i3 = InboundPost(source_channel_id=ch.id, tg_message_id=3, photo_paths=[])
+        s.add_all([i1, i2, i3])
+        await s.flush()
+        ids = (i1.id, i2.id, i3.id)
+
+    assert await _inbound_ids_needing_embeddings(force=False) == [ids[0]]
+    assert await _inbound_ids_needing_embeddings(force=True) == list(ids)
+
+
+async def test_listing_rows_needing_phash_filters_and_limits(db):
+    from src.cli import _listing_rows_needing_phash
+
+    h1 = await seed_listing("h1", urls=["http://img/1.jpg"])
+    await seed_listing("h2", phashes=["aa"], urls=["http://img/2.jpg"])  # already hashed
+    await seed_listing("h3", urls=[])  # nothing to hash
+    await seed_listing("h4", active=False, urls=["http://img/4.jpg"])  # inactive
+    h5 = await seed_listing("h5", platform=Platform.CETIRI_ZIDA, urls=["http://img/5.jpg"])
+
+    rows = await _listing_rows_needing_phash((), None)
+    assert [r.id for r in rows] == [h1, h5]
+    assert rows[0].photo_urls == ["http://img/1.jpg"]  # loop needs urls without ORM row
+
+    only_4z = await _listing_rows_needing_phash(("cetiri_zida",), None)
+    assert [r.id for r in only_4z] == [h5]
+
+    capped = await _listing_rows_needing_phash((), 1)
+    assert [r.id for r in capped] == [h1]
+
+
+# ------------------------------------------------------------------ W2-C6 photo coverage
+
+
+async def test_photo_coverage_by_platform(db):
+    from src.cli import _photo_coverage_by_platform
+
+    await seed_listing("v1", phashes=["aa"])
+    await seed_listing("v2", phashes=[])
+    await seed_listing("v3", phashes=[], active=False)  # inactive not counted
+    await seed_listing("v4", platform=Platform.CETIRI_ZIDA, phashes=["aa"])
+
+    coverage = dict((p, (n, a)) for p, n, a in await _photo_coverage_by_platform())
+
+    assert coverage["NEKRETNINE"] == (1, 2)
+    assert coverage["CETIRI_ZIDA"] == (0, 1)
+    assert coverage["HALOOGLASI"] == (0, 0)

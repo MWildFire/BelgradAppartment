@@ -6,6 +6,7 @@ import asyncio
 import logging
 import sys
 from datetime import datetime, timezone
+from typing import Any, NamedTuple
 
 import click
 from sqlalchemy import select
@@ -13,7 +14,7 @@ from sqlalchemy import select
 from src.config import get_settings
 from src.db.models import InboundPost, Listing, Platform, SourceChannel
 from src.scrapers import SCRAPERS
-from src.scrapers.orchestrator import ScrapeResult, scrape_platform
+from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
 
 
 def _setup_logging() -> None:
@@ -656,6 +657,8 @@ async def _match_all() -> None:
     from src.telegram.delivery import send_run_summary
 
     started = _time.monotonic()
+    # match_all_pending builds one candidates snapshot per batch lazily — a run with zero
+    # pending inbounds does no candidate SELECT at all.
     results = await match_all_pending()
     elapsed = _time.monotonic() - started
     matched = sum(1 for r in results if r.status == "matched")
@@ -698,6 +701,36 @@ def embed_all(target: str, force: bool) -> None:
     asyncio.run(_embed_all(target.lower(), force))
 
 
+async def _listing_ids_needing_embeddings(force: bool) -> list[int]:
+    """Active-listing ids for embed-all. Column-only select: full ORM rows would pull every
+    photo_embeddings BLOB (hundreds of MB on 20k+ rows) just to pick ids."""
+    from src.db.session import get_session
+
+    stmt = select(Listing.id).where(Listing.is_active.is_(True)).order_by(Listing.id)
+    if not force:
+        stmt = stmt.where(
+            (Listing.photo_embeddings.is_(None)) | (Listing.photo_embeddings == b""),
+            Listing.photo_phashes != [],
+        )
+    async with get_session() as s:
+        return list((await s.execute(stmt)).scalars().all())
+
+
+async def _inbound_ids_needing_embeddings(force: bool) -> list[int]:
+    """InboundPost ids for embed-all — same column-only rationale as the listings variant."""
+    from src.db.models import InboundPost
+    from src.db.session import get_session
+
+    stmt = select(InboundPost.id).order_by(InboundPost.id)
+    if not force:
+        stmt = stmt.where(
+            (InboundPost.photo_embeddings.is_(None)) | (InboundPost.photo_embeddings == b""),
+            InboundPost.photo_paths != [],
+        )
+    async with get_session() as s:
+        return list((await s.execute(stmt)).scalars().all())
+
+
 async def _embed_all(target: str, force: bool) -> None:
     from pathlib import Path
 
@@ -706,9 +739,7 @@ async def _embed_all(target: str, force: bool) -> None:
     from src.matching.clip_embed import compute_embeddings_batch, pack_embeddings
 
     if target in ("listings", "both"):
-        async with get_session() as s:
-            rows = (await s.execute(select(Listing).where(Listing.is_active.is_(True)))).scalars().all()
-            ids_to_do = [r.id for r in rows if force or (not r.photo_embeddings and r.photo_phashes)]
+        ids_to_do = await _listing_ids_needing_embeddings(force)
         click.echo(f"→ {len(ids_to_do)} listings need CLIP embeddings")
         settings = get_settings()
         for i, lid in enumerate(ids_to_do, 1):
@@ -732,9 +763,7 @@ async def _embed_all(target: str, force: bool) -> None:
                 click.echo(f"  [{i}/{len(ids_to_do)}] listing #{lid} ({listing.platform.value}/{listing.external_id}): {len(vecs)} embeddings")
 
     if target in ("inbound", "both"):
-        async with get_session() as s:
-            rows = (await s.execute(select(InboundPost))).scalars().all()
-            ids_to_do = [r.id for r in rows if force or (not r.photo_embeddings and r.photo_paths)]
+        ids_to_do = await _inbound_ids_needing_embeddings(force)
         click.echo(f"→ {len(ids_to_do)} inbound need CLIP embeddings")
         for i, iid in enumerate(ids_to_do, 1):
             async with get_session() as s:
@@ -767,6 +796,30 @@ def hash_listings(platforms: tuple[str, ...], limit: int | None) -> None:
     asyncio.run(_hash_listings(platforms, limit))
 
 
+async def _listing_rows_needing_phash(
+    platform_names: tuple[str, ...], limit: int | None
+) -> list[Any]:
+    """(id, platform, external_id, url, photo_urls) rows for hash-listings — column-only
+    select keeps the photo_embeddings BLOBs out of memory (same rationale as embed-all)."""
+    from src.db.session import get_session
+
+    stmt = (
+        select(
+            Listing.id, Listing.platform, Listing.external_id, Listing.url, Listing.photo_urls
+        )
+        .where(Listing.is_active.is_(True))
+        .where(Listing.photo_phashes == [], Listing.photo_urls != [])
+        .order_by(Listing.id)
+    )
+    if platform_names:
+        chosen = [PLATFORM_NAMES[p.lower()] for p in platform_names]
+        stmt = stmt.where(Listing.platform.in_(chosen))
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    async with get_session() as s:
+        return list((await s.execute(stmt)).all())
+
+
 async def _hash_listings(platform_names: tuple[str, ...], limit: int | None) -> None:
     import httpx
 
@@ -777,16 +830,7 @@ async def _hash_listings(platform_names: tuple[str, ...], limit: int | None) -> 
     settings = get_settings()
     settings.ensure_dirs()
 
-    async with get_session() as s:
-        stmt = select(Listing).where(Listing.is_active.is_(True))
-        if platform_names:
-            chosen = [PLATFORM_NAMES[p.lower()] for p in platform_names]
-            stmt = stmt.where(Listing.platform.in_(chosen))
-        rows = (await s.execute(stmt)).scalars().all()
-
-    to_hash = [r for r in rows if not r.photo_phashes and r.photo_urls]
-    if limit is not None:
-        to_hash = to_hash[:limit]
+    to_hash = await _listing_rows_needing_phash(platform_names, limit)
     click.echo(f"→ {len(to_hash)} listings need photos hashed")
 
     for i, listing in enumerate(to_hash):
@@ -1123,6 +1167,11 @@ async def _nightly_refresh(
     if skip_scrape:
         return
 
+    # Post-sweep maintenance steps (heal / rolling refresh / metrics / prune). Each one is
+    # env-disableable (=0) and fault-isolated — see _run_nightly_steps. `steps.price_changes`
+    # is the W2-C2 return contract: Wave-3 hooks the price-drop alert onto it right here.
+    steps = await _run_nightly_steps()
+
     elapsed = _time.monotonic() - started
     total_new = sum(r.inserted for r in results)
     total_refreshed = sum(r.updated for r in results)
@@ -1142,6 +1191,7 @@ async def _nightly_refresh(
     ]
     if sweep_result is not None:
         lines.append(f"Помечено inactive: {sweep_result.marked_inactive}")
+    lines.extend(steps.summary_lines)
     if total_errors:
         lines.append(f"⚠️ Ошибки: {total_errors}")
     lines.append(f"⏱ Время: {dur}")
@@ -1187,9 +1237,17 @@ async def _nightly_refresh(
     client = await _open_userbot_if_needed()
     try:
         # bot mode → fans out to all chat_ids; userbot mode → Saved Messages.
-        await send_text_to_recipients(client, "\n".join(lines))
-    except Exception:
-        logging.getLogger(__name__).exception("nightly refresh summary delivery failed")
+        try:
+            await send_text_to_recipients(client, "\n".join(lines))
+        except Exception:
+            logging.getLogger(__name__).exception("nightly refresh summary delivery failed")
+        # Active-drop alerts go out as standalone messages too — they must not drown in the
+        # summary wall of text.
+        for alert in steps.alerts:
+            try:
+                await send_text_to_recipients(client, alert)
+            except Exception:
+                logging.getLogger(__name__).exception("nightly drop alert delivery failed")
     finally:
         if client is not None:
             await client.disconnect()
@@ -1198,6 +1256,96 @@ async def _nightly_refresh(
     # when every scraper is down, which keeps monitoring blind). Summary is already sent above.
     if dead:
         raise SystemExit(1)
+
+
+class NightlyStepsResult(NamedTuple):
+    """_run_nightly_steps outcome — named because two same-typed str-list members
+    positionally would be swap-prone."""
+
+    summary_lines: list[str]  # ready-made lines for the nightly telegram summary
+    price_changes: list[PriceChange]  # W2-C2 contract for the Wave-3 price-drop alert
+    alerts: list[str]  # standalone 🚨 messages (must not drown in the summary)
+
+
+async def _run_nightly_steps() -> NightlyStepsResult:
+    """Run the post-sweep nightly maintenance steps (W2-C1/C2/C5/C3).
+
+    Every step is optional (its env knob =0 → skipped entirely) and fault-isolated: a step
+    failure adds a 🚨 line to the returned summary lines instead of killing the nightly.
+    """
+    # In-function import is the test seam: names resolve at call time, so tests can
+    # monkeypatch them on the orchestrator module — a top-level from-import would freeze
+    # the originals (and the import stays lazy for unrelated CLI commands).
+    from src.scrapers.orchestrator import (
+        heal_broken_listings,
+        prune_inactive_embeddings,
+        rolling_detail_refresh,
+        snapshot_daily_metrics,
+    )
+
+    settings = get_settings()
+    log = logging.getLogger(__name__)
+    lines: list[str] = []
+    alerts: list[str] = []
+    price_changes: list[PriceChange] = []
+
+    if settings.nightly_heal_limit > 0:
+        click.echo(f"\n→ Heal broken listings (limit={settings.nightly_heal_limit})…")
+        try:
+            heal = await heal_broken_listings(limit=settings.nightly_heal_limit)
+            lines.append(f"heal: исправлено {heal.fixed} / осталось {heal.remaining}")
+        except Exception:
+            log.exception("nightly step failed: heal")
+            lines.append("🚨 heal-шаг упал — см. логи")
+    else:
+        click.echo("→ Heal step disabled (NIGHTLY_HEAL_LIMIT=0)")
+
+    if settings.nightly_detail_refresh > 0:
+        click.echo(f"→ Rolling detail refresh (limit={settings.nightly_detail_refresh})…")
+        try:
+            rolling = await rolling_detail_refresh(limit=settings.nightly_detail_refresh)
+            price_changes = rolling.price_changes
+            lines.append(
+                f"деталей обновлено: {rolling.refreshed}, "
+                f"цен изменилось: {len(rolling.price_changes)}"
+            )
+        except Exception:
+            log.exception("nightly step failed: detail-refresh")
+            lines.append("🚨 detail-refresh шаг упал — см. логи")
+    else:
+        click.echo("→ Rolling detail refresh disabled (NIGHTLY_DETAIL_REFRESH=0)")
+
+    if settings.nightly_metrics:
+        click.echo("→ Daily metrics snapshot…")
+        try:
+            snap = await snapshot_daily_metrics()
+            drop_pct = round(snap.drop_threshold * 100)
+            for plat_value, prev_active, cur_active, prev_date in snap.drops:
+                alert = (
+                    f"🚨 {plat_value}: active {prev_active} → {cur_active} "
+                    f"(падение >{drop_pct}% против прошлого снапшота {prev_date}) — "
+                    "проверь скрейпер, sweep мог деактивировать живые объявления!"
+                )
+                lines.append(alert)
+                alerts.append(alert)
+        except Exception:
+            log.exception("nightly step failed: metrics")
+            lines.append("🚨 metrics-шаг упал — см. логи")
+    else:
+        click.echo("→ Metrics snapshot disabled (NIGHTLY_METRICS=0)")
+
+    if settings.nightly_prune_embeddings:
+        click.echo("→ Prune embeddings of long-inactive listings…")
+        try:
+            pruned = await prune_inactive_embeddings()
+            lines.append(f"embeddings очищено (неактивные >30 дн): {pruned}")
+        except Exception:
+            log.exception("nightly step failed: prune")
+            lines.append("🚨 prune-шаг упал — см. логи")
+    else:
+        click.echo("→ Embeddings prune disabled (NIGHTLY_PRUNE_EMBEDDINGS=0)")
+
+    return NightlyStepsResult(summary_lines=lines, price_changes=price_changes, alerts=alerts)
 
 
 @cli.command("mark-stale")
@@ -1347,7 +1495,7 @@ async def _refetch_details(
 ) -> None:
     from src.db.models import Listing
     from src.db.session import get_session
-    from src.scrapers.orchestrator import _download_photos
+    from src.scrapers.orchestrator import refetch_listing_details
 
     stmt = select(Listing.id, Listing.platform, Listing.url).where(Listing.is_active.is_(True))
     if platform:
@@ -1364,79 +1512,29 @@ async def _refetch_details(
     async with get_session() as s:
         rows = (await s.execute(stmt)).all()
 
-    by_platform: dict[Platform, list] = {}
-    for row in rows:
-        by_platform.setdefault(row.platform, []).append(row)
     total = len(rows)
     click.echo(f"→ refetch-details: {total} listings ({'ALL' if refetch_all else 'broken only'})")
-    stats = {"updated": 0, "photos": 0, "errors": 0}
 
-    for plat, plat_rows in by_platform.items():
-        scraper_cls = SCRAPERS[plat]
-        try:
-            async with scraper_cls() as scraper:
-                for row in plat_rows:
-                    try:
-                        detail = await scraper.fetch_detail(row.url)
-                        if not detail.photo_urls and detail.price_eur is None and detail.title is None:
-                            raise RuntimeError("still an empty payload")
-                        # Decide and DOWNLOAD photos before touching the row: committing the new
-                        # photo_urls first would make a failed download undetectable forever
-                        # (urls match, phashes non-empty → no filter ever selects the row again).
-                        async with get_session() as s:
-                            current = await s.get(Listing, row.id)
-                            if current is None:
-                                continue
-                            old_urls = list(current.photo_urls or [])
-                            old_phash_count = len(current.photo_phashes or [])
-                        need_photos = (
-                            not no_photos
-                            and detail.photo_urls
-                            and (
-                                list(detail.photo_urls) != old_urls
-                                or old_phash_count < len(detail.photo_urls)
-                            )
-                        )
-                        hashes: list[str] = []
-                        emb = None
-                        if need_photos:
-                            paths, hashes, emb = await _download_photos(detail)
-                            if not hashes:
-                                raise RuntimeError("photo download produced no hashes — row left untouched")
-                        async with get_session() as s:
-                            listing = await s.get(Listing, row.id)
-                            if listing is None:
-                                continue
-                            listing.price_eur = detail.price_eur
-                            listing.area_m2 = detail.area_m2
-                            listing.rooms = detail.rooms
-                            listing.district = detail.district
-                            listing.address_raw = detail.address_raw
-                            listing.lat = detail.lat
-                            listing.lon = detail.lon
-                            listing.title = detail.title
-                            listing.description = detail.description
-                            listing.raw_payload = detail.raw_payload
-                            if need_photos:
-                                listing.photo_urls = detail.photo_urls
-                                listing.photo_phashes = hashes
-                                listing.photo_embeddings = emb
-                                stats["photos"] += len(hashes)
-                        stats["updated"] += 1
-                        if stats["updated"] % 100 == 0:
-                            click.echo(
-                                f"  … {stats['updated']}/{total} photos={stats['photos']} errors={stats['errors']}"
-                            )
-                        await asyncio.sleep(0.3)
-                    except Exception as e:
-                        stats["errors"] += 1
-                        if stats["errors"] <= 5:
-                            click.echo(f"  ⚠ {plat.value} #{row.id}: {type(e).__name__}: {e}", err=True)
-        except Exception:
-            logging.getLogger(__name__).exception("[refetch %s] platform failed", plat.value)
+    def _progress(stats, row, error) -> None:  # type: ignore[no-untyped-def]
+        if error is not None:
+            if stats.errors <= 5:
+                click.echo(
+                    f"  ⚠ {row.platform.value} #{row.id}: {type(error).__name__}: {error}",
+                    err=True,
+                )
+        elif stats.updated % 100 == 0:
+            click.echo(f"  … {stats.updated}/{total} photos={stats.photos} errors={stats.errors}")
+
+    # Shared core with the nightly heal/rolling steps (src.scrapers.orchestrator).
+    stats = await refetch_listing_details(
+        rows,
+        download_photos=not no_photos,
+        touch_refreshed_at=True,
+        progress=_progress,
+    )
 
     click.echo(
-        f"=== DONE: updated={stats['updated']} photos={stats['photos']} errors={stats['errors']} ==="
+        f"=== DONE: updated={stats.updated} photos={stats.photos} errors={stats.errors} ==="
     )
 
 
@@ -1609,6 +1707,39 @@ def daily_summary(hours: int) -> None:
     asyncio.run(_daily_summary(hours))
 
 
+async def _photo_coverage_by_platform() -> list[tuple[str, int, int]]:
+    """(platform, active_without_photo_hashes, active_total) per platform — live counts.
+
+    Live query instead of the latest daily_metrics row: stays correct even when the
+    nightly metrics step is disabled or hasn't run yet.
+    """
+    from sqlalchemy import func
+
+    from src.db.session import get_session
+
+    out: list[tuple[str, int, int]] = []
+    async with get_session() as s:
+        for plat in Platform:
+            active = (
+                await s.execute(
+                    select(func.count(Listing.id)).where(
+                        Listing.platform == plat, Listing.is_active.is_(True)
+                    )
+                )
+            ).scalar_one()
+            no_photo = (
+                await s.execute(
+                    select(func.count(Listing.id)).where(
+                        Listing.platform == plat,
+                        Listing.is_active.is_(True),
+                        Listing.photo_phashes == [],
+                    )
+                )
+            ).scalar_one()
+            out.append((plat.value, no_photo, active))
+    return out
+
+
 async def _daily_summary(hours: int) -> None:
     from datetime import datetime, timedelta, timezone
 
@@ -1616,7 +1747,7 @@ async def _daily_summary(hours: int) -> None:
 
     from src.db.models import InboundPost, InboundStatus, Match, PublishedPost
     from src.db.session import get_session
-    from src.telegram.delivery import send_run_summary
+    from src.telegram.delivery import send_text_to_recipients
 
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
 
@@ -1662,16 +1793,27 @@ async def _daily_summary(hours: int) -> None:
         f"→ {label}: inbound={inbound_total} matched={matched} no_match={no_match} delivered={delivered}"
     )
 
+    # Same layout as send_run_summary, composed locally so the photo-coverage section
+    # (W2-C6) rides in the same message instead of a second ping.
+    errors = max(matched - delivered, 0)
+    lines = [
+        f"📊 {label} — завершён",
+        "",
+        f"Обработано: {matched + no_match + errors}",
+        f"✅ Найдено матчей: {matched}",
+        f"❌ Без совпадения: {no_match}",
+    ]
+    if errors:
+        lines.append(f"⚠️ Ошибки: {errors}")
+    coverage = await _photo_coverage_by_platform()
+    lines.append("")
+    lines.append("📷 Активные без фото:")
+    for plat_value, no_photo, active in coverage:
+        lines.append(f"  • {plat_value}: {no_photo} из {active}")
+
     client = await _open_userbot_if_needed()
     try:
-        await send_run_summary(
-            client,
-            matched=matched,
-            no_match=no_match,
-            errors=max(matched - delivered, 0),
-            duration_seconds=None,
-            label=label,
-        )
+        await send_text_to_recipients(client, "\n".join(lines))
     finally:
         if client is not None:
             await client.disconnect()
@@ -1681,11 +1823,11 @@ async def _daily_summary(hours: int) -> None:
 @click.option("--service", default="otz-monitor", help="Failing systemd unit name.")
 @click.option("--reason", default=None, help="Optional human-readable cause for the alert.")
 def notify_failure(service: str, reason: str | None) -> None:
-    """Push an alert that a systemd service crashed.
+    """Send a Telegram alert that the systemd unit named via --service failed.
 
-    Wired up as `OnFailure=otz-monitor-failure.service` on long-running units so Дарья sees
-    immediately when monitor (or another service) dies — instead of waiting until tomorrow's
-    daily summary to notice it stopped delivering.
+    The command itself only delivers the alert — it does not restart or inspect anything.
+    Units opt in by declaring `OnFailure=otz-notify-failure@%n.service` in their unit file;
+    the template service passes the failing unit's name (%n) through to --service.
     """
     asyncio.run(_notify_failure(service, reason))
 
@@ -1696,14 +1838,22 @@ async def _notify_failure(service: str, reason: str | None) -> None:
     from src.telegram.delivery import send_text_to_recipients
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    # OnFailure fires when the unit ENTERS failed state (scripts/vps_install.sh): for
+    # otz-monitor that means restarts are EXHAUSTED (StartLimitBurst) — it is down and will
+    # NOT come back by itself; the oneshot units (nightly-refresh, daily-summary) never
+    # restart at all. No "systemd сейчас рестартует" — needs hands.
     lines = [
-        f"🚨 {service} упал — systemd сейчас рестартует.",
+        f"🚨 {service}: unit в состоянии failed — авторестартов больше не будет.",
         f"⏱ {ts}",
     ]
     if reason:
         lines.append(f"причина: {reason}")
     lines.append("")
-    lines.append("После рестарта пришлю Recovery-сводку, если были зависшие посты.")
+    lines.append(f"Логи: journalctl -u {service} -n 100")
+    if "monitor" in service:
+        lines.append(
+            f"Поднять: systemctl reset-failed {service} && systemctl start {service}"
+        )
 
     client = await _open_userbot_if_needed()
     try:

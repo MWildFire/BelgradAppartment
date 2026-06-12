@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from telethon import TelegramClient, events
 from telethon.tl.custom.message import Message
 from telethon.tl.types import Channel, Chat, MessageMediaPhoto, User
@@ -367,35 +368,58 @@ async def _persist_regular_inbound(source_id: int, msgs: list[Message]) -> list[
 
     embeddings_blob = await _compute_clip_blob(photo_paths, leader.id)
 
-    async with get_session() as s:
-        existing = (
-            await s.execute(
-                select(InboundPost).where(
-                    InboundPost.source_channel_id == source_id,
-                    InboundPost.tg_message_id == leader.id,
-                    InboundPost.digest_share_id.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            await _advance_watermark(s, source_id, msgs[-1].id)
-            return []
+    try:
+        async with get_session() as s:
+            existing = await _select_existing_regular(s, source_id, leader.id)
+            if existing is not None:
+                await _advance_watermark(s, source_id, msgs[-1].id)
+                return []
 
-        post = InboundPost(
-            source_channel_id=source_id,
-            tg_message_id=leader.id,
-            post_date=post_date,
-            raw_text=raw_text,
-            photo_paths=photo_paths,
-            photo_phashes=photo_hashes,
-            photo_embeddings=embeddings_blob,
-            status=InboundStatus.NEW,
+            post = InboundPost(
+                source_channel_id=source_id,
+                tg_message_id=leader.id,
+                post_date=post_date,
+                raw_text=raw_text,
+                photo_paths=photo_paths,
+                photo_phashes=photo_hashes,
+                photo_embeddings=embeddings_blob,
+                status=InboundStatus.NEW,
+            )
+            s.add(post)
+            await _advance_watermark(s, source_id, msgs[-1].id)
+            await s.flush()
+            await s.refresh(post)
+            return [post]
+    except IntegrityError:
+        # Lost an insert race: a concurrent persist of the same (channel, message) committed
+        # between our pre-check and flush, and the partial unique index
+        # uq_inbound_chan_msg_nodigest rejected ours. The winner runs the pipeline — we only
+        # advance the watermark (it was rolled back together with our insert).
+        async with get_session() as s:
+            existing = await _select_existing_regular(s, source_id, leader.id)
+            if existing is None:
+                raise  # not the dedup race — surface the real constraint failure
+            await _advance_watermark(s, source_id, msgs[-1].id)
+            # Capture inside the session: reading existing.id after close would silently
+            # depend on expire_on_commit=False.
+            existing_id = existing.id
+        logger.info(
+            "[monitor] msg %s already persisted concurrently (inbound=%s) — skipping",
+            leader.id, existing_id,
         )
-        s.add(post)
-        await _advance_watermark(s, source_id, msgs[-1].id)
-        await s.flush()
-        await s.refresh(post)
-        return [post]
+        return []
+
+
+async def _select_existing_regular(s, source_id: int, tg_message_id: int) -> InboundPost | None:
+    return (
+        await s.execute(
+            select(InboundPost).where(
+                InboundPost.source_channel_id == source_id,
+                InboundPost.tg_message_id == tg_message_id,
+                InboundPost.digest_share_id.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
 
 
 async def _persist_digest_inbound(source_id: int, leader: Message) -> list[InboundPost]:

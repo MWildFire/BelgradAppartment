@@ -108,6 +108,12 @@ cat >/etc/systemd/system/otz-monitor.service <<UNIT
 Description=otz-rent-finder — live Telegram monitor
 After=network-online.target
 Wants=network-online.target
+# Telegram alert fires only when restarts are EXHAUSTED (unit enters failed state).
+# With RestartSec=30 the default 10s rate-limit window would never trip — so the
+# unit would restart forever and OnFailure would never fire. 5 crashes / 10 min:
+StartLimitIntervalSec=600
+StartLimitBurst=5
+OnFailure=otz-notify-failure@%n.service
 
 [Service]
 Type=simple
@@ -127,6 +133,7 @@ UNIT
 cat >/etc/systemd/system/otz-nightly-refresh.service <<UNIT
 [Unit]
 Description=otz-rent-finder — nightly full refresh
+OnFailure=otz-notify-failure@%n.service
 
 [Service]
 Type=oneshot
@@ -155,6 +162,7 @@ UNIT
 cat >/etc/systemd/system/otz-daily-summary.service <<UNIT
 [Unit]
 Description=otz-rent-finder — daily activity summary to bot recipients
+OnFailure=otz-notify-failure@%n.service
 
 [Service]
 Type=oneshot
@@ -178,6 +186,24 @@ Persistent=true
 
 [Install]
 WantedBy=timers.target
+UNIT
+
+# Triggered via OnFailure=otz-notify-failure@%n.service on the units above.
+# %i = name of the failed unit. Smoke: systemctl start otz-notify-failure@smoke.service
+cat >/etc/systemd/system/otz-notify-failure@.service <<UNIT
+[Unit]
+Description=otz-rent-finder — Telegram alert that unit %i failed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=$OTZ_USER
+WorkingDirectory=$OTZ_HOME
+ExecStart=$OTZ_HOME/.venv/bin/otz notify-failure --service %i
+StandardOutput=append:/var/log/otz/notify-failure.log
+StandardError=append:/var/log/otz/notify-failure.log
+TimeoutStartSec=2min
 UNIT
 
 systemctl daemon-reload

@@ -355,6 +355,50 @@ sudo systemctl enable --now otz-admin caddy
 
 DNS A-запись `otz.example.com → <vps-ip>`. Caddy сам получит Let's Encrypt-сертификат.
 
+### 5.4 Алерты о падении сервисов (OnFailure → Telegram)
+
+Все три юнита (`otz-monitor`, `otz-nightly-refresh`, `otz-daily-summary`) несут
+`OnFailure=otz-notify-failure@%n.service`. Когда юнит переходит в состояние `failed`,
+systemd запускает инстанс шаблона `otz-notify-failure@.service`, который выполняет
+`otz notify-failure --service <имя-юнита>` и шлёт 🚨-сообщение получателям бота.
+Юниты ставит `scripts/vps_install.sh` (heredoc, перезапись на месте — идемпотентно).
+
+**Когда срабатывает:**
+
+- `otz-nightly-refresh`, `otz-daily-summary` (oneshot) — алерт на **каждый** упавший запуск.
+  `ExecStartPost=-…ship-log` с дефисом — падение шипинга логов алерт НЕ триггерит.
+- `otz-monitor` — алерт только когда рестарты **исчерпаны**: `Restart=on-failure` +
+  `StartLimitBurst=5` / `StartLimitIntervalSec=600`. То есть 5 стартов за 10 минут →
+  systemd сдаётся, юнит уходит в `failed`, летит алерт. На каждый одиночный рестарт
+  алерта нет. Важно: дефолтное окно 10 с с нашим `RestartSec=30` не сработало бы
+  никогда — потому значения заданы явно. Если monitor умирает реже, чем раз в ~2 мин,
+  лимит не выбирается и он рестартует вечно (это видно в утреннем ship-log monitor.log).
+
+**После алерта monitor лежит** — чинить и поднимать руками:
+
+```bash
+journalctl -u otz-monitor -n 100            # понять причину
+sudo systemctl reset-failed otz-monitor     # сбросить счётчик стартов
+sudo systemctl restart otz-monitor
+```
+
+**Smoke-тест** (после deploy + `systemctl daemon-reload`):
+
+```bash
+sudo systemctl start otz-notify-failure@smoke.service
+# в Telegram придёт «🚨 smoke упал…»; лог: tail /var/log/otz/notify-failure.log
+```
+
+**Заглушить на время мейнтенанса:**
+
+```bash
+sudo systemctl stop otz-monitor             # чистый stop OnFailure НЕ триггерит
+sudo systemctl stop otz-nightly-refresh.timer otz-daily-summary.timer
+# либо полностью замьютить алерты (все инстансы шаблона):
+sudo systemctl mask otz-notify-failure@.service
+sudo systemctl unmask otz-notify-failure@.service   # после работ — не забыть!
+```
+
 ---
 
 ## 6. Безопасность
@@ -408,6 +452,21 @@ DNS A-запись `otz.example.com → <vps-ip>`. Caddy сам получит L
 | Дарья не получает сообщения | `otz deliver-all` — вручную перешлёт все PENDING. Если ошибка `Cannot resolve TG_DELIVERY_TARGET` — Дарья не контакт юзербота. Либо она пишет первая, либо TG_DELIVERY_TARGET=me и Дарья сама смотрит Saved. |
 | Место кончилось | Проверить `du -sh /opt/otz/data/*`. Скорее всего photos раздулись. Очистить старые: `find /opt/otz/data/listings -mtime +60 -delete`. |
 | Полный завал — нужно откатиться | Скачать последний backup из B2 → распаковать → `systemctl stop otz-monitor` → подменить `/opt/otz/data/otz.db` → restart. |
+
+### Обслуживание SQLite: ручной VACUUM
+
+Ночной шаг prune (`NIGHTLY_PRUNE_EMBEDDINGS=1`) обнуляет `photo_embeddings` у объявлений,
+неактивных >30 дней, но **файл otz.db от этого не уменьшается** — SQLite лишь помечает
+страницы свободными и переиспользует их. Вернуть место на диске может только ручной VACUUM.
+VACUUM никогда не автоматизируем: он переписывает весь файл, держит долгую блокировку и
+без бэкапа опасен при обрыве. Порядок строго такой:
+
+```bash
+sudo systemctl stop otz-monitor          # 1. остановить монитор (и другие писатели)
+cp /opt/otz/data/otz.db /opt/otz/data/otz.db.bak-$(date +%F)   # 2. бэкап обязателен
+sqlite3 /opt/otz/data/otz.db "VACUUM;"   # 3. собственно сжатие
+sudo systemctl start otz-monitor         # 4. вернуть монитор
+```
 
 ---
 
