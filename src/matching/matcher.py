@@ -243,6 +243,8 @@ async def _run_llm_validation(
         result = await validate_match(
             inbound_paths,
             listing_paths,
+            inbound_id=inbound.id,
+            listing_id=listing.id,
             inbound_text=inbound.raw_text,
             listing_meta={
                 "platform": listing.platform.value,

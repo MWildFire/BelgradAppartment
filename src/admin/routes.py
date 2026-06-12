@@ -1,4 +1,4 @@
-"""FastAPI routes — queue, published, sources, listings, publish / reject actions."""
+"""FastAPI routes — queue, published, sources, listings, metrics, reject / mark-posted actions."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from src.admin.auth import require_admin
+from src.admin.csrf import CSRF_TOKEN, require_csrf
 from src.db import (
     InboundPost,
     Listing,
@@ -21,13 +22,14 @@ from src.db import (
     SourceChannel,
     get_session,
 )
+from src.db.models import DailyMetrics
 from src.post import render_post
-from src.telegram.delivery import DeliveryError, reject_match
 
 logger = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.globals["csrf_token"] = CSRF_TOKEN
 
 router = APIRouter()
 
@@ -92,7 +94,11 @@ async def sources_view(request: Request, _: str = Depends(require_admin)) -> HTM
 
 
 @router.post("/sources/{source_id}/toggle")
-async def toggle_source(source_id: int, _: str = Depends(require_admin)) -> RedirectResponse:
+async def toggle_source(
+    source_id: int,
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> RedirectResponse:
     async with get_session() as s:
         row = await s.get(SourceChannel, source_id)
         if row is None:
@@ -124,6 +130,8 @@ async def listings_view(
 
 
 # --------------------------------------------------------------------------- Match actions
+# Status markup ONLY — these never touch Telegram. Publishing stays a manual
+# copy-paste step for Дарья; the bot must never post to the public channel.
 
 
 @router.post("/match/{match_id}/reject", response_class=HTMLResponse)
@@ -132,13 +140,62 @@ async def reject_action(
     match_id: int,
     reason: str = Form(""),
     _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
 ) -> HTMLResponse:
-    try:
-        await reject_match(match_id, reason or None)
-    except DeliveryError as e:
-        return _flash_card(request, match_id, error=str(e))
+    match = await _set_match_status(match_id, MatchStatus.REJECTED, reason=reason or None)
+    if match is None:
+        return _flash_card(request, match_id, error=f"Match {match_id} не найден")
     return templates.TemplateResponse(
-        request, "_card_rejected.html", {"match_id": match_id, "reason": reason}
+        request,
+        "_card_rejected.html",
+        {"match_id": match_id, "reason": match.rejection_reason or ""},
+    )
+
+
+@router.post("/match/{match_id}/mark-posted", response_class=HTMLResponse)
+async def mark_posted_action(
+    request: Request,
+    match_id: int,
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> HTMLResponse:
+    """For 'Дарья posted it manually, the bot doesn't know' — no PublishedPost row is created."""
+    match = await _set_match_status(match_id, MatchStatus.PUBLISHED)
+    if match is None:
+        return _flash_card(request, match_id, error=f"Match {match_id} не найден")
+    return templates.TemplateResponse(
+        request, "_card_posted.html", {"match_id": match_id}
+    )
+
+
+# --------------------------------------------------------------------------- Metrics
+
+
+@router.get("/metrics", response_class=HTMLResponse)
+async def metrics_view(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    async with get_session() as s:
+        rows = (
+            await s.execute(
+                select(DailyMetrics).order_by(DailyMetrics.snapshot_date, DailyMetrics.platform)
+            )
+        ).scalars().all()
+    labels = sorted({r.snapshot_date for r in rows})
+    by_platform: dict[str, dict[str, int]] = {}
+    for r in rows:
+        by_platform.setdefault(r.platform, {})[r.snapshot_date] = r.active_count
+    chart = {
+        "labels": labels,
+        "datasets": [
+            # None → null in JSON: Chart.js skips missing days instead of drawing 0.
+            {"label": platform, "data": [points.get(d) for d in labels]}
+            for platform, points in sorted(by_platform.items())
+        ],
+    }
+    latest = sorted(rows, key=lambda r: (r.snapshot_date, r.platform), reverse=True)[:30]
+    return templates.TemplateResponse(
+        request,
+        "metrics.html",
+        {"chart": chart, "latest": latest, "active_nav": "metrics"},
     )
 
 
@@ -181,6 +238,26 @@ async def listing_photo(
 
 
 # --------------------------------------------------------------------------- Helpers
+
+
+async def _set_match_status(
+    match_id: int, target: MatchStatus, *, reason: str | None = None
+) -> Match | None:
+    """DB-only status markup. Idempotent: re-applying the same status is a no-op
+    (an empty re-POST never clears a stored rejection_reason). Single-admin tool,
+    so cross transitions (e.g. fixing a misclick REJECTED → PUBLISHED) just win.
+    """
+    async with get_session() as s:
+        match = await s.get(Match, match_id)
+        if match is None:
+            return None
+        match.status = target
+        if target is MatchStatus.REJECTED:
+            if reason:
+                match.rejection_reason = reason
+        else:
+            match.rejection_reason = None
+    return match
 
 
 async def _load_pending_cards() -> list[dict[str, object]]:

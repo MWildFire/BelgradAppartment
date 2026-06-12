@@ -19,9 +19,9 @@ from src.db import (
     InboundPost,
     Listing,
     Match,
-    MatchStatus,
     PublishedPost,
     get_session,
+    resolve_post_send_status,
 )
 from src.post import render_post
 
@@ -200,7 +200,8 @@ async def _send_match_via_userbot(
                 post_text=full_caption,
             )
             s.add(published)
-        m.status = MatchStatus.PUBLISHED
+        # PENDING→PUBLISHED only: never resurrect a REJECTED set by a human mid-send.
+        m.status = resolve_post_send_status(m.status)
         await s.flush()
         await s.refresh(published)
         recipient_label = getattr(recipient, "username", None) or "me/SavedMessages"
@@ -333,12 +334,3 @@ async def send_text_to_recipients(client: TelegramClient | None, text: str) -> N
         raise DeliveryError("userbot mode requires a Telethon client to send_text_to_recipients")
     recipient = await _resolve_delivery_target(client)
     await client.send_message(recipient, text)
-
-
-async def reject_match(match_id: int, reason: str | None = None) -> None:
-    async with get_session() as s:
-        match = await s.get(Match, match_id)
-        if match is None:
-            raise DeliveryError(f"Match {match_id} not found")
-        match.status = MatchStatus.REJECTED
-        match.rejection_reason = reason

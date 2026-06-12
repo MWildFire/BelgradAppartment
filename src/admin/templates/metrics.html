@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Метрики — otz-rent-finder{% endblock %}
+{% block content %}
+<h1>Метрики площадок</h1>
+{% if not latest %}
+  <div class="empty">
+    Метрик пока нет. Снапшоты <code>daily_metrics</code> пишутся ночным прогоном —
+    первая точка появится после следующего <code>otz nightly</code>.
+  </div>
+{% else %}
+<div class="card" style="margin-bottom:16px;">
+  <h2 style="font-size:15px; margin:0 0 12px;">Активные объявления по дням</h2>
+  <canvas id="metrics-chart" height="90"></canvas>
+</div>
+
+<h2 style="font-size:15px; margin:0 0 10px;">Последние снапшоты</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Дата</th>
+      <th>Платформа</th>
+      <th>Активных</th>
+      <th>Без фото</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in latest %}
+    <tr>
+      <td>{{ r.snapshot_date }}</td>
+      <td><span class="badge badge-yellow">{{ r.platform }}</span></td>
+      <td>{{ r.active_count }}</td>
+      <td>{{ r.no_photo_count }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
+<script>
+  const chartData = {{ chart | tojson }};
+  new Chart(document.getElementById('metrics-chart'), {
+    type: 'line',
+    data: {
+      labels: chartData.labels,
+      // null gaps (platform missing that day) are bridged instead of dropping to 0
+      datasets: chartData.datasets.map(d => ({ ...d, spanGaps: true, tension: 0.2 })),
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      scales: { y: { beginAtZero: true } },
+    },
+  });
+</script>
+{% endif %}
+{% endblock %}

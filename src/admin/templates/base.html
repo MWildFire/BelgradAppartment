@@ -78,7 +78,8 @@
     pre.raw-text { white-space: pre-wrap; background: #fafbfc; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; max-height: 140px; overflow: auto; }
   </style>
 </head>
-<body>
+<!-- hx-headers is inherited by every htmx request on the page → CSRF on all hx-post -->
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
 <header>
   <div class="brand">otz-rent-finder</div>
   <nav>
@@ -86,6 +87,7 @@
     <a href="/published" class="{% if active_nav == 'published' %}active{% endif %}">Доставлено</a>
     <a href="/sources" class="{% if active_nav == 'sources' %}active{% endif %}">Источники</a>
     <a href="/listings" class="{% if active_nav == 'listings' %}active{% endif %}">Listings</a>
+    <a href="/metrics" class="{% if active_nav == 'metrics' %}active{% endif %}">Метрики</a>
   </nav>
 </header>
 <main>

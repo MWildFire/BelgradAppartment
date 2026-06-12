@@ -8,6 +8,7 @@ from src.db.models import (
     Platform,
     PublishedPost,
     SourceChannel,
+    resolve_post_send_status,
 )
 from src.db.session import get_session, init_engine
 
@@ -23,4 +24,5 @@ __all__ = [
     "SourceChannel",
     "get_session",
     "init_engine",
+    "resolve_post_send_status",
 ]

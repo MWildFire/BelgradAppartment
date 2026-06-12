@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     nightly_prune_embeddings: bool = True  # NIGHTLY_PRUNE_EMBEDDINGS=0 → skip embeddings prune
     nightly_metrics: bool = True  # NIGHTLY_METRICS=0 → skip daily_metrics snapshot + drop alert
 
+    # --- Price-drop alerts (W3-G3, consumed in _nightly_refresh) ---
+    price_drop_alerts: bool = True  # PRICE_DROP_ALERTS=0 → no alerts
+    price_drop_min_pct: float = 5.0  # alert only when price fell ≥ this percent vs old price
+
     # --- Source channels ---
     source_default_start_date: str = "2026-05-15"  # ISO date — earliest message to backfill from
 

@@ -63,6 +63,15 @@ class MatchStatus(str, enum.Enum):
     REJECTED = "REJECTED"
 
 
+def resolve_post_send_status(current: MatchStatus) -> MatchStatus:
+    """Match status after a successful send: PENDING → PUBLISHED, anything else unchanged.
+
+    An admin may set REJECTED while the send was in flight — the message already went out,
+    but the status must keep reflecting the human decision, not get resurrected.
+    """
+    return MatchStatus.PUBLISHED if current == MatchStatus.PENDING else current
+
+
 # --- Tables ---
 
 

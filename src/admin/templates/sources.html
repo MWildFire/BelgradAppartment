@@ -41,6 +41,7 @@
       </td>
       <td>
         <form method="post" action="/sources/{{ s.id }}/toggle">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit">{% if s.is_active %}Pause{% else %}Activate{% endif %}</button>
         </form>
       </td>

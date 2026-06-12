@@ -47,6 +47,14 @@
         >Скопировать пост</button>
         <button
           type="button"
+          hx-post="/match/{{ c.match_id }}/mark-posted"
+          hx-target="#card-{{ c.match_id }}"
+          hx-swap="outerHTML"
+          hx-confirm="Отметить как размещённое вручную? Бот ничего отправлять не будет."
+        >Запостили вручную</button>
+        {# reject reason is intentionally API-only: UI sends an empty reason; hx-prompt deliberately not used #}
+        <button
+          type="button"
           class="btn-danger"
           hx-post="/match/{{ c.match_id }}/reject"
           hx-target="#card-{{ c.match_id }}"

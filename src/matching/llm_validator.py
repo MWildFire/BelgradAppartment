@@ -12,7 +12,10 @@ Cost: ~$0.005-0.010 per validation (3 inbound photos + 3 listing photos at Haiku
 from __future__ import annotations
 
 import base64
+import json
 import logging
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -23,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5"
 MAX_PHOTOS_PER_SIDE = 3  # cap to keep cost predictable
+# Single source for the decisions-log `ts` format — cli's `otz llm-report` parses with this.
+LLM_DECISIONS_TS_FMT = "%Y-%m-%dT%H:%M:%S%z"
 SYSTEM_PROMPT = """Ты — помощник, который проверяет, изображены ли на двух наборах фотографий одна и та же квартира в Белграде.
 
 Контекст: пользователь отбирает квартиры из Telegram-каналов в свой канал. Алгоритм по pHash/CLIP нашёл потенциальное совпадение между Telegram-постом и объявлением на площадке. Тебе нужно подтвердить или опровергнуть.
@@ -47,6 +52,55 @@ class DuplicateCheck(BaseModel):
 
 class LLMValidatorError(RuntimeError):
     """Raised when the validator can't run (no API key, network failure, etc.)."""
+
+
+def _decisions_log_path() -> Path:
+    """data/logs/llm_decisions.jsonl — settings-relative, like photo_downloads.jsonl."""
+    p = get_settings().data_dir / "logs" / "llm_decisions.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _photo_parent_ref(photos: list[Path]) -> str | None:
+    """'<grandparent>/<parent>' dirs of the first photo — 'NEKRETNINE/<external_id>' for listing
+    photos, '<source_channel_id>/<tg_message_id>' for inbound ones. Best-effort review aid for
+    runs where the caller didn't pass DB ids."""
+    if not photos:
+        return None
+    p = photos[0]
+    return f"{p.parent.parent.name}/{p.parent.name}"
+
+
+def _record_decision(
+    *,
+    inbound_id: int | None,
+    listing_id: int | None,
+    inbound_photos: list[Path],
+    listing_photos: list[Path],
+    verdict: bool,
+    confidence: float,
+    latency_ms: int,
+) -> None:
+    """Append one JSON line per verdict to llm_decisions.jsonl (read by `otz llm-report`).
+
+    MUST never raise: a full disk or broken log file must not kill the validator verdict.
+    """
+    try:
+        entry = {
+            "ts": datetime.now(UTC).strftime(LLM_DECISIONS_TS_FMT),
+            "inbound_id": inbound_id,
+            "listing_id": listing_id,
+            "inbound_ref": _photo_parent_ref(inbound_photos),
+            "listing_ref": _photo_parent_ref(listing_photos),
+            "verdict": verdict,
+            "confidence": round(confidence, 4),
+            "latency_ms": latency_ms,
+            "model": MODEL,
+        }
+        with _decisions_log_path().open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        logger.warning("[llm_validator] decision log write failed", exc_info=True)
 
 
 def _b64_image(path: Path, max_bytes: int = 4 * 1024 * 1024) -> tuple[str, str]:
@@ -131,8 +185,14 @@ async def validate_match(
     *,
     inbound_text: str | None = None,
     listing_meta: dict[str, object] | None = None,
+    inbound_id: int | None = None,
+    listing_id: int | None = None,
 ) -> DuplicateCheck:
     """Ask Claude whether two photo sets show the same apartment. Async.
+
+    Each verdict is appended to data/logs/llm_decisions.jsonl (threshold-tuning evidence for
+    `otz llm-report`); `inbound_id`/`listing_id` are optional log context — when absent, the
+    photo-path-derived refs still identify the case.
 
     Raises LLMValidatorError on missing API key or transport failure.
     """
@@ -168,6 +228,7 @@ async def validate_match(
     # versions, so we discriminate by APIStatusError.status_code rather than `except OverloadedError`.
     response = None
     last_exc: Exception | None = None
+    started = time.monotonic()
     for attempt in range(4):
         try:
             response = await client.messages.parse(
@@ -199,6 +260,17 @@ async def validate_match(
     result = response.parsed_output
     if result is None:
         raise LLMValidatorError("Claude returned no parsed_output — schema mismatch")
+
+    # Verdict log for `otz llm-report` — never raises (see _record_decision).
+    _record_decision(
+        inbound_id=inbound_id,
+        listing_id=listing_id,
+        inbound_photos=inbound_photos,
+        listing_photos=listing_photos,
+        verdict=bool(result.is_same_apartment),
+        confidence=float(result.confidence),
+        latency_ms=int((time.monotonic() - started) * 1000),
+    )
 
     logger.info(
         "[llm_validator] verdict: same=%s conf=%.2f reasoning=%r",

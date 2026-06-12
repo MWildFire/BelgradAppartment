@@ -13,6 +13,9 @@ from sqlalchemy import select
 
 from src.config import get_settings
 from src.db.models import InboundPost, Listing, Platform, SourceChannel
+
+# Shared with the decisions-log writer (`_record_decision`) — one ts format, defined at the source.
+from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
 
@@ -1046,6 +1049,8 @@ def admin(host: str | None, port: int | None, reload: bool) -> None:
     """Launch the web admin (read-only viewer). Basic auth: ADMIN_USERNAME / ADMIN_PASSWORD."""
     import uvicorn
 
+    # CSRF token is per-process (src/admin/csrf.py) ⇒ single-worker uvicorn only:
+    # --workers N would render worker A's token and verify against worker B's → random 403s.
     settings = get_settings()
     uvicorn.run(
         "src.admin.app:app",
@@ -1168,9 +1173,18 @@ async def _nightly_refresh(
         return
 
     # Post-sweep maintenance steps (heal / rolling refresh / metrics / prune). Each one is
-    # env-disableable (=0) and fault-isolated — see _run_nightly_steps. `steps.price_changes`
-    # is the W2-C2 return contract: Wave-3 hooks the price-drop alert onto it right here.
+    # env-disableable (=0) and fault-isolated — see _run_nightly_steps.
     steps = await _run_nightly_steps()
+
+    # W3-G3: price-drop alerts off the W2-C2 `steps.price_changes` contract. Fault-isolated
+    # like the other nightly extras — a failure becomes a 🚨 summary line, never kills nightly.
+    price_alerts: list[str] = []
+    price_line: str | None = None
+    try:
+        price_alerts, price_line = await _build_price_drop_alerts(steps.price_changes)
+    except Exception:
+        logging.getLogger(__name__).exception("nightly step failed: price-drop")
+        price_line = "🚨 price-drop шаг упал — см. логи"
 
     elapsed = _time.monotonic() - started
     total_new = sum(r.inserted for r in results)
@@ -1192,6 +1206,8 @@ async def _nightly_refresh(
     if sweep_result is not None:
         lines.append(f"Помечено inactive: {sweep_result.marked_inactive}")
     lines.extend(steps.summary_lines)
+    if price_line:
+        lines.append(price_line)
     if total_errors:
         lines.append(f"⚠️ Ошибки: {total_errors}")
     lines.append(f"⏱ Время: {dur}")
@@ -1241,9 +1257,9 @@ async def _nightly_refresh(
             await send_text_to_recipients(client, "\n".join(lines))
         except Exception:
             logging.getLogger(__name__).exception("nightly refresh summary delivery failed")
-        # Active-drop alerts go out as standalone messages too — they must not drown in the
-        # summary wall of text.
-        for alert in steps.alerts:
+        # Active-drop + price-drop alerts go out as standalone messages too — they must not
+        # drown in the summary wall of text.
+        for alert in [*steps.alerts, *price_alerts]:
             try:
                 await send_text_to_recipients(client, alert)
             except Exception:
@@ -1346,6 +1362,399 @@ async def _run_nightly_steps() -> NightlyStepsResult:
         click.echo("→ Embeddings prune disabled (NIGHTLY_PRUNE_EMBEDDINGS=0)")
 
     return NightlyStepsResult(summary_lines=lines, price_changes=price_changes, alerts=alerts)
+
+
+# --------------------------------------------------------------------------- W3-G3 price drops
+
+# Bot send path has no flood-wait retry; a mass repricing must not burst-spam recipients.
+PRICE_DROP_MAX_ALERTS = 10
+
+
+def _select_price_drops(
+    price_changes: list[PriceChange], *, min_pct: float
+) -> list[tuple[PriceChange, float]]:
+    """Keep only real drops of ≥ min_pct percent: old and new both known, 0 < new < old.
+
+    Returns (change, drop_pct) pairs; pct is computed against the old price.
+    """
+    out: list[tuple[PriceChange, float]] = []
+    for change in price_changes:
+        old, new = change.old_price_eur, change.new_price_eur
+        # new <= 0 is a scrape glitch (failed price parse), not a «→ 0€ (−100%)» bargain.
+        if old is None or new is None or old <= 0 or new <= 0 or new >= old:
+            continue
+        pct = (old - new) / old * 100
+        if pct >= min_pct:
+            out.append((change, pct))
+    return out
+
+
+async def _build_price_drop_alerts(
+    price_changes: list[PriceChange],
+) -> tuple[list[str], str | None]:
+    """Compose «📉 Цена снизилась» messages for dropped listings with a live match.
+
+    Only listings that have a PENDING or PUBLISHED match qualify — nobody cares about price
+    moves on listings we never delivered. Gated by PRICE_DROP_ALERTS (returns ([], None) when
+    off); threshold = PRICE_DROP_MIN_PCT. Returns (standalone alert texts, summary line).
+
+    Standalone sends are capped at PRICE_DROP_MAX_ALERTS (top-N by drop pct); the summary
+    line always counts ALL eligible drops.
+    """
+    from sqlalchemy.orm import selectinload
+
+    from src.db.models import InboundPost, Match, MatchStatus
+    from src.db.session import get_session
+
+    settings = get_settings()
+    if not settings.price_drop_alerts:
+        return [], None
+
+    drops = _select_price_drops(price_changes, min_pct=settings.price_drop_min_pct)
+    eligible: list[tuple[float, str]] = []
+    if drops:
+        async with get_session() as s:
+            for change, pct in drops:
+                match_row = (
+                    await s.execute(
+                        select(Match)
+                        .where(
+                            Match.listing_id == change.listing_id,
+                            Match.status.in_([MatchStatus.PENDING, MatchStatus.PUBLISHED]),
+                        )
+                        .order_by(Match.id.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if match_row is None:
+                    continue
+                listing = await s.get(Listing, change.listing_id)
+                if listing is None:
+                    continue
+                inbound = (
+                    await s.execute(
+                        select(InboundPost)
+                        .options(selectinload(InboundPost.source_channel))
+                        .where(InboundPost.id == match_row.inbound_post_id)
+                    )
+                ).scalar_one_or_none()
+                # Source reference mirrors delivery.py: t.me link for public channels,
+                # otherwise the inbound DB id.
+                source = None
+                if inbound is not None:
+                    chan = inbound.source_channel
+                    if chan is not None and chan.username:
+                        source = f"https://t.me/{chan.username}/{inbound.tg_message_id}"
+                    else:
+                        source = f"inbound #{inbound.id}"
+                text_lines = [
+                    f"📉 Цена снизилась: {change.old_price_eur}€ → {change.new_price_eur}€ "
+                    f"(−{pct:.0f}%)",
+                    f"🔗 площадка: {listing.url}",
+                ]
+                if source:
+                    text_lines.append(f"📥 источник: {source}")
+                eligible.append((pct, "\n".join(text_lines)))
+    # Cap standalone sends to the biggest drops — see PRICE_DROP_MAX_ALERTS.
+    eligible.sort(key=lambda pair: pair[0], reverse=True)
+    alerts = [text for _, text in eligible[:PRICE_DROP_MAX_ALERTS]]
+    overflow = len(eligible) - PRICE_DROP_MAX_ALERTS
+    if overflow > 0:
+        alerts.append(f"…и ещё {overflow} снижений (см. ночную сводку)")
+    return alerts, f"📉 Алертов о снижении цены: {len(eligible)}"
+
+
+# --------------------------------------------------------------------------- W3-G1 llm-report
+
+LLM_REPORT_THRESHOLDS = (0.6, 0.65, 0.7)
+LLM_BORDERLINE_RANGE = (0.55, 0.75)
+
+
+def _load_llm_decisions(path: Any, *, days: int) -> list[dict[str, Any]]:
+    """Parse llm_decisions.jsonl entries newer than `days`; garbage lines are skipped."""
+    import json
+    from datetime import UTC, timedelta
+    from pathlib import Path as _Path
+
+    cutoff = datetime.now(UTC) - timedelta(days=days)
+    entries: list[dict[str, Any]] = []
+    p = _Path(path)
+    if not p.exists():
+        return entries
+    with p.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            try:
+                ts = datetime.strptime(entry["ts"], LLM_DECISIONS_TS_FMT)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if ts < cutoff or not isinstance(entry.get("confidence"), (int, float)):
+                continue
+            entries.append(entry)
+    return entries
+
+
+def _llm_threshold_counts(
+    entries: list[dict[str, Any]],
+    thresholds: tuple[float, ...] = LLM_REPORT_THRESHOLDS,
+) -> dict[float, int]:
+    """How many verdicts WOULD pass the gate at each threshold.
+
+    Mirrors the matcher gate: pass = is_same_apartment AND confidence ≥ threshold.
+    """
+    return {
+        t: sum(1 for e in entries if e.get("verdict") and e["confidence"] >= t)
+        for t in thresholds
+    }
+
+
+def _llm_histogram(entries: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """Confidence distribution in 0.1-wide buckets; conf=1.0 folds into the last bucket."""
+    counts = [0] * 10
+    for e in entries:
+        # clamp to ≥0: a hand-corrupted negative confidence must not index from the end
+        idx = min(max(round(e["confidence"] * 100) // 10, 0), 9)
+        counts[idx] += 1
+    return [(f"{i / 10:.1f}–{(i + 1) / 10:.1f}", n) for i, n in enumerate(counts)]
+
+
+def _llm_borderline(
+    entries: list[dict[str, Any]],
+    lo: float = LLM_BORDERLINE_RANGE[0],
+    hi: float = LLM_BORDERLINE_RANGE[1],
+) -> list[dict[str, Any]]:
+    """Cases worth a manual look: confidence in [lo, hi] inclusive, any verdict."""
+    return sorted(
+        (e for e in entries if lo <= e["confidence"] <= hi),
+        key=lambda e: e["confidence"],
+    )
+
+
+def _raw_listing_label(entry: dict[str, Any]) -> str:
+    if entry.get("listing_id") is not None:
+        return f"listing #{entry['listing_id']}"
+    return f"listing {entry.get('listing_ref') or '?'}"
+
+
+def _raw_inbound_label(entry: dict[str, Any]) -> str:
+    if entry.get("inbound_id") is not None:
+        return f"inbound #{entry['inbound_id']}"
+    return f"inbound {entry.get('inbound_ref') or '?'}"
+
+
+async def _resolve_llm_case_refs(entries: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """(listing label, inbound label) per entry — listing URL / t.me link when the DB can
+    resolve them, raw log identifiers otherwise. Tolerant: any lookup failure → raw label."""
+    from src.db.session import get_session
+
+    out: list[tuple[str, str]] = []
+    try:
+        async with get_session() as s:
+            for entry in entries:
+                listing_label = _raw_listing_label(entry)
+                inbound_label = _raw_inbound_label(entry)
+                try:
+                    url: str | None = None
+                    if entry.get("listing_id") is not None:
+                        row = await s.get(Listing, int(entry["listing_id"]))
+                        url = row.url if row is not None else None
+                    elif entry.get("listing_ref"):
+                        plat_name, _, ext = str(entry["listing_ref"]).partition("/")
+                        if ext and plat_name in Platform.__members__:
+                            url = (
+                                await s.execute(
+                                    select(Listing.url).where(
+                                        Listing.platform == Platform[plat_name],
+                                        Listing.external_id == ext,
+                                    )
+                                )
+                            ).scalar_one_or_none()
+                    if url:
+                        listing_label = url
+                except Exception:  # per-case resolution is best-effort
+                    pass
+                try:
+                    link: str | None = None
+                    if entry.get("inbound_id") is not None:
+                        ib = await s.get(InboundPost, int(entry["inbound_id"]))
+                        if ib is not None:
+                            chan = await s.get(SourceChannel, ib.source_channel_id)
+                            if chan is not None and chan.username:
+                                link = f"https://t.me/{chan.username}/{ib.tg_message_id}"
+                    elif entry.get("inbound_ref"):
+                        chan_part, _, msg_part = str(entry["inbound_ref"]).partition("/")
+                        if chan_part.isdigit() and msg_part.split("/")[0].isdigit():
+                            chan = await s.get(SourceChannel, int(chan_part))
+                            if chan is not None and chan.username:
+                                link = f"https://t.me/{chan.username}/{int(msg_part.split('/')[0])}"
+                    if link:
+                        inbound_label = link
+                except Exception:
+                    pass
+                out.append((listing_label, inbound_label))
+    except Exception:  # no DB at hand: report still works off raw refs
+        out = [(_raw_listing_label(e), _raw_inbound_label(e)) for e in entries]
+    return out
+
+
+@cli.command("llm-report")
+@click.option("--days", default=7, show_default=True, type=int, help="Window size in days.")
+def llm_report(days: int) -> None:
+    """Analyze the LLM-validator decision log: confidence distribution + threshold what-ifs.
+
+    Data source: data/logs/llm_decisions.jsonl (one line per verdict, written by
+    src/matching/llm_validator.py). The 0.7 gate itself (LLM_VALIDATION_MIN_CONFIDENCE)
+    stays untouched — this command only builds the evidence for tuning it.
+    """
+    asyncio.run(_llm_report(days))
+
+
+async def _llm_report(days: int) -> None:
+    from src.matching.llm_validator import _decisions_log_path
+
+    settings = get_settings()
+    entries = _load_llm_decisions(_decisions_log_path(), days=days)
+    click.echo(f"=== LLM validator — последние {days} дн ===")
+    if not entries:
+        click.echo("(нет записей — лог пишется с момента деплоя W3-G1)")
+        return
+
+    same = sum(1 for e in entries if e.get("verdict"))
+    click.echo(f"вердиктов: {len(entries)} (same={same}, different={len(entries) - same})")
+    avg = sum(e["confidence"] for e in entries) / len(entries)
+    lat = [e["latency_ms"] for e in entries if isinstance(e.get("latency_ms"), (int, float))]
+    avg_lat = f", средняя латентность {sum(lat) / len(lat) / 1000:.1f} c" if lat else ""
+    click.echo(f"средняя confidence: {avg:.2f}{avg_lat}")
+
+    click.echo("\nРаспределение confidence:")
+    peak = max(n for _, n in _llm_histogram(entries)) or 1
+    for label, n in _llm_histogram(entries):
+        bar = "█" * round(20 * n / peak) if n else ""
+        click.echo(f"  {label}  {n:4d}  {bar}")
+
+    click.echo("\nПрошло бы гейт (verdict=same и conf ≥ T):")
+    current = settings.llm_validation_min_confidence
+    for t, n in _llm_threshold_counts(entries).items():
+        marker = "  ← текущий порог" if abs(t - current) < 1e-9 else ""
+        click.echo(f"  T={t:.2f}: {n}{marker}")
+
+    borderline = _llm_borderline(entries)
+    lo, hi = LLM_BORDERLINE_RANGE
+    click.echo(f"\nПограничные случаи ({lo}–{hi}) для ручного ревью: {len(borderline)}")
+    refs = await _resolve_llm_case_refs(borderline)
+    for entry, (listing_label, inbound_label) in zip(borderline, refs, strict=False):
+        verdict = "same" if entry.get("verdict") else "diff"
+        click.echo(
+            f"  conf={entry['confidence']:.2f} [{verdict}]  {listing_label}  ⇆  {inbound_label}"
+        )
+    click.echo("\n(порог LLM_VALIDATION_MIN_CONFIDENCE в этом этапе не меняем — W3-G1)")
+
+
+# ----------------------------------------------------------------- W3-G2 districts-report
+
+
+async def _active_district_counts() -> list[tuple[str, int]]:
+    """(raw district, count) among ACTIVE listings, non-empty districts only."""
+    from sqlalchemy import func
+
+    from src.db.session import get_session
+
+    stmt = (
+        select(Listing.district, func.count(Listing.id))
+        .where(
+            Listing.is_active.is_(True),
+            Listing.district.is_not(None),
+            Listing.district != "",
+        )
+        .group_by(Listing.district)
+    )
+    async with get_session() as s:
+        return [(d, int(n)) for d, n in (await s.execute(stmt)).all()]
+
+
+def _missing_districts(
+    counts: list[tuple[str, int]], *, min_count: int = 1
+) -> list[tuple[str, int]]:
+    """Raw district values with no districts.yaml hashtag, most frequent first.
+
+    Uses the production lookup (district_tag) — diacritics/token-prefix variants that
+    already resolve are correctly excluded.
+    """
+    from src.post.hashtags import district_tag
+
+    out = [(d, n) for d, n in counts if n >= min_count and district_tag(d) is None]
+    out.sort(key=lambda t: (-t[1], t[0].lower()))
+    return out
+
+
+def _district_yaml_suggestion(district: str) -> str:
+    """Ready-to-paste yaml line: '"Banovo brdo": BanovoBrdo'. Non-latinizable → FIXME value."""
+    import re
+    import unicodedata
+
+    nfkd = unicodedata.normalize("NFKD", district)
+    stripped = "".join(c for c in nfkd if not unicodedata.combining(c))
+    words = re.split(r"[^A-Za-z0-9]+", stripped)
+    camel = "".join(w[:1].upper() + w[1:] for w in words if w)
+    if not camel or not camel.isascii():
+        camel = "FIXME"
+    return f'"{district}": {camel}'
+
+
+def _districts_report_lines(
+    missing: list[tuple[str, int]], *, top: int
+) -> list[str]:
+    """Human block + paste block + the deploy reminder (the only synced data/ file)."""
+    lines: list[str] = []
+    if not missing:
+        lines.append("Все district-значения активных listings уже покрыты districts.yaml ✅")
+    else:
+        shown = missing[:top]
+        lines.append(f"Районы без хэштега (top {len(shown)} из {len(missing)}):")
+        for district, n in shown:
+            lines.append(f"  {n:5d}  {district}")
+        lines.append("")
+        lines.append("Готовые строки для data/districts.yaml (значение проверь руками —")
+        lines.append("микрорайон обычно мапится на родительскую общину, см. примеры в файле):")
+        for district, _n in shown:
+            lines.append(_district_yaml_suggestion(district))
+    lines.append("")
+    lines.append(
+        "⚠️ data/districts.yaml — ЕДИНСТВЕННЫЙ файл из data/, который синкается на прод: "
+        "после правки задеплой через scripts/deploy_sync.sh"
+    )
+    return lines
+
+
+@cli.command("districts-report")
+@click.option(
+    "--top", default=30, show_default=True, type=int, help="Show top N missing districts.",
+)
+@click.option(
+    "--min-count", default=1, show_default=True, type=int,
+    help="Hide districts seen on fewer than N active listings.",
+)
+def districts_report(top: int, min_count: int) -> None:
+    """Top raw `district` values among ACTIVE listings missing from data/districts.yaml.
+
+    Replaces the manual «new micro-district appeared» routine: frequencies + ready-to-paste
+    yaml lines. Remember: districts.yaml is the only data/ file deployed by deploy_sync.sh.
+    """
+    asyncio.run(_districts_report(top, min_count))
+
+
+async def _districts_report(top: int, min_count: int) -> None:
+    counts = await _active_district_counts()
+    missing = _missing_districts(counts, min_count=min_count)
+    click.echo("=== districts-report (active listings) ===")
+    for line in _districts_report_lines(missing, top=top):
+        click.echo(line)
 
 
 @cli.command("mark-stale")

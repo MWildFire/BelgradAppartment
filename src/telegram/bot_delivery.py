@@ -25,9 +25,9 @@ from src.db import (
     InboundPost,
     Listing,
     Match,
-    MatchStatus,
     PublishedPost,
     get_session,
+    resolve_post_send_status,
 )
 from src.post import render_post
 
@@ -204,7 +204,8 @@ async def send_match_via_bot(
                 post_text=full_caption,
             )
             s.add(published)
-        m.status = MatchStatus.PUBLISHED
+        # PENDING→PUBLISHED only: never resurrect a REJECTED set by a human mid-send.
+        m.status = resolve_post_send_status(m.status)
         await s.flush()
         await s.refresh(published)
         return published
