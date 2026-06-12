@@ -4,6 +4,102 @@
 
 ---
 
+## 0. ТЕКУЩИЙ СТАТУС + ПЛАН РАЗРАБОТКИ (handoff 2026-06-12)
+
+> Эта секция — рабочий handoff последней сессии. Остальной документ — общий runbook.
+> Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
+> (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
+
+### 0.1 Что сделано (12.06.2026, коммиты `3169d92`, `32f5c67` → github.com/MWildFire/BelgradAppartment)
+
+1. **Полнота базы решена.** nekretnine и 4zida режут ЛЮБОЙ поиск на ~2000 результатов
+   (nekretnine: 80 стр × 25, стр. 81+ → 404; 4zida: ~99 × 20, дальше повторы). Полные обходы
+   теперь сегментируются по 12 ценовым диапазонам (`?prezzoMinimo/?prezzoMassimo`,
+   `?skuplje_od/?jeftinije_od`) с дедупом. Боевой прогон: nekretnine 7765/7769 (99.9%),
+   4zida 7122/7209 (98.8%), halooglasi 5812. Активных listings: 11.7k → **21.8k**.
+   Сводка ночного прогона показывает покрытие % и 🚨-алерты (<70%, мёртвые площадки,
+   пропущенные страницы).
+2. **Полное ревью (71 агент, 59 подтверждённых находок) — основное исправлено:**
+   matcher: pHash через int XOR popcount (было 40-75с блокировки event loop на каждый inbound →
+   ~1с, бит-в-бит эквивалентно) + CLIP-блобы чанками (пик RAM 415МБ → ~30МБ); доставка не
+   помечает PUBLISHED при полном фейле + flood-wait retry; stale-sweep только для здоровых
+   площадок (coverage ≥50% и site_total обязателен); nightly exit 1 при мёртвых площадках;
+   обложка 4zida (`@id`-референс) больше не теряется; halooglasi не вставляет пустые
+   замороженные строки; новая команда `refetch-details`; семафор на pipeline в мониторе;
+   парсер цен «1 200€» / «этаж 3 600€»; admin auth (не-ASCII, fail-closed дефолт-пароль);
+   PRAGMA foreign_keys; абсолютный путь БД; зависимости anthropic/playwright-stealth;
+   `ExecStartPost=-` (ship-log при упавшем прогоне); docs/.env.example синхронизированы.
+3. Тесты: **105 passed** (`pytest -q`). Деплой на VPS сделан, monitor перезапущен, юниты
+   systemd на сервере пропатчены.
+
+### 0.2 Незавершённое / проверить в начале следующей сессии
+
+- [ ] **Ночная сводка за 13.06** (таймер 03:14 UTC): «Обновлено (active)» должно быть ~20-21k;
+      у всех трёх площадок строка «покрытие N% из M» (halooglasi теперь тоже шлёт TotalCount).
+      Если 🚨 или «Sweep пропущен» — смотреть `/var/log/otz/nightly-refresh.log`.
+- [ ] **Heal-юнит** `otz-adhoc-20260612-075956` (refetch-details, ~594 битые строки):
+      проверить завершение и остаток битых:
+      `sqlite3 data/otz.db "SELECT platform, SUM(photo_phashes='[]') FROM listings WHERE is_active=1 GROUP BY platform"`.
+- [ ] **Бэкфилл обложек 4zida для СТАРЫХ строк** (новые получают обложку автоматически):
+      `ssh root@90.156.254.159 'otz-bg refetch-details --platform cetiri_zida --all'` — ~7ч,
+      запускать утром, чтобы не пересечься с ночным таймером. После него можно `rematch-all`
+      для перепроверки старых NO_MATCH inbound'ов.
+- [ ] Убедиться, что matcher на проде быстрый: в `/var/log/otz/monitor.log` матчи новых
+      inbound должны проходить за секунды (раньше 40-75с на пост).
+
+### 0.3 Бэклог — оставшиеся находки ревью (приоритизировано)
+
+**P1 — целостность данных:**
+- Автоматизировать heal: запускать `refetch-details` (broken-only) после ночного скрапа или
+  weekly-таймером — сейчас только вручную.
+- Гонка дедупликации inbound: UNIQUE по `(source_channel_id, tg_message_id, digest_share_id)`
+  неэффективен при NULL digest_share_id → возможен дубль-пост и двойная доставка
+  (`src/telegram/monitor.py:354-382`, `src/db/models.py:92-96`). Нужен conditional unique index
+  или pre-insert check c обработкой гонки.
+- Индексы: нет индекса на `last_seen_at` (sweep сканирует 30k+ строк) и составного
+  `(platform, is_active)` — alembic-миграция.
+- Детали существующих listings никогда не обновляются (цена поменялась на сайте — у нас
+  старая). `refetch-details --all` это чинит вручную; решить: периодический re-fetch N самых
+  старых активных (например, 200/ночь) внутри nightly.
+
+**P2 — память/перфоманс:**
+- `embed-all` / `hash-listings` грузят полные ORM-строки с BLOB'ами только чтобы выбрать id
+  (`src/cli.py:~694-772`) — перейти на выборку колонок.
+- Прунинг `photo_embeddings` неактивных listings (~60% из 415МБ BLOB'ов — мёртвый вес,
+  растёт бесконечно): `UPDATE listings SET photo_embeddings=NULL WHERE is_active=0 AND
+  last_seen_at < date('now','-30 day')` + шаг в nightly.
+- `match_all_pending` делает полный SELECT на каждый inbound — кэшировать lightweight-строки
+  на один батч.
+- Остаточный ~1с CPU матчера всё ещё в event loop — вынести скан в `asyncio.to_thread`.
+
+**P3 — гигиена:**
+- CSRF на admin POST-роутах (`src/admin/routes.py:94-142`) — риск низкий (localhost + basic auth).
+- `notify-failure` (cli.py:~1489): докстринг обещает `OnFailure=`-wiring, которого нет —
+  либо добавить `OnFailure=otz-notify-failure@%n.service` в юниты, либо поправить докстринг.
+- Тесты: stages 2-4 матчера (CLIP/text-check/LLM-гейт) и event-handling монитора (альбомы,
+  watermark, flush) не покрыты.
+- Throttle-маркер не предотвращает параллельные скрапы (nightly его игнорирует) — известно, ок.
+- halooglasi теряет ~200 объявлений за обход из-за ротации выдачи mid-walk — самолечится
+  3-дневным grace; принято как есть.
+- Quirk: выбор pHash-vs-CLIP сигнала зависит от порядка обхода listings (сравнение с running
+  `best_score`, `src/matching/matcher.py`) — поведение сохранено сознательно при рефакторе;
+  при желании детерминировать отдельным PR с осознанной сменой семантики.
+
+**Идеи развития (не из ревью):** см. §18; плюс — алерт в бот при `is_active`-просадке >20% за
+сутки; покрытие фотографиями (списки без фото) в daily-summary.
+
+### 0.4 Критичные правила (не нарушать)
+
+- **Деплой = rsync** (`./scripts/deploy_sync.sh [--restart]`), НЕ git. На VPS нет git-репо.
+  `.env` на сервере правится только руками. После деплоя кода матчера/монитора —
+  `systemctl restart otz-monitor`, иначе старый код живёт в памяти.
+- CLI на сервере запускать как `otz` (через `otz-bg` или `sudo -u otz`), не root.
+- `data/` на VPS не трогать rsync'ом (фото, БД, sessions).
+- Полный обход = `--max-pages > page_cap` (число страниц), иначе сегментация не включится;
+  `scrape-all --full` теперь сам подставляет 500.
+
+---
+
 ## 1. TL;DR
 
 Автоматизация для Telegram-канала **@RentBelgrad** (ведёт Дарья, @Darya_kralj).
