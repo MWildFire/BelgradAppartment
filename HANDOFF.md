@@ -10,6 +10,34 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.0 Инцидент 13–19.06.2026: отзыв Telethon-сессии + hardening
+
+**Что случилось.** 13.06 ~17:35 UTC владелец аккаунта (это личный аккаунт `mvstrike`, он же userbot)
+случайно «завершил все сеансы» в Telegram → обе userbot-сессии отозваны (`SessionRevokedError`).
+Монитор упал; при каждом рестарте без валидной сессии Telethon `start()` просил телефон в
+не-интерактивном сервисе → `EOFError`/`Aborted!` → exit 1 → крэш-луп 6× → `failed`. Лежал ~3 дня,
+новые посты Otz не обрабатывались. `OnFailure` сработал на каждый из 6 рестартов → спам. Бот-сводки
+продолжали идти (бот на токене, сессия ни при чём).
+
+**Восстановление.** Вход по коду был невозможен: при живой app-сессии Telegram отдаёт
+`SentCodeTypeApp`/`next_type=None` и придерживает in-app код для стороннего клиента (ни SMS, ни звонка).
+Помог **QR-вход** (`scripts/auth_qr.py`) — живая сессия на телефоне поручается за новую. Реавторизованы
+обе сессии (monitor + logger через `OTZ_SESSION=otz_logger`). См. процедуру в §5.4.
+
+**Фиксы (эта сессия, ветка main):**
+- Монитор больше не зовёт интерактивный `start()` в сервисе: `connect_authorized()` проверяет
+  `is_user_authorized()`; при отзыве/отсутствии сессии — **один** алерт через бот (`send_text_via_bot`,
+  не зависит от delivery-mode) + `exit 3`. Рантайм-отзыв (`UnauthorizedError`/`AuthKeyDuplicatedError`
+  из `run_until_disconnected`) ловится так же.
+- systemd: `RestartPreventExitStatus=3` — потеря сессии = **один** `failed`/алерт, без крэш-лупа
+  (транзиентный exit 1 по-прежнему рестартует). Нотификатор де-дуплицирует алерты юнита в окне ~10 мин.
+- Исправлена ложная модель «OnFailure только при исчерпании рестартов» в `vps_install.sh`/PHASE5/HANDOFF.
+- `scripts/auth_qr.py` заведён в репо (QR-реавторизация: ASCII+PNG QR, 2FA через `OTZ_2FA`, `OTZ_SESSION`,
+  коды возврата); `qrcode` добавлен в `pyproject`. §5.4 переписан: QR — основной способ.
+- Ночной refetch: общий wall-clock бюджет (`NIGHTLY_REFETCH_BUDGET_SEC`) на heal+rolling + per-fetch
+  cap (`asyncio.wait_for`) — страховка от зависания на challenge-страницах halooglasi (инцидент SIGTERM 16.06,
+  не воспроизводился).
+
 ### 0.1 Что сделано: этап H1 «Hardening & Intelligence» (12.06.2026, ветка `stage-h1` → main)
 
 План этапа: `FEATURE_PLAN.md` (волны W0-W5). Исполнено мультиагентно, каждая волна — spec+quality ревью, gate `pytest -q`. Тестов 105 → **207**. Деплой на VPS + миграция 0005 — см. 0.2.
@@ -22,7 +50,7 @@
    - прунинг `photo_embeddings` неактивных >30 дней (`NIGHTLY_PRUNE_EMBEDDINGS=1`; файл БД не сожмётся без ручного VACUUM — см. §15.7);
    - snapshot `daily_metrics` + 🚨-алерт при падении active >20% против прошлого снапшота (`NIGHTLY_METRICS=1`).
 4. **Матчер**: CPU-скан (pHash/CLIP/выбор) вынесен в `asyncio.to_thread` (бит-в-бит эквивалентно, квирк best_score сохранён и запинен тестом); кэш кандидатов `src/matching/candidates.py` для match-all/rematch-all — 1 SELECT на батч вместо N (live-monitor путь не тронут, embeddings в кэш НЕ кладутся — RAM).
-5. **Алерты systemd**: шаблон `otz-notify-failure@.service` + `OnFailure=` у monitor/nightly/daily-summary юнитов; у монитора явные `StartLimitIntervalSec=600`/`StartLimitBurst=5` (иначе OnFailure не сработал бы никогда). Smoke: `systemctl start otz-notify-failure@smoke.service`. Docs: PHASE5_DEPLOY §5.4.
+5. **Алерты systemd**: шаблон `otz-notify-failure@.service` + `OnFailure=` у monitor/nightly/daily-summary юнитов; у монитора явные `StartLimitIntervalSec=600`/`StartLimitBurst=5` (иначе при `RestartSec=30` дефолтное 10-с окно не выбирается → монитор рестартует вечно и в `failed` не уходит). ⚠️ **OnFailure летит на КАЖДЫЙ переход в `failed`, не один раз** — при крэш-лупе будет столько алертов, сколько рестартов (инцидент 13.06: отозванная сессия = 6 алертов за 3 мин). Исправлено постфактум — см. §0.0. Smoke: `systemctl start otz-notify-failure@smoke.service`. Docs: PHASE5_DEPLOY §5.4.
 6. **Admin** (`src/admin/`): Reject / Mark-posted (DB-only, идемпотентно, бот ничего не шлёт), CSRF fail-closed (per-process токен — только single-worker uvicorn), страница `/metrics` (Chart.js по `daily_metrics`). Доставка больше не воскрешает человеческий REJECTED (`resolve_post_send_status`).
 7. **Product-intel**: лог LLM-вердиктов `data/logs/llm_decisions.jsonl` (с DB id) + `otz llm-report --days N` (гистограмма confidence, what-if пороги 0.6/0.65/0.7, пограничные 0.55-0.75 с url); `otz districts-report` (незамапленные районы + готовые yaml-строки); price-drop алерты в nightly (≥`PRICE_DROP_MIN_PCT=5`%, только listings с PENDING/PUBLISHED match, cap 10 сообщений/ночь). Порог LLM 0.7 НЕ менялся — решение после 2-3 недель данных llm-report.
 8. **Тесты**: stages 2-4 матчера (`test_matcher_stages.py`), event-handling монитора (`test_monitor_events.py`), дедуп-гонка, миграция 0005 upgrade/downgrade, nightly-шаги, эквивалентность перфоманс-рефактора, admin actions/CSRF, отчёты, price-drop, delivery-guard.
@@ -216,17 +244,32 @@ ssh root@90.156.254.159 'journalctl -u otz-adhoc-<TS> -f'
 ### 5.3 Userbot #2 — `otz_logger.session` (log shipping)
 - Telethon session в `/opt/otz/data/otz_logger.session`
 - Используется ТОЛЬКО командой `ship-log` для отправки tail логов в **Saved Messages** того же аккаунта
-- Авторизация — `scripts/auth_logger.py` (одноразовая, требует SMS code)
+- Авторизация — **QR** (`scripts/auth_qr.py` с `OTZ_SESSION=otz_logger`, см. §5.4); legacy — `scripts/auth_logger.py` (по SMS-коду, после session-terminate обычно НЕ работает)
 - Можно вызывать concurrently с monitor.service — это разные session-файлы
 
 ### 5.4 Re-authorization (если sessions сломались)
-```bash
-# monitor session:
-ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && .venv/bin/python scripts/auth_telethon.py"'
 
-# logger session:
-ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && .venv/bin/python scripts/auth_logger.py"'
+**⚠️ Режим отказа (инцидент 13.06.2026):** если владелец «завершил все сеансы» в Telegram —
+обе userbot-сессии отзываются (`SessionRevokedError`). Но пока жива хоть одна app-сессия аккаунта
+(телефон/Desktop), Telegram отдаёт `SentCodeTypeApp` с `next_type=None` (SMS-фоллбэка НЕТ) и in-app код
+для входа сторонним клиентом придерживает. Значит вход **по коду** (`auth_telethon.py`/`auth_logger.py`)
+не работает. Реавторизуйся по **QR** — он использует живую сессию на телефоне как поручителя, коды не нужны.
+
+**Основной способ — QR-вход (`scripts/auth_qr.py`):**
+```bash
+# monitor session (по умолчанию tg_session_name=otz_monitor):
+ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && .venv/bin/python scripts/auth_qr.py"'
+# logger session — переопределить имя сессии через OTZ_SESSION:
+ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && OTZ_SESSION=otz_logger .venv/bin/python scripts/auth_qr.py"'
+# с облачным паролем 2FA (без stdin):
+ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && OTZ_2FA=<пароль> .venv/bin/python scripts/auth_qr.py"'
 ```
+На телефоне: **Настройки → Устройства → Привязать устройство** → сканировать ASCII-QR из терминала
+(или PNG `/tmp/otz_login_qr.png`). QR авто-обновляется каждые ~30с, окно ~20 мин; коды возврата 0/1.
+После успеха: `systemctl reset-failed otz-monitor && systemctl restart otz-monitor`.
+
+**Legacy — вход по коду (`scripts/auth_telethon.py` / `auth_logger.py`):** работает только если Telegram
+реально доставляет код; после массового «завершить все сеансы» обычно НЕ работает (см. режим отказа выше).
 
 ---
 

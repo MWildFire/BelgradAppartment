@@ -257,6 +257,101 @@ async def test_rolling_bumps_timestamp_on_error_to_rotate_queue(db):
     assert (await get_listing(dead)).details_refreshed_at is not None
 
 
+# ------------------------------------------------------------------ H1 refetch budget / cap
+
+
+async def test_refetch_deadline_skips_all_unprocessed_rows(db, monkeypatch):
+    """An already-passed deadline → ~0 rows processed, the rest counted as skipped (across
+    every platform, not just the first one in the loop)."""
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
+    n1 = await seed_listing("n1", price=100, title="t")
+    n2 = await seed_listing("n2", price=100, title="t")
+    c1 = await seed_listing("c1", platform=Platform.CETIRI_ZIDA, price=100, title="t")
+
+    def url(plat, ext):
+        return f"https://example.com/{plat.value}/{ext}"
+
+    rows = []
+    async with db_session.get_session() as s:
+        for lid in (n1, n2, c1):
+            row = await s.get(Listing, lid)
+            rows.append(type("R", (), {"id": row.id, "platform": row.platform, "url": row.url})())
+
+    n_details = {url(Platform.NEKRETNINE, e): detail_for(url(Platform.NEKRETNINE, e), Platform.NEKRETNINE, price_eur=100, title="t") for e in ("n1", "n2")}
+    c_details = {url(Platform.CETIRI_ZIDA, "c1"): detail_for(url(Platform.CETIRI_ZIDA, "c1"), Platform.CETIRI_ZIDA, price_eur=100, title="t")}
+    fake_n = make_fake_scraper(Platform.NEKRETNINE, n_details)
+    fake_c = make_fake_scraper(Platform.CETIRI_ZIDA, c_details)
+
+    import time as _time
+
+    stats = await orchestrator.refetch_listing_details(
+        rows,
+        scrapers={Platform.NEKRETNINE: fake_n, Platform.CETIRI_ZIDA: fake_c},
+        deadline=_time.monotonic() - 1,  # already in the past
+        sleep_between=0,
+    )
+
+    assert stats.updated == 0
+    assert stats.skipped == 3  # every row across both platforms
+    assert fake_n.fetched == []
+    assert fake_c.fetched == []
+
+
+async def test_refetch_no_deadline_processes_all_rows(db, monkeypatch):
+    """deadline=None → unchanged behavior: no early break, nothing skipped."""
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
+    lid = await seed_listing("k1", price=100, title="t")
+    async with db_session.get_session() as s:
+        row = await s.get(Listing, lid)
+        rows = [type("R", (), {"id": row.id, "platform": row.platform, "url": row.url})()]
+    u = f"https://example.com/{Platform.NEKRETNINE.value}/k1"
+    fake = make_fake_scraper(Platform.NEKRETNINE, {u: detail_for(u, Platform.NEKRETNINE, price_eur=100, title="t")})
+
+    stats = await orchestrator.refetch_listing_details(
+        rows, scrapers={Platform.NEKRETNINE: fake}, deadline=None, sleep_between=0
+    )
+
+    assert stats.updated == 1
+    assert stats.skipped == 0
+    assert fake.fetched == [u]
+
+
+async def test_refetch_per_fetch_cap_counts_slow_fetch_as_error(db, monkeypatch):
+    """A fetch_detail that sleeps past the per-fetch cap is counted as an error (not a hang),
+    and touch_on_error rotation still stamps details_refreshed_at."""
+    import asyncio as _asyncio
+
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
+    # Tiny cap so the test is fast; the slow fetch sleeps well past it.
+    settings = orchestrator.get_settings()
+    monkeypatch.setattr(settings, "refetch_per_fetch_timeout_sec", 0.05)
+
+    lid = await seed_listing("slow", price=100, title="t")
+    async with db_session.get_session() as s:
+        row = await s.get(Listing, lid)
+        rows = [type("R", (), {"id": row.id, "platform": row.platform, "url": row.url})()]
+
+    class _SlowFake:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+        async def fetch_detail(self, url):
+            await _asyncio.sleep(5)  # never completes within the 0.05s cap
+            raise AssertionError("should have been cancelled by the cap")
+
+    stats = await orchestrator.refetch_listing_details(
+        rows, scrapers={Platform.NEKRETNINE: _SlowFake}, touch_on_error=True, sleep_between=0
+    )
+
+    assert stats.errors == 1
+    assert stats.updated == 0
+    # touch_on_error rotation happened despite the timeout.
+    assert (await get_listing(lid)).details_refreshed_at is not None
+
+
 # ------------------------------------------------------------------ W2-C3 prune
 
 
@@ -336,17 +431,23 @@ async def test_metrics_no_drop_without_previous_snapshot(db):
 # ------------------------------------------------------------------ nightly step runner (cli)
 
 
-def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False):
+def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False, deadlines: list | None = None):
+    """`deadlines` (if given) records the `deadline=` value each refetch step received, so a
+    test can assert heal and rolling got the SAME shared deadline object."""
     calls: list[str] = []
 
-    async def fake_heal(*, limit):
+    async def fake_heal(*, limit, deadline=None):
         calls.append(f"heal:{limit}")
+        if deadlines is not None:
+            deadlines.append(deadline)
         if heal_raises:
             raise RuntimeError("heal exploded")
         return orchestrator.HealResult(selected=5, fixed=5, remaining=2, errors=0)
 
-    async def fake_rolling(*, limit):
+    async def fake_rolling(*, limit, deadline=None):
         calls.append(f"rolling:{limit}")
+        if deadlines is not None:
+            deadlines.append(deadline)
         return orchestrator.RollingRefreshResult(
             selected=10, refreshed=10, errors=0,
             price_changes=[
@@ -420,6 +521,54 @@ async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
     assert "деталей обновлено: 10, цен изменилось: 3" in lines
     assert price_changes  # rolling result still propagated
     assert alerts  # drop alert from metrics still emitted
+
+
+async def test_run_nightly_steps_shares_one_deadline_for_heal_and_rolling(monkeypatch):
+    """Heal and rolling must receive the SAME deadline so they jointly respect one budget."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 500)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 200)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    deadlines: list = []
+    _canned_step_stubs(monkeypatch, deadlines=deadlines)
+
+    await _run_nightly_steps()
+
+    assert len(deadlines) == 2
+    assert deadlines[0] is not None
+    assert deadlines[0] == deadlines[1]  # one shared deadline
+
+
+async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):
+    """When the budget is exhausted, the summary lines for heal and rolling report skipped."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 500)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 200)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+
+    async def fake_heal(*, limit, deadline=None):
+        return orchestrator.HealResult(selected=5, fixed=2, remaining=3, errors=0, skipped=3)
+
+    async def fake_rolling(*, limit, deadline=None):
+        return orchestrator.RollingRefreshResult(
+            selected=10, refreshed=4, errors=0, price_changes=[], skipped=6
+        )
+
+    monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
+
+    lines, _price_changes, _alerts = await _run_nightly_steps()
+
+    assert "heal: исправлено 2 / осталось 3, пропущено по бюджету: 3" in lines
+    assert "деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6" in lines
 
 
 async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):

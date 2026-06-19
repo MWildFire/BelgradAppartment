@@ -377,6 +377,7 @@ class DetailRefetchStats:
     updated: int = 0
     photos: int = 0
     errors: int = 0
+    skipped: int = 0  # rows left unprocessed when the wall-clock budget (deadline) ran out
     price_changes: list[PriceChange] = field(default_factory=list)  # see PriceChange
 
 
@@ -396,6 +397,7 @@ async def refetch_listing_details(
     sleep_between: float = 0.3,
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
     progress: Callable[[DetailRefetchStats, Any, Exception | None], None] | None = None,
+    deadline: float | None = None,
 ) -> DetailRefetchStats:
     """Re-fetch detail pages for `rows` of (id, platform, url) and update the stored listings.
 
@@ -403,6 +405,10 @@ async def refetch_listing_details(
     steps. `touch_on_error=True` bumps `details_refreshed_at` even on failures so the rolling
     queue rotates past permanently-dead rows (404 etc.) instead of starving on them forever.
     `progress(stats, row, error)` is called after every row attempt (error=None on success).
+
+    `deadline` is a `time.monotonic()` target: once it passes, ALL still-unprocessed rows
+    (across every platform) are counted in `stats.skipped` and processing stops cleanly, so a
+    night of slow Cloudflare-challenged refetches can't overrun a shared wall-clock budget.
     """
     if scrapers is None:
         from src.scrapers import SCRAPERS  # lazy: avoids circular import
@@ -414,12 +420,23 @@ async def refetch_listing_details(
     for row in rows:
         by_platform.setdefault(row.platform, []).append(row)
 
+    budget_exhausted = False
     for plat, plat_rows in by_platform.items():
+        if budget_exhausted:
+            # Deadline already hit in an earlier platform — count this whole platform's rows.
+            stats.skipped += len(plat_rows)
+            continue
         scraper_cls = scrapers[plat]
         attempted = 0
         try:
             async with scraper_cls() as scraper:
                 for row in plat_rows:
+                    if deadline is not None and time.monotonic() > deadline:
+                        # Stop ALL remaining work; un-attempted rows here + every later
+                        # platform's rows are skipped (counted below / in the outer loop).
+                        budget_exhausted = True
+                        stats.skipped += len(plat_rows) - attempted
+                        break
                     attempted += 1
                     try:
                         outcome = await _refetch_one_listing(
@@ -473,7 +490,13 @@ async def _refetch_one_listing(
     download_photos: bool,
     touch_refreshed_at: bool,
 ) -> _RefetchOutcome | None:
-    detail = await scraper.fetch_detail(url)
+    # Hard cap one fetch: a pathological page (goto + content-poll × retries + browser recycle)
+    # can otherwise run minutes. TimeoutError raises here and is handled by the caller's
+    # `except Exception` (asyncio.TimeoutError subclasses Exception) like any other fetch failure.
+    detail = await asyncio.wait_for(
+        scraper.fetch_detail(url),
+        timeout=get_settings().refetch_per_fetch_timeout_sec,
+    )
     if not detail.photo_urls and detail.price_eur is None and detail.title is None:
         raise RuntimeError("still an empty payload")
 
@@ -536,6 +559,7 @@ class HealResult:
     fixed: int
     remaining: int
     errors: int
+    skipped: int = 0  # rows left unprocessed when the shared nightly budget ran out
 
 
 # "Broken" = active listing the matcher can't see: no photo hashes at all.
@@ -546,6 +570,7 @@ async def heal_broken_listings(
     *,
     limit: int = 500,
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
+    deadline: float | None = None,
 ) -> HealResult:
     """W2-C1: re-fetch details/photos for up to `limit` broken active listings.
 
@@ -571,6 +596,7 @@ async def heal_broken_listings(
         touch_refreshed_at=True,
         touch_on_error=True,
         scrapers=scrapers,
+        deadline=deadline,
     )
 
     selected_ids = [r.id for r in rows]
@@ -588,14 +614,15 @@ async def heal_broken_listings(
             await s.execute(select(func.count(Listing.id)).where(*_BROKEN_LISTING))
         ).scalar_one()
     logger.info(
-        "[heal] selected=%d fixed=%d remaining=%d errors=%d",
-        len(rows), len(rows) - still_broken_selected, remaining, stats.errors,
+        "[heal] selected=%d fixed=%d remaining=%d errors=%d skipped=%d",
+        len(rows), len(rows) - still_broken_selected, remaining, stats.errors, stats.skipped,
     )
     return HealResult(
         selected=len(rows),
         fixed=len(rows) - still_broken_selected,
         remaining=remaining,
         errors=stats.errors,
+        skipped=stats.skipped,
     )
 
 
@@ -608,12 +635,14 @@ class RollingRefreshResult:
     refreshed: int
     errors: int
     price_changes: list[PriceChange]
+    skipped: int = 0  # rows left unprocessed when the shared nightly budget ran out
 
 
 async def rolling_detail_refresh(
     *,
     limit: int = 200,
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
+    deadline: float | None = None,
 ) -> RollingRefreshResult:
     """W2-C2: re-fetch details for the `limit` ACTIVE listings with the oldest
     `details_refreshed_at` (NULL = never → first), split evenly across platforms.
@@ -651,16 +680,18 @@ async def rolling_detail_refresh(
         touch_refreshed_at=True,
         touch_on_error=True,
         scrapers=scrapers,
+        deadline=deadline,
     )
     logger.info(
-        "[rolling-refresh] selected=%d refreshed=%d price_changes=%d errors=%d",
-        len(rows), stats.updated, len(stats.price_changes), stats.errors,
+        "[rolling-refresh] selected=%d refreshed=%d price_changes=%d errors=%d skipped=%d",
+        len(rows), stats.updated, len(stats.price_changes), stats.errors, stats.skipped,
     )
     return RollingRefreshResult(
         selected=len(rows),
         refreshed=stats.updated,
         errors=stats.errors,
         price_changes=stats.price_changes,
+        skipped=stats.skipped,
     )
 
 

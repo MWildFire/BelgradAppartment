@@ -108,9 +108,9 @@ cat >/etc/systemd/system/otz-monitor.service <<UNIT
 Description=otz-rent-finder — live Telegram monitor
 After=network-online.target
 Wants=network-online.target
-# Telegram alert fires only when restarts are EXHAUSTED (unit enters failed state).
-# With RestartSec=30 the default 10s rate-limit window would never trip — so the
-# unit would restart forever and OnFailure would never fire. 5 crashes / 10 min:
+# OnFailure fires on EVERY transition to failed (including between Restart cycles) — NOT only
+# when restarts are exhausted. StartLimit*/Restart bound HOW MANY times we fail (and thus how
+# many alerts), not whether OnFailure is single-shot. 5 crashes / 10 min then StartLimit trips:
 StartLimitIntervalSec=600
 StartLimitBurst=5
 OnFailure=otz-notify-failure@%n.service
@@ -123,6 +123,9 @@ Environment="PATH=$OTZ_HOME/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/
 ExecStart=/usr/bin/xvfb-run -a $OTZ_HOME/.venv/bin/python -m src.cli monitor
 Restart=on-failure
 RestartSec=30
+# Exit 3 = Telethon session revoked/unauthorized: re-auth is the only fix, so do NOT crash-loop.
+# Go straight to failed ONCE (one OnFailure → one alert). Transient errors (exit 1) still restart.
+RestartPreventExitStatus=3
 StandardOutput=append:/var/log/otz/monitor.log
 StandardError=append:/var/log/otz/monitor.log
 

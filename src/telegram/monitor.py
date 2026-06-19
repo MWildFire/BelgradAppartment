@@ -50,8 +50,29 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- Client
 
 
+class SessionNotAuthorized(RuntimeError):
+    """Telethon session missing/revoked. Caller must alert + exit; never prompt under systemd."""
+
+
+async def connect_authorized(client: TelegramClient) -> None:
+    """Connect WITHOUT interactive login; raise SessionNotAuthorized if the session is dead.
+
+    start()'s phone/code prompt must never run under systemd — re-auth via scripts/auth_qr.py.
+    """
+    await client.connect()
+    if not await client.is_user_authorized():
+        raise SessionNotAuthorized(
+            "Telethon session not authorized — re-auth via scripts/auth_qr.py"
+        )
+
+
 def make_client() -> TelegramClient:
-    """Construct a Telethon client using settings from .env. Caller must await client.start()."""
+    """Construct a Telethon client using settings from .env.
+
+    Service callers (monitor, delivery) MUST use `connect_authorized()` so a revoked session
+    fails loudly instead of prompting on a non-interactive systemd unit. Only the interactive
+    auth command may call `client.start()` (it runs at a terminal where prompting is correct).
+    """
     settings = get_settings()
     if not settings.tg_api_id or not settings.tg_api_hash:
         raise RuntimeError("TG_API_ID / TG_API_HASH missing in .env — get from my.telegram.org")
@@ -258,8 +279,10 @@ def register_live_handler(
 # Re-export for tests / callers that import from monitor directly.
 __all__ = [
     "BackfillStats",
+    "SessionNotAuthorized",
     "add_source",
     "backfill",
+    "connect_authorized",
     "make_client",
     "parse_channel_identifier",
     "register_live_handler",

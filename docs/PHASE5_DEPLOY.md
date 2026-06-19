@@ -363,21 +363,27 @@ systemd запускает инстанс шаблона `otz-notify-failure@.se
 `otz notify-failure --service <имя-юнита>` и шлёт 🚨-сообщение получателям бота.
 Юниты ставит `scripts/vps_install.sh` (heredoc, перезапись на месте — идемпотентно).
 
-**Когда срабатывает:**
+**Когда срабатывает:** OnFailure летит на **КАЖДЫЙ** переход юнита в `failed`, включая короткий
+`failed` между циклами `Restart=on-failure`. StartLimit/Restart задают, СКОЛЬКО будет рестартов
+(и значит алертов), а не «один алерт в конце».
 
 - `otz-nightly-refresh`, `otz-daily-summary` (oneshot) — алерт на **каждый** упавший запуск.
   `ExecStartPost=-…ship-log` с дефисом — падение шипинга логов алерт НЕ триггерит.
-- `otz-monitor` — алерт только когда рестарты **исчерпаны**: `Restart=on-failure` +
-  `StartLimitBurst=5` / `StartLimitIntervalSec=600`. То есть 5 стартов за 10 минут →
-  systemd сдаётся, юнит уходит в `failed`, летит алерт. На каждый одиночный рестарт
-  алерта нет. Важно: дефолтное окно 10 с с нашим `RestartSec=30` не сработало бы
-  никогда — потому значения заданы явно. Если monitor умирает реже, чем раз в ~2 мин,
-  лимит не выбирается и он рестартует вечно (это видно в утреннем ship-log monitor.log).
+- `otz-monitor` — `Restart=on-failure`, `RestartSec=30`, `StartLimitBurst=5`/`Interval=600`.
+  Транзиентный краш (exit 1): до 5 рестартов за 10 мин, **каждый рестарт = переход в `failed` = алерт**,
+  затем start-limit → итоговый `failed`. ⚠️ Инцидент 13.06.2026: отозванная Telethon-сессия
+  крэш-лупила монитор 6× за ~3 мин → **6 почти одинаковых алертов** (storm). Дефолтное окно 10 с
+  с `RestartSec=30` не выбралось бы никогда — потому лимиты заданы явно.
+- **Потеря сессии (exit 3) больше НЕ рестартует**: `RestartPreventExitStatus=3` → один `failed` →
+  один алерт. Рестартом это не лечится — нужна **реавторизация** (`scripts/auth_qr.py`, HANDOFF §5.4).
+  Нотификатор вдобавок де-дуплицирует алерты одного юнита в окне ~10 мин (маркер `/var/log/otz/.last_alert_*`).
 
 **После алерта monitor лежит** — чинить и поднимать руками:
 
 ```bash
 journalctl -u otz-monitor -n 100            # понять причину
+# если "session not authorized / SessionRevoked" (exit 3) → реавторизация по QR:
+ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && .venv/bin/python scripts/auth_qr.py"'
 sudo systemctl reset-failed otz-monitor     # сбросить счётчик стартов
 sudo systemctl restart otz-monitor
 ```

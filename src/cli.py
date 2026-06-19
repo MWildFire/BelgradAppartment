@@ -414,6 +414,33 @@ async def _reset_source(source_id: int, start_date: str | None) -> None:
         )
 
 
+_AUTH_LOST_ALERT = (
+    "🔐 otz-monitor: сессия Telethon отозвана — userbot не может работать. "
+    "Реавторизуйтесь: python scripts/auth_qr.py, затем systemctl restart otz-monitor"
+)
+
+
+async def _alert_auth_lost() -> None:
+    """Send the auth-loss alert through the bot DIRECTLY (one message).
+
+    Must NOT go via send_text_to_recipients(None, ...): under the default bot mode that path is
+    fine, but under userbot mode it raises DeliveryError and the alert would be swallowed — so we
+    call the bot sender directly. No-op (logged) if no bot token is configured.
+    """
+    settings = get_settings()
+    if not settings.tg_bot_token:
+        logging.getLogger(__name__).error(
+            "Telethon session revoked but TG_BOT_TOKEN unset — cannot alert; re-auth via scripts/auth_qr.py"
+        )
+        return
+    try:
+        from src.telegram.bot_delivery import send_text_via_bot
+
+        await send_text_via_bot(_AUTH_LOST_ALERT)
+    except Exception:
+        logging.getLogger(__name__).exception("auth-loss bot alert failed to send")
+
+
 @cli.command("monitor")
 @click.option("--no-backfill", is_flag=True, help="Skip initial backfill — go straight to live.")
 def monitor(no_backfill: bool) -> None:
@@ -422,11 +449,15 @@ def monitor(no_backfill: bool) -> None:
 
 
 async def _monitor(do_backfill_first: bool) -> None:
+    from telethon.errors import AuthKeyDuplicatedError, UnauthorizedError
+
     from src.db.models import InboundPost, InboundStatus
     from src.db.session import get_session
     from src.jobs.pipeline import process_new_inbound
     from src.telegram.monitor import (
+        SessionNotAuthorized,
         backfill as run_backfill,
+        connect_authorized,
         make_client,
         register_live_handler,
     )
@@ -443,7 +474,16 @@ async def _monitor(do_backfill_first: bool) -> None:
         return
 
     client = make_client()
-    await client.start()
+    # Startup auth gate: a revoked/missing session must alert ONCE and exit 3 (non-restarting
+    # via RestartPreventExitStatus=3) — NEVER fall through to start()'s phone prompt on systemd.
+    try:
+        await connect_authorized(client)
+    except SessionNotAuthorized:
+        logging.getLogger(__name__).error(
+            "Telethon session not authorized at startup — re-auth via scripts/auth_qr.py"
+        )
+        await _alert_auth_lost()
+        raise SystemExit(3)
 
     # Single client shared between live handler, backfill, and Saved-Messages delivery.
     async def on_inbound(inbound_id: int) -> None:
@@ -528,6 +568,17 @@ async def _monitor(do_backfill_first: bool) -> None:
 
         click.echo("Live monitor running — Ctrl+C to stop.")
         await client.run_until_disconnected()
+    except (UnauthorizedError, AuthKeyDuplicatedError):
+        # Session revoked at RUNTIME (e.g. SessionRevokedError from GetDifferenceRequest).
+        # SessionRevokedError / AuthKeyUnregisteredError subclass UnauthorizedError; the
+        # duplicated-key case is separate. Alert ONCE and exit 3 → unit goes to failed without
+        # crash-looping (RestartPreventExitStatus=3). reset-failed/start can't fix a revoked
+        # session — only re-auth (scripts/auth_qr.py) can.
+        logging.getLogger(__name__).error(
+            "Telethon session revoked at runtime — re-auth via scripts/auth_qr.py"
+        )
+        await _alert_auth_lost()
+        raise SystemExit(3)
     finally:
         await client.disconnect()
 
@@ -979,9 +1030,11 @@ async def _open_userbot_if_needed():
     settings = get_settings()
     if (settings.tg_delivery_mode or "userbot").lower() == "bot":
         return None
-    from src.telegram.monitor import make_client
+    from src.telegram.monitor import connect_authorized, make_client
     c = make_client()
-    await c.start()
+    # Service context: never prompt for a code. A dead session raises SessionNotAuthorized,
+    # which surfaces loudly to the caller instead of hanging on start()'s phone prompt.
+    await connect_authorized(c)
     return c
 
 
@@ -1299,17 +1352,28 @@ async def _run_nightly_steps() -> NightlyStepsResult:
         snapshot_daily_metrics,
     )
 
+    import time as _time
+
     settings = get_settings()
     log = logging.getLogger(__name__)
     lines: list[str] = []
     alerts: list[str] = []
     price_changes: list[PriceChange] = []
 
+    # ONE wall-clock deadline shared by heal+rolling: jointly they cannot overrun the budget
+    # (the 2026-06-16 SIGTERM was slow Cloudflare-challenged refetches running unbounded).
+    refetch_deadline = _time.monotonic() + settings.nightly_refetch_budget_sec
+
     if settings.nightly_heal_limit > 0:
         click.echo(f"\n→ Heal broken listings (limit={settings.nightly_heal_limit})…")
         try:
-            heal = await heal_broken_listings(limit=settings.nightly_heal_limit)
-            lines.append(f"heal: исправлено {heal.fixed} / осталось {heal.remaining}")
+            heal = await heal_broken_listings(
+                limit=settings.nightly_heal_limit, deadline=refetch_deadline
+            )
+            line = f"heal: исправлено {heal.fixed} / осталось {heal.remaining}"
+            if heal.skipped:
+                line += f", пропущено по бюджету: {heal.skipped}"
+            lines.append(line)
         except Exception:
             log.exception("nightly step failed: heal")
             lines.append("🚨 heal-шаг упал — см. логи")
@@ -1319,12 +1383,17 @@ async def _run_nightly_steps() -> NightlyStepsResult:
     if settings.nightly_detail_refresh > 0:
         click.echo(f"→ Rolling detail refresh (limit={settings.nightly_detail_refresh})…")
         try:
-            rolling = await rolling_detail_refresh(limit=settings.nightly_detail_refresh)
+            rolling = await rolling_detail_refresh(
+                limit=settings.nightly_detail_refresh, deadline=refetch_deadline
+            )
             price_changes = rolling.price_changes
-            lines.append(
+            line = (
                 f"деталей обновлено: {rolling.refreshed}, "
                 f"цен изменилось: {len(rolling.price_changes)}"
             )
+            if rolling.skipped:
+                line += f", пропущено по бюджету: {rolling.skipped}"
+            lines.append(line)
         except Exception:
             log.exception("nightly step failed: detail-refresh")
             lines.append("🚨 detail-refresh шаг упал — см. логи")
@@ -2241,18 +2310,55 @@ def notify_failure(service: str, reason: str | None) -> None:
     asyncio.run(_notify_failure(service, reason))
 
 
+_NOTIFY_MARKER_DIR = "/var/log/otz"
+_NOTIFY_COOLDOWN_SECONDS = 600  # 10 min — collapse a residual N-transition storm to one message
+
+
+def _notify_recently_sent(service: str) -> bool:
+    """True if an alert for `service` was sent within the cooldown.
+
+    Best-effort: any read/write error is swallowed (returns False / no-op) so a marker problem
+    can never suppress *and* never crash the alert path.
+    """
+    import os
+    import time
+
+    marker = os.path.join(_NOTIFY_MARKER_DIR, f".last_alert_{service}")
+    try:
+        age = time.time() - os.path.getmtime(marker)
+        return age < _NOTIFY_COOLDOWN_SECONDS
+    except OSError:
+        return False
+
+
+def _notify_mark_sent(service: str) -> None:
+    import os
+
+    marker = os.path.join(_NOTIFY_MARKER_DIR, f".last_alert_{service}")
+    try:
+        os.makedirs(_NOTIFY_MARKER_DIR, exist_ok=True)
+        with open(marker, "w") as fh:
+            fh.write("")
+    except OSError:
+        logging.getLogger(__name__).warning("could not write alert marker %s", marker)
+
+
 async def _notify_failure(service: str, reason: str | None) -> None:
     from datetime import datetime, timezone
 
     from src.telegram.delivery import send_text_to_recipients
 
+    # De-dupe: OnFailure fires on every transition to failed, so a Restart cycle can emit several
+    # in a row. Suppress repeats within the cooldown so the storm collapses to one message.
+    if _notify_recently_sent(service):
+        click.echo(f"↩ alert for {service} suppressed (within cooldown)")
+        return
+
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    # OnFailure fires when the unit ENTERS failed state (scripts/vps_install.sh): for
-    # otz-monitor that means restarts are EXHAUSTED (StartLimitBurst) — it is down and will
-    # NOT come back by itself; the oneshot units (nightly-refresh, daily-summary) never
-    # restart at all. No "systemd сейчас рестартует" — needs hands.
+    # OnFailure fires on EVERY transition to failed (incl. between Restart cycles), not only when
+    # restarts are exhausted. We just report the failed state and what to do next.
     lines = [
-        f"🚨 {service}: unit в состоянии failed — авторестартов больше не будет.",
+        f"🚨 {service}: unit в состоянии failed.",
         f"⏱ {ts}",
     ]
     if reason:
@@ -2260,13 +2366,24 @@ async def _notify_failure(service: str, reason: str | None) -> None:
     lines.append("")
     lines.append(f"Логи: journalctl -u {service} -n 100")
     if "monitor" in service:
+        # A revoked session can't be fixed by reset-failed/start — it needs re-auth.
         lines.append(
-            f"Поднять: systemctl reset-failed {service} && systemctl start {service}"
+            f"Если сессия отозвана: python scripts/auth_qr.py, затем systemctl restart {service}"
+        )
+        lines.append(
+            f"Иначе поднять: systemctl reset-failed {service} && systemctl start {service}"
         )
 
-    client = await _open_userbot_if_needed()
+    # Never let a dead userbot session crash the notifier itself: in userbot mode a
+    # revoked session raises SessionNotAuthorized here, but the alert (bot mode) must still go out.
+    try:
+        client = await _open_userbot_if_needed()
+    except Exception as e:
+        click.echo(f"⚠ userbot unavailable for alert ({e}); continuing", err=True)
+        client = None
     try:
         await send_text_to_recipients(client, "\n".join(lines))
+        _notify_mark_sent(service)
         click.echo(f"✓ alert sent for {service}")
     except Exception as e:
         click.echo(f"⚠ alert failed: {e}", err=True)
