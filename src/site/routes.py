@@ -1,0 +1,241 @@
+"""Public catalog routes (DATA_CONTRACT §2 — exact template names + context keys).
+
+Every catalog/facets/map read goes through the in-process TTL cache (src/site/cache.py),
+keyed by the normalized query params. POST /lead and /healthz are never cached.
+
+The DB url for reads is injected via Depends(catalog_db_url) — the test seam. Templates live
+on the module-level `templates` object so tests can swap it for a DictLoader stub and assert
+the selected template + context without depending on agent D's real markup.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.templating import Jinja2Templates
+
+from src.site import cache, readmodel
+from src.site.deps import (
+    SITE_CSRF_TOKEN,
+    catalog_db_url,
+    enforce_lead_ratelimit,
+    require_site_csrf,
+)
+from src.site.leads import LeadPayload, LeadValidationError, create_lead
+from src.site.readmodel import Filters
+
+logger = logging.getLogger(__name__)
+
+TEMPLATES_DIR = Path(__file__).parent / "templates"
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.globals["csrf_token"] = SITE_CSRF_TOKEN
+
+router = APIRouter()
+
+# How many freshest listings the homepage features.
+FEATURED_N = 6
+
+
+# --------------------------------------------------------------------------- helpers
+
+
+def _parse_filters(request: Request) -> tuple[Filters, str, int]:
+    """Parse §3 query params → (Filters, sort, page). Multivalued: district, rooms."""
+    qp = request.query_params
+    price_min = _as_int(qp.get("price_min"))
+    price_max = _as_int(qp.get("price_max"))
+    page = _as_int(qp.get("page")) or 1
+    sort = qp.get("sort") or "new"
+    filters = Filters(
+        vnj=qp.get("vnj") == "1",
+        wc=qp.get("wc") == "1",
+        district=qp.getlist("district"),
+        price_min=price_min,
+        price_max=price_max,
+        rooms=qp.getlist("rooms"),
+        show_rented=qp.get("show_rented") == "1",
+    )
+    return filters, sort, max(page, 1)
+
+
+def _as_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _catalog_key(request: Request) -> tuple:  # type: ignore[type-arg]
+    """Normalized cache key from the catalog query params (order/empty-insensitive)."""
+    qp = request.query_params
+    return cache.normalize_catalog_key(
+        {
+            "vnj": qp.get("vnj"),
+            "wc": qp.get("wc"),
+            "district": qp.getlist("district"),
+            "price_min": qp.get("price_min"),
+            "price_max": qp.get("price_max"),
+            "rooms": qp.getlist("rooms"),
+            "sort": qp.get("sort"),
+            "page": qp.get("page"),
+            "show_rented": qp.get("show_rented"),
+        }
+    )
+
+
+async def _cached_catalog(
+    request: Request, db_url: str
+) -> tuple[list[readmodel.SiteListingView], int]:
+    key = _catalog_key(request)
+    cached = cache.catalog_cache.get(key)
+    if cached is not cache.MISS:
+        return cached
+    filters, sort, page = _parse_filters(request)
+    result = await readmodel.list_public(filters, sort=sort, page=page, database_url=db_url)
+    cache.catalog_cache.set(key, result)
+    return result
+
+
+async def _cached_facets(db_url: str) -> readmodel.Facets:
+    key = ("facets",)
+    cached = cache.facets_cache.get(key)
+    if cached is not cache.MISS:
+        return cached
+    result = await readmodel.facets(database_url=db_url)
+    cache.facets_cache.set(key, result)
+    return result
+
+
+async def _cached_map(db_url: str) -> list[dict[str, object]]:
+    key = ("map",)
+    cached = cache.map_cache.get(key)
+    if cached is not cache.MISS:
+        return cached
+    result = await readmodel.map_points(database_url=db_url)
+    cache.map_cache.set(key, result)
+    return result
+
+
+def _applied(request: Request) -> dict[str, object]:
+    """Echo back the applied filters so templates can render active state / deep-links."""
+    qp = request.query_params
+    return {
+        "vnj": qp.get("vnj") == "1",
+        "wc": qp.get("wc") == "1",
+        "district": qp.getlist("district"),
+        "price_min": _as_int(qp.get("price_min")),
+        "price_max": _as_int(qp.get("price_max")),
+        "rooms": qp.getlist("rooms"),
+        "sort": qp.get("sort") or "new",
+        "page": _as_int(qp.get("page")) or 1,
+        "show_rented": qp.get("show_rented") == "1",
+    }
+
+
+# --------------------------------------------------------------------------- routes
+
+
+@router.get("/healthz")
+async def healthz() -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
+@router.get("/", response_class=HTMLResponse)
+async def index(request: Request, db_url: str = Depends(catalog_db_url)) -> HTMLResponse:
+    items, _total = await readmodel.list_public(
+        Filters(), sort="new", page=1, page_size=FEATURED_N, database_url=db_url
+    )
+    facets = await _cached_facets(db_url)
+    stats = {
+        "active": facets.counts.get("total", 0),
+        "districts": len(facets.districts),
+        "vnj": facets.counts.get("vnj", 0),
+        "white_card": facets.counts.get("white_card", 0),
+    }
+    return templates.TemplateResponse(
+        request, "index.html", {"featured": items, "stats": stats}
+    )
+
+
+@router.get("/catalog", response_class=HTMLResponse)
+async def catalog(request: Request, db_url: str = Depends(catalog_db_url)) -> HTMLResponse:
+    items, total = await _cached_catalog(request, db_url)
+    facets = await _cached_facets(db_url)
+    context = {
+        "items": items,
+        "facets": facets,
+        "applied": _applied(request),
+        "total": total,
+    }
+    # HTMX swaps only the results grid + pagination; full-page request gets the shell.
+    template = "partials/_results.html" if "hx-request" in request.headers else "catalog.html"
+    return templates.TemplateResponse(request, template, context)
+
+
+@router.get("/apt/{site_listing_id}", response_class=HTMLResponse)
+async def apt(
+    request: Request, site_listing_id: int, db_url: str = Depends(catalog_db_url)
+) -> HTMLResponse:
+    item = await readmodel.get_public(site_listing_id, database_url=db_url)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    similar = await readmodel.similar(item, limit=4, database_url=db_url)
+    return templates.TemplateResponse(
+        request, "apt.html", {"item": item, "similar": similar}
+    )
+
+
+@router.get("/map", response_class=HTMLResponse)
+async def map_view(request: Request) -> HTMLResponse:
+    # Data is fetched client-side from /api/map.json; the page itself carries no listings.
+    return templates.TemplateResponse(request, "map.html", {})
+
+
+@router.get("/api/map.json")
+async def map_json(db_url: str = Depends(catalog_db_url)) -> JSONResponse:
+    points = await _cached_map(db_url)
+    return JSONResponse({"points": points})
+
+
+@router.get("/calculator", response_class=HTMLResponse)
+async def calculator(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "calculator.html", {})
+
+
+@router.post("/lead")
+async def lead(
+    request: Request,
+    name: str = Form(""),
+    contact: str = Form(""),
+    budget_eur: str = Form(""),
+    districts: str = Form(""),
+    rooms: str = Form(""),
+    message: str = Form(""),
+    company: str = Form(""),  # honeypot — real users never see/fill it
+    _csrf: None = Depends(require_site_csrf),
+    _rl: None = Depends(enforce_lead_ratelimit),
+    db_url: str = Depends(catalog_db_url),
+) -> Response:
+    payload = LeadPayload(
+        name=name,
+        contact=contact,
+        budget_eur=_as_int(budget_eur),
+        districts=districts or None,
+        rooms=rooms or None,
+        message=message or None,
+        company=company or None,
+    )
+    try:
+        await create_lead(payload, database_url=db_url)
+    except LeadValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    # honeypot trip returns None from create_lead → still respond OK (silent to the bot).
+    if "hx-request" in request.headers:
+        return templates.TemplateResponse(request, "partials/_lead_ok.html", {})
+    return RedirectResponse(url="/?lead=ok", status_code=status.HTTP_303_SEE_OTHER)

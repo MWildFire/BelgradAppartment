@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}RentBelgrad — квартиры в Белграде для своих{% endblock %}
+
+{% block content %}
+<!-- HERO -->
+<section class="hero wrap">
+  <div class="hero-grid">
+    <div>
+      <p class="kicker">белград · аренда · релокация</p>
+      <h1>Снять квартиру <br>в Белграде <br><span class="ox">по-человечески</span></h1>
+      <p class="hero-lede">Помогаем релокантам найти жильё на длинный срок — с договором, который проходит на <span style="color:var(--navy);font-weight:600">ВНЖ</span> и белый картон.</p>
+
+      <form class="searchbar" method="get" action="/catalog">
+        <div class="seg" style="flex:1.4">
+          <span>Район</span>
+          <input name="district" placeholder="Врачар, Дорћол…" aria-label="Район">
+        </div>
+        <div class="seg">
+          <span>Цена €</span>
+          <input name="price_max" type="number" inputmode="numeric" min="0" placeholder="до 700" aria-label="Цена до, евро">
+        </div>
+        <div class="seg">
+          <span>Комнат</span>
+          <select name="rooms" aria-label="Комнат">
+            <option value="">любое</option>
+            <option value="studio">студия</option>
+            <option value="1">1+1</option>
+            <option value="2">2+1</option>
+            <option value="3+">3+1</option>
+          </select>
+        </div>
+        <button class="go" type="submit">Найти</button>
+      </form>
+
+      <div class="stat-row">
+        <div class="stat"><div class="n mono">{{ stats.active|default(0) }}</div><div class="l">квартир в каталоге</div></div>
+        <div class="stat"><div class="n mono">{{ stats.districts|default(0) }}</div><div class="l">районов</div></div>
+        <div class="stat"><div class="n">€0</div><div class="l">комиссия с тебя</div></div>
+      </div>
+    </div>
+
+    <div class="hero-side">
+      <div class="hero-photo">
+        {% if featured and featured[0].photos %}
+          <img src="{{ featured[0].photos[0] }}" alt="Квартира недели в районе {{ featured[0].district }}">
+        {% endif %}
+        <span class="ph-note">квартира недели</span>
+        <div class="tagline">
+          {% if featured %}
+            <div class="k">квартира недели</div>
+            <div class="t">{{ featured[0].rooms }} <br>в районе {{ featured[0].district }}</div>
+          {% else %}
+            <div class="k">скоро здесь</div>
+            <div class="t">Свежие квартиры <br>из @RentBelgrad</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MARQUEE -->
+<div class="strip" aria-hidden="true">
+  <div class="track">
+    <span>Врачар</span><i>/</i><span>Дорћол</span><i>/</i><span>Стари град</span><i>/</i><span>Нови Београд</span><i>/</i><span>Земун</span><i>/</i><span>Савски венац</span><i>/</i><span>Звездара</span><i>/</i><span>Палилула</span><i>/</i>
+    <span>Врачар</span><i>/</i><span>Дорћол</span><i>/</i><span>Стари град</span><i>/</i><span>Нови Београд</span><i>/</i><span>Земун</span><i>/</i><span>Савски венац</span><i>/</i><span>Звездара</span><i>/</i><span>Палилула</span><i>/</i>
+  </div>
+</div>
+
+<!-- FEED (from Telegram channel) -->
+<section class="bay wrap" id="feed">
+  <div class="sec-head">
+    <div>
+      <div class="idx">01 / каталог</div>
+      <h2>Свежие квартиры</h2>
+    </div>
+    <a class="more" href="/catalog">Весь каталог →</a>
+  </div>
+
+  <div class="feed-note"><span class="dot" aria-hidden="true"></span> обновляется автоматически из <b style="color:var(--ink)">@RentBelgrad</b></div>
+
+  {% if featured %}
+    <div class="cards">
+      {% for item in featured %}{% include "partials/_card.html" %}{% endfor %}
+    </div>
+  {% else %}
+    <div class="empty"><div class="big">Пока пусто</div><p>Первые квартиры появятся здесь сразу после публикации в канале.</p></div>
+  {% endif %}
+</section>
+
+<hr class="rule wrap">
+
+<!-- HOW -->
+<section class="bay wrap" id="how">
+  <div class="sec-head">
+    <div><div class="idx">02 / процесс</div><h2>Как мы работаем</h2></div>
+    <p style="max-width:30ch;color:var(--ink-2);font-size:var(--step--1)">Не маркетплейс. Живой агент ведёт за руку от первого сообщения до регистрации адреса.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="no">01 / заявка</div><h3>Расскажи, что нужно</h3><p>Район, бюджет, сроки, нужен ли договор под ВНЖ. Пара минут в Telegram.</p></div>
+    <div class="step"><div class="no">02 / подборка</div><h3>Готовим 3–5 вариантов</h3><p>Отбираем вручную, отсекаем то, что не проходит на боравиште.</p></div>
+    <div class="step"><div class="no">03 / просмотр</div><h3>Ходим на показ вместе</h3><p>Переводим, торгуемся, проверяем счётчики и состояние.</p></div>
+    <div class="step"><div class="no">04 / договор</div><h3>Оформляем ugovor</h3><p>Подписание, регистрация адреса, справки для ВНЖ. Всё под ключ.</p></div>
+  </div>
+</section>
+
+<!-- TRUST / VNJ -->
+<section class="bay wrap" id="vnj">
+  <div class="split">
+    <div>
+      <div class="idx" style="font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3);margin-bottom:1rem">03 / почему мы</div>
+      <h2>Договор, который реально проходит на ВНЖ</h2>
+      <p>Большая часть объявлений в Белграде — «на честном слове». Мы работаем только с хозяевами, готовыми оформить официальный ugovor с регистрацией в МУПе.</p>
+      <div class="checks">
+        <div class="c"><span class="num">01</span><span><b>Проверяем хозяина</b> — есть ли право сдавать, готов ли к официальному договору.</span></div>
+        <div class="c"><span class="num">02</span><span><b>Сопровождаем сделку</b> — на подписании рядом человек, говорящий по-русски и по-сербски.</span></div>
+        <div class="c"><span class="num">03</span><span><b>Помогаем с боравиштем</b> — регистрация адреса и пакет справок для ВНЖ.</span></div>
+        <div class="c"><span class="num">04</span><span><b>Комиссию платит хозяин</b> — для тебя поиск и сопровождение бесплатны.</span></div>
+      </div>
+    </div>
+    <div class="photo"><span class="ph-note">фото: подписание договора / агент с клиентом</span></div>
+  </div>
+</section>
+
+<!-- LEAD FORM -->
+<section class="bay wrap">
+  {% include "partials/_lead_form.html" %}
+</section>
+{% endblock %}

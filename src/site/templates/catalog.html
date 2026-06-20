@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Каталог квартир в Белграде — RentBelgrad{% endblock %}
+
+{% block content %}
+<section class="bay wrap">
+  <div class="sec-head">
+    <div>
+      <div class="idx">каталог</div>
+      <h2>Квартиры в Белграде</h2>
+    </div>
+    <p style="max-width:34ch;color:var(--ink-2);font-size:var(--step--1)">ВНЖ и белый картон — сразу в фильтрах. «Снято» оставляем видимым: это соц.доказательство.</p>
+  </div>
+
+  <div class="catalog-grid">
+    {# filter rail — ВНЖ + белый картон prominent on top #}
+    {% include "partials/_filters.html" %}
+
+    {# results: grid + pagination (the HTMX swap target) #}
+    {% include "partials/_results.html" %}
+  </div>
+</section>
+{% endblock %}

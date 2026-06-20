@@ -100,8 +100,8 @@ class Facets:
 | `districts` | нет | строка |
 | `rooms` | нет | строка |
 | `message` | нет | ≤ 2000 |
-| `_csrf` | да | как в админке (паттерн H1 W3-F2) |
-| honeypot-поле | — | скрытое поле; если заполнено → тихо 200, не писать (анти-бот) |
+| `csrf_token` | да | как в админке (паттерн H1 W3-F2): поле формы `csrf_token` ИЛИ заголовок `X-CSRF-Token` (НЕ `_csrf`) |
+| `company` (honeypot) | — | скрытое поле имени `company`; если заполнено → тихо 200, не писать (анти-бот) |
 
 При успехе: insert в `leads` (scoped writer, busy_timeout), затем нотис Дарье через `send_text_to_recipients` («📩 Новая заявка с сайта: {name}, бюджет {budget}€, {districts}»). Ответ: `partials/_lead_ok.html` (HX-swap) или редирект на `/?lead=ok`. Rate-limit по IP (память/таблица) — защита от спама.
 

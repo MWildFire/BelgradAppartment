@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}RentBelgrad — квартиры в Белграде для своих{% endblock %}</title>
+<meta name="description" content="{% block meta_description %}Помогаем релокантам снять квартиру в Белграде на длинный срок — с договором под ВНЖ и белый картон.{% endblock %}">
+{# Fonts are self-hosted via @font-face in site.css (subsets in /static/fonts). #}
+{# No external <link> to fonts.googleapis — anti-slop + no hard CDN dependency. #}
+<link rel="preload" href="/static/fonts/golos-text-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/fonts/unbounded-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/css/tokens.css">
+<link rel="stylesheet" href="/static/css/site.css">
+{% block head %}{% endblock %}
+</head>
+<body>
+<a class="skip-link" href="#main">К содержанию</a>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="logo" href="/" aria-label="RentBelgrad — на главную"><span class="mk" aria-hidden="true"><i></i><i></i><i></i><i></i></span>RentBelgrad</a>
+    <nav class="nav-links" aria-label="Основная навигация">
+      <a href="/catalog">Каталог</a>
+      <a href="/#how">Как работаем</a>
+      <a href="/#vnj">ВНЖ и договор</a>
+      <a href="/map">Карта</a>
+      <a href="/calculator">Калькулятор</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="btn ghost" href="/catalog">Смотреть каталог</a>
+      <a class="btn ox" href="/#lead">Подобрать квартиру</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+{% block content %}{% endblock %}
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div class="brand-col">
+      <div class="bigtype">Rent<span class="ox">Bel</span><span class="nv">grad</span></div>
+      <p class="desc">Свой человек в Белграде. Помогаем релокантам снять квартиру с договором под ВНЖ и белый картон.</p>
+    </div>
+    <div class="col"><h5>Каталог</h5><a href="/catalog">Все квартиры</a><a href="/catalog?vnj=1">Под ВНЖ</a><a href="/catalog?wc=1">Белый картон</a><a href="/map">На карте</a></div>
+    <div class="col"><h5>Помощь</h5><a href="/#how">Как работаем</a><a href="/#vnj">ВНЖ и договор</a><a href="/calculator">Калькулятор аренды</a></div>
+    <div class="col"><h5>Контакты</h5><a href="{{ channel_url|default('https://t.me/RentBelgrad') }}" rel="noopener">Telegram-канал</a><a href="/#lead">Написать агенту</a></div>
+  </div>
+  <div class="wrap legal"><span>© 2026 RentBelgrad</span><span>Beograd, Srbija · @RentBelgrad</span></div>
+</footer>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,48 @@
+{# Shared lead form (index + apt). POST /lead (§6) → swaps in partials/_lead_ok.html.
+   MUST carry: hidden honeypot input name="company" + the site CSRF token field.
+   CSRF mirrors the admin pattern ("как в админке"): field/global name `csrf_token`. #}
+<form class="lead" id="lead" method="post" action="/lead"
+      hx-post="/lead" hx-target="#lead" hx-swap="outerHTML">
+  <p class="kicker">персональный поиск</p>
+  <h2>Расскажи, какую квартиру ищешь</h2>
+  <p class="lede">Район, бюджет, нужен ли договор под ВНЖ — пара полей, и Дарья соберёт подборку под тебя. Комиссии с тебя нет.</p>
+
+  {# CSRF — synchronizer token, same field name as admin #}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">
+
+  {# honeypot: humans never see/fill it; bots that fill it are silently dropped #}
+  <div class="hp" aria-hidden="true">
+    <label for="company">Не заполняйте это поле</label>
+    <input type="text" id="company" name="company" tabindex="-1" autocomplete="off">
+  </div>
+
+  <div class="lead-grid">
+    <div class="field">
+      <label for="lead-name">Как тебя зовут</label>
+      <input type="text" id="lead-name" name="name" maxlength="120" required autocomplete="name">
+    </div>
+    <div class="field">
+      <label for="lead-contact">Контакт (telegram / телефон / email)</label>
+      <input type="text" id="lead-contact" name="contact" maxlength="200" required>
+    </div>
+    <div class="field">
+      <label for="lead-budget">Бюджет, €/мес</label>
+      <input type="number" id="lead-budget" name="budget_eur" min="0" inputmode="numeric">
+    </div>
+    <div class="field">
+      <label for="lead-districts">Районы</label>
+      <input type="text" id="lead-districts" name="districts" placeholder="Врачар, Дорћол…">
+    </div>
+    <div class="field span-2">
+      <label for="lead-rooms">Сколько комнат</label>
+      <input type="text" id="lead-rooms" name="rooms" placeholder="студия, 1+1, 2+1…">
+    </div>
+    <div class="field span-2">
+      <label for="lead-message">Что важно (необязательно)</label>
+      <textarea id="lead-message" name="message" maxlength="2000" placeholder="Сроки, лифт, питомцы, нужен договор под боравиште…"></textarea>
+    </div>
+    <div class="field span-2">
+      <button type="submit" class="btn ox">Отправить заявку</button>
+    </div>
+  </div>
+</form>

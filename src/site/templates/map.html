@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Карта квартир в Белграде — RentBelgrad{% endblock %}
+
+{% block content %}
+<section class="bay wrap">
+  <div class="sec-head">
+    <div><div class="idx">карта</div><h2>Квартиры на карте</h2></div>
+    <p style="max-width:30ch;color:var(--ink-2);font-size:var(--step--1)">Точки тянутся из <span class="mono">/api/map.json</span>. Кликни по цене — откроется квартира.</p>
+  </div>
+
+  {# Leaflet mount point. Data + JS wired in Wave 4 (fetches /api/map.json). #}
+  <div class="map-shell">
+    <div id="map" data-map-src="/api/map.json" role="region" aria-label="Карта квартир">
+      <div class="map-empty">Карта загрузится здесь.<br>Если не видишь точек — открой каталог списком.</div>
+    </div>
+  </div>
+</section>
+{% endblock %}

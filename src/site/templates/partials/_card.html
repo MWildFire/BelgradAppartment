@@ -1,0 +1,27 @@
+{# Listing card — .card-l ported 1:1 from design/index.html.
+   Reads only SiteListingView (§1). NO source/platform badge (ToS).
+   Price/area/rooms in MONO. «снято» shown muted (not hidden). #}
+<article class="card-l{% if item.is_rented %} is-rented{% endif %}">
+  <a href="/apt/{{ item.id }}" aria-label="Квартира {{ item.rooms }}, {{ item.district }}, €{{ item.price_eur }} в месяц">
+    <div class="ph">
+      {% if item.photos %}
+        <img src="{{ item.photos[0] }}" alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" width="600" height="400">
+      {% endif %}
+      <div class="flag">
+        {% if item.for_vnj %}<span class="badge vnj">✓ ВНЖ</span>{% endif %}
+        {% if item.for_white_card %}<span class="badge wc">белый картон</span>{% endif %}
+        {% if item.is_rented %}<span class="badge rented">снято</span>{% endif %}
+      </div>
+    </div>
+    <div class="body">
+      <div class="price"><span class="mono">€{{ item.price_eur }}</span> <small>/ мес</small></div>
+      <div class="ttl">{{ item.rooms }} в районе {{ item.district }}</div>
+      <div class="meta">
+        {% if item.area_m2 %}<span class="mono">{{ item.area_m2|round|int }} m²</span><i>·</i>{% endif %}
+        <span class="mono">{{ item.rooms }}</span>
+        {% if item.floor %}<i>·</i><span class="mono">{{ item.floor }} эт.</span>{% endif %}
+        <i>·</i><span>{{ item.district }}</span>
+      </div>
+    </div>
+  </a>
+</article>

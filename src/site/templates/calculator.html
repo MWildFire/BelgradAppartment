@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Калькулятор аренды в Белграде — RentBelgrad{% endblock %}
+
+{% block content %}
+<section class="bay wrap">
+  <div class="sec-head">
+    <div><div class="idx">калькулятор</div><h2>Во сколько реально выйдет аренда</h2></div>
+    <p style="max-width:34ch;color:var(--ink-2);font-size:var(--step--1)">Аренда — это не только цифра из объявления. Считаем режие, инфостан и старт.</p>
+  </div>
+
+  {# Static shell — live recompute wired in Wave 4 (data-calc hooks below). #}
+  <div class="calc" data-calc>
+    <div class="calc-row"><span class="lbl">Аренда, €/мес</span><input type="number" inputmode="numeric" min="0" value="650" data-calc-field="rent" aria-label="Аренда в евро"></div>
+    <div class="calc-row"><span class="lbl">Режие (отопление, вода, эл-во)</span><input type="number" inputmode="numeric" min="0" value="80" data-calc-field="rezije" aria-label="Режие в евро"></div>
+    <div class="calc-row"><span class="lbl">Инфостан (ЖКХ)</span><input type="number" inputmode="numeric" min="0" value="25" data-calc-field="infostan" aria-label="Инфостан в евро"></div>
+    <div class="calc-row"><span class="lbl">Интернет</span><input type="number" inputmode="numeric" min="0" value="15" data-calc-field="internet" aria-label="Интернет в евро"></div>
+
+    <div class="calc-total">
+      <span class="big mono" data-calc-total>€770 / мес</span>
+      <small>всё включено, в месяц</small>
+    </div>
+
+    <div class="calc-note">
+      <b>+ разово на старт:</b> депозит <span class="mono" data-calc-deposit>€650</span> + первый месяц
+      = <span class="mono" data-calc-upfront>€1300</span>.
+    </div>
+  </div>
+</section>
+{% endblock %}

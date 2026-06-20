@@ -1,0 +1,218 @@
+"""Render-smoke tests for the public-catalog templates (Stage W, W3-D).
+
+These exercise template MARKUP only: each template is rendered through a plain Jinja2
+Environment pointed at ``src/site/templates`` with a hand-built context that mimics the
+DATA_CONTRACT §1 ``SiteListingView`` fields + §2 context keys. We deliberately do NOT
+import ``src.site.routes`` (owned by sibling agent C, possibly mid-edit) — the contract,
+not the route module, is the interface under test here.
+
+Assertions are intentionally about load-bearing DoD nodes (anti-slop / contract), not pixels:
+price with €, ВНЖ badge, channel link, «снято» badge, lead-form honeypot + CSRF field.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import pytest
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+TEMPLATES_DIR = Path(__file__).resolve().parents[2] / "src" / "site" / "templates"
+
+
+@dataclass(frozen=True)
+class FakeView:
+    """Mirror of SiteListingView (DATA_CONTRACT §1) — only the fields templates may read."""
+
+    id: int = 128
+    price_eur: int = 650
+    area_m2: float | None = 48.0
+    rooms: str = "1+1"
+    floor: str | None = "3/5"
+    district: str = "Врачар"
+    address: str | None = None  # contract: always None for MVP, must not be rendered
+    lat: float | None = 44.8
+    lon: float | None = 20.47
+    for_vnj: bool = True
+    for_white_card: bool = True
+    is_rented: bool = False
+    photos: list[str] = field(default_factory=lambda: ["/photos/a.webp", "/photos/b.webp"])
+    note: str | None = "Хозяин оформит ugovor на 12 месяцев."
+    channel_url: str = "https://t.me/RentBelgrad/128"
+    posted_at: str = "2026-06-18T10:00:00"
+
+
+def _env() -> Environment:
+    return Environment(
+        loader=FileSystemLoader(str(TEMPLATES_DIR)),
+        autoescape=select_autoescape(["html"]),
+    )
+
+
+# --- shared fake context blocks (match §2 keys) ---
+
+_FACETS = {
+    "districts": [("Врачар", 7), ("Дорћол", 3)],
+    "price_bounds": (450, 900),
+    "rooms": [("1+1", 5), ("студия", 2), ("2+1", 1)],
+    "counts": {"vnj": 6, "white_card": 4, "total": 10},
+}
+_APPLIED = {
+    "vnj": True,
+    "wc": False,
+    "district": ["Врачар"],
+    "price_min": None,
+    "price_max": 700,
+    "rooms": ["1"],
+    "sort": "new",
+    "show_rented": False,
+}
+_STATS = {"active": 47, "districts": 8}
+# C renders ``csrf_token`` (admin Jinja-global pattern, "как в админке"); provide it here.
+_CSRF = "test-csrf-token"
+
+
+def _render(name: str, **ctx: object) -> str:
+    return _env().get_template(name).render(**ctx)
+
+
+# --------------------------------------------------------------------------- base
+def test_base_has_no_external_font_link() -> None:
+    """Anti-slop / contract: fonts are self-hosted; no fonts.googleapis <link> ships."""
+    html = _render("base.html")
+    assert "/static/css/tokens.css" in html
+    assert "/static/css/site.css" in html
+    assert "fonts.googleapis" not in html
+
+
+# -------------------------------------------------------------------------- index
+def test_index_renders_featured_and_stats() -> None:
+    html = _render(
+        "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF
+    )
+    assert "€" in html
+    assert "650" in html
+    assert "ВНЖ" in html  # vnj badge on the featured card
+    assert "47" in html  # stats.active
+    # lead form on the homepage: honeypot + csrf
+    assert 'name="company"' in html
+    assert _CSRF in html
+
+
+# ------------------------------------------------------------------------ catalog
+def test_catalog_renders_items_filters_results() -> None:
+    html = _render(
+        "catalog.html",
+        items=[FakeView(), FakeView(id=129, is_rented=True, price_eur=550)],
+        facets=_FACETS,
+        applied=_APPLIED,
+        total=2,
+        csrf_token=_CSRF,
+    )
+    assert "€" in html
+    assert "ВНЖ" in html  # prominent vnj toggle in filters
+    assert "снято" in html  # rented card shown muted, not hidden
+
+
+def test_results_partial_is_grid_only() -> None:
+    """partials/_results.html is the HTMX swap target: grid + pagination only, no <nav> chrome."""
+    html = _render(
+        "partials/_results.html",
+        items=[FakeView()],
+        facets=_FACETS,
+        applied=_APPLIED,
+        total=1,
+    )
+    assert "650" in html
+    assert "€" in html
+    # swap target must not carry the site nav/header
+    assert "<header" not in html
+
+
+# ---------------------------------------------------------------------- partials
+def test_card_partial_core_nodes() -> None:
+    html = _render("partials/_card.html", item=FakeView())
+    assert "€" in html and "650" in html
+    assert "48" in html  # area
+    assert "1+1" in html  # rooms
+    assert "ВНЖ" in html  # vnj badge
+    assert "/apt/128" in html  # link to detail
+    # alt text present on photo
+    assert "alt=" in html
+    # ToS: never emit a source/platform badge
+    assert "Telegram" not in html
+    assert "src=\"/photos/a.webp\"" in html
+
+
+def test_card_partial_rented_badge_shown_not_hidden() -> None:
+    html = _render("partials/_card.html", item=FakeView(is_rented=True))
+    assert "снято" in html  # muted badge, card still present
+    assert "650" in html
+
+
+def test_card_partial_white_card_badge() -> None:
+    html = _render("partials/_card.html", item=FakeView(for_white_card=True))
+    assert "картон" in html
+
+
+def test_filters_partial_prominent_toggles() -> None:
+    html = _render("partials/_filters.html", facets=_FACETS, applied=_APPLIED)
+    assert "ВНЖ" in html
+    assert "картон" in html  # белый картон toggle
+    assert 'name="vnj"' in html
+    assert 'name="wc"' in html
+    assert "Врачар" in html  # district facet
+
+
+def test_lead_ok_partial() -> None:
+    html = _render("partials/_lead_ok.html")
+    assert html.strip()  # non-empty success state
+
+
+# ---------------------------------------------------------------------------- apt
+def test_apt_renders_detail_channel_link_and_note() -> None:
+    item = FakeView()
+    html = _render("apt.html", item=item, similar=[FakeView(id=200)], csrf_token=_CSRF)
+    assert "€" in html and "650" in html
+    assert item.channel_url in html  # link to the channel post (never a площадка)
+    assert "ВНЖ" in html
+    assert "ugovor" in html  # note rendered
+    assert "/apt/200" in html  # similar card link
+    # address is None per contract — make sure we did not invent one
+    assert "None" not in html
+
+
+def test_apt_rented_badge() -> None:
+    html = _render("apt.html", item=FakeView(is_rented=True), similar=[], csrf_token=_CSRF)
+    assert "снято" in html
+
+
+# ---------------------------------------------------------------------------- map
+def test_map_renders_container() -> None:
+    html = _render("map.html")
+    # Leaflet mount point exists; data is pulled client-side in Wave 4
+    assert "id=\"map\"" in html or 'id="map"' in html
+
+
+# --------------------------------------------------------------------- calculator
+def test_calculator_renders_shell() -> None:
+    html = _render("calculator.html")
+    assert html.strip()
+    assert "€" in html  # static shell shows currency
+
+
+# --------------------------------------------------- lead form (index) full check
+@pytest.mark.parametrize("template", ["index.html", "apt.html"])
+def test_lead_form_has_honeypot_and_csrf(template: str) -> None:
+    """The lead form (index and apt) must carry the honeypot + CSRF token field."""
+    ctx: dict[str, object] = {"csrf_token": _CSRF}
+    if template == "index.html":
+        ctx.update(featured=[FakeView()], stats=_STATS)
+    else:
+        ctx.update(item=FakeView(), similar=[])
+    html = _render(template, **ctx)
+    assert 'name="company"' in html  # honeypot, exact name
+    assert 'name="name"' in html
+    assert 'name="contact"' in html
+    assert "csrf_token" in html  # CSRF token field present

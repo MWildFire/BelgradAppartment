@@ -1,0 +1,42 @@
+{# HTMX swap target: results grid + pagination ONLY. No <header>/nav/footer here.
+   Context (§2): items, total, applied (for sort/page), facets (unused here but passed). #}
+<div id="results">
+  <div class="results-head">
+    <div class="count"><span class="mono">{{ total }}</span> {{ 'квартира' if total == 1 else 'квартир' }}</div>
+    <form method="get" action="/catalog" hx-get="/catalog" hx-target="#results" hx-push-url="true">
+      {# preserve active filters across a sort change #}
+      {% if applied.vnj %}<input type="hidden" name="vnj" value="1">{% endif %}
+      {% if applied.wc %}<input type="hidden" name="wc" value="1">{% endif %}
+      {% for d in applied.district %}<input type="hidden" name="district" value="{{ d }}">{% endfor %}
+      {% if applied.price_min is not none %}<input type="hidden" name="price_min" value="{{ applied.price_min }}">{% endif %}
+      {% if applied.price_max is not none %}<input type="hidden" name="price_max" value="{{ applied.price_max }}">{% endif %}
+      {% for r in applied.rooms %}<input type="hidden" name="rooms" value="{{ r }}">{% endfor %}
+      <label for="sort" class="mono" style="color:var(--ink-3);font-size:.7rem;text-transform:uppercase;letter-spacing:.12em;margin-right:8px">сортировка</label>
+      <select id="sort" name="sort" onchange="this.form.requestSubmit()">
+        <option value="new"{% if applied.sort == 'new' %} selected{% endif %}>сначала свежие</option>
+        <option value="price_asc"{% if applied.sort == 'price_asc' %} selected{% endif %}>сначала дешевле</option>
+        <option value="price_desc"{% if applied.sort == 'price_desc' %} selected{% endif %}>сначала дороже</option>
+      </select>
+    </form>
+  </div>
+
+  {% if items %}
+    <div class="cards">
+      {% for item in items %}{% include "partials/_card.html" %}{% endfor %}
+    </div>
+    {% set page = applied.page|default(1) %}
+    {% set pages = applied.pages|default(1) %}
+    {% if pages and pages > 1 %}
+      <nav class="pager" aria-label="Постраничная навигация">
+        {% if page > 1 %}<a href="?{{ applied.qs_prev|default('page=' ~ (page - 1)) }}" hx-get="/catalog?{{ applied.qs_prev|default('page=' ~ (page - 1)) }}" hx-target="#results" hx-push-url="true">← назад</a>{% endif %}
+        <span class="current mono">{{ page }} / {{ pages }}</span>
+        {% if page < pages %}<a href="?{{ applied.qs_next|default('page=' ~ (page + 1)) }}" hx-get="/catalog?{{ applied.qs_next|default('page=' ~ (page + 1)) }}" hx-target="#results" hx-push-url="true">вперёд →</a>{% endif %}
+      </nav>
+    {% endif %}
+  {% else %}
+    <div class="empty">
+      <div class="big">Ничего не нашлось</div>
+      <p>Попробуй ослабить фильтры — например, расширить район или бюджет.</p>
+    </div>
+  {% endif %}
+</div>

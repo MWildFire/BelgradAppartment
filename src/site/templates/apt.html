@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}{{ item.rooms }} в районе {{ item.district }} — €{{ item.price_eur }}/мес · RentBelgrad{% endblock %}
+{% block meta_description %}{{ item.rooms }} в районе {{ item.district }} за €{{ item.price_eur }} в месяц.{% if item.for_vnj %} Подходит для ВНЖ.{% endif %}{% endblock %}
+
+{% block content %}
+<section class="bay wrap">
+  {# crumbs: district only — address is None per contract, never invented #}
+  <div class="crumbs"><a href="/catalog">Каталог</a> / <a href="/catalog?district={{ item.district|urlencode }}">{{ item.district }}</a> / <span style="color:var(--ink)">{{ item.rooms }}</span></div>
+
+  <div class="apt-grid">
+    <div>
+      {# gallery #}
+      {% if item.photos %}
+        <div class="gallery{% if item.photos|length < 2 %} gallery-empty{% endif %}">
+          {% for photo in item.photos[:5] %}
+            <div class="g{% if loop.first %} main{% endif %}{% if loop.last and item.photos|length > 5 %} more{% endif %}">
+              <img src="{{ photo }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" loading="{{ 'eager' if loop.first else 'lazy' }}">
+              {% if loop.last and item.photos|length > 5 %}<span class="mono">+{{ item.photos|length - 5 }} фото</span>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="gallery gallery-empty"><div class="g more"><span class="mono">фото скоро</span></div></div>
+      {% endif %}
+
+      <h1 class="apt-title">{{ item.rooms }} в районе {{ item.district }}</h1>
+      <div class="apt-params">
+        {% if item.area_m2 %}<span class="mono">{{ item.area_m2|round|int }} m²</span><i>·</i>{% endif %}
+        <span class="mono">{{ item.rooms }}</span>
+        {% if item.floor %}<i>·</i><span class="mono">{{ item.floor }} эт.</span>{% endif %}
+        <i>·</i><span>{{ item.district }}</span>
+      </div>
+
+      <div class="apt-badges">
+        {% if item.for_vnj %}<span class="badge vnj">✓ подходит для ВНЖ</span>{% endif %}
+        {% if item.for_white_card %}<span class="badge wc">белый картон</span>{% endif %}
+        {% if item.is_rented %}<span class="badge rented">снято</span>{% endif %}
+      </div>
+
+      {% if item.note %}
+        <p class="apt-note">{{ item.note }}</p>
+      {% endif %}
+
+      {# «важно для релокантов» #}
+      <div class="reloc">
+        <h3>Что важно для релокантов</h3>
+        <div class="items">
+          <div class="item"><span class="k">ВНЖ</span><p>{% if item.for_vnj %}Хозяин готов оформить ugovor с регистрацией в МУПе — подходит для боравишта.{% else %}Уточним у хозяина возможность официального договора под боравиште.{% endif %}</p></div>
+          <div class="item"><span class="k">картон</span><p>{% if item.for_white_card %}Подходит для белого картона.{% else %}Спросим хозяина про белый картон при показе.{% endif %}</p></div>
+          <div class="item"><span class="k">счета</span><p>Режие + инфостан считаются отдельно — поможем прикинуть в калькуляторе.</p></div>
+          <div class="item"><span class="k">агент</span><p>Сопровождаем на показе и подписании. Комиссию платит хозяин.</p></div>
+        </div>
+      </div>
+    </div>
+
+    {# sticky CTA side #}
+    <aside class="apt-side">
+      <div class="price"><span class="mono">€{{ item.price_eur }}</span></div>
+      <div class="per">в месяц · агент €0</div>
+      <a class="btn ox" href="#lead">Записаться на просмотр</a>
+      {# link to the channel post (a channel URL, never a площадка) #}
+      <a class="btn ghost" href="{{ item.channel_url }}" rel="noopener">Открыть в Telegram</a>
+      <div class="bullets">
+        <div class="bullet"><span class="num">✓</span><span>Агент бесплатно — платит хозяин</span></div>
+        <div class="bullet"><span class="num">✓</span><span>Сопровождение на подписании</span></div>
+        <div class="bullet"><span class="num">✓</span><span>Помощь с регистрацией адреса</span></div>
+      </div>
+    </aside>
+  </div>
+
+  {# similar (same district) #}
+  {% if similar %}
+    <div class="sec-head" style="margin-top:var(--bay)">
+      <div><div class="idx">похожие</div><h2>Ещё в районе {{ item.district }}</h2></div>
+      <a class="more" href="/catalog?district={{ item.district|urlencode }}">Все в районе →</a>
+    </div>
+    <div class="cards">
+      {% for item in similar %}{% include "partials/_card.html" %}{% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<!-- LEAD FORM -->
+<section class="bay wrap">
+  {% include "partials/_lead_form.html" %}
+</section>
+{% endblock %}
