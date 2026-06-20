@@ -10,7 +10,7 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
-### 0.-1 Этап W «Public Web Catalog» (20.06.2026) — код + миграция задеплоены, Caddy/TLS отложены
+### 0.-1 Этап W «Public Web Catalog» (20.06.2026) — 🚀 ЗАПУЩЕН на https://rentbelgrad.com
 
 > Самый свежий handoff. ADR + план: `docs/web/ARCHITECTURE.md`, `docs/web/DATA_CONTRACT.md`,
 > `docs/web/DECISIONS.md`, `docs/superpowers/plans/2026-06-20-public-web-catalog.md`.
@@ -46,18 +46,29 @@ ADR. Каталог показывает только **отобранные Д�
    uvicorn+chromium. Read-only-изоляция, no-scraping-leak, CSRF, honeypot покрыты тестами + 3-линзовое
    security-ревью (вердикт fix_then_ship, все находки исправлены).
 
-**Деплой — статус:**
-- ✅ **Сделано на VPS (20.06.2026):** код зарсинкан, миграция 0006 применена (бэкап:
-  `data/backups/otz-2026-06-20-1813-pre-stagew.db`), `otz-site.service` установлен + enabled + active на
-  `127.0.0.1:8001`, localhost-smoke зелёный (`/healthz`, `/`, `/catalog`, `/api/map.json`, `/calculator` —
-  все 200). Монитор здоров.
-- ⏳ **Отложено (нужен реальный сабдомен + DNS A-запись → `90.156.254.159`):** установка Caddy +
-  `deploy/Caddyfile` (заменить `rent.example.com`, root `/photos` = `/opt/otz/data/inbound`), TLS,
-  `ufw allow 80,443`, добавить `SITE_PUBLIC_BASE_URL` (+ при желании остальные `SITE_*` с боевыми
-  значениями) в `/opt/otz/.env`. До этого сайт работает только на localhost (наружу недоступен).
+**Деплой — статус: ЗАПУЩЕН (публичный запуск 20.06.2026):**
+- ✅ Код зарсинкан, миграция 0006 применена (бэкап: `data/backups/otz-2026-06-20-1813-pre-stagew.db`),
+  `otz-site.service` enabled + active на `127.0.0.1:8001`.
+- ✅ **Домен `rentbelgrad.com` (+ `www`)** → A-записи на `90.156.254.159`. **Caddy v2.11.4** установлен;
+  `/etc/caddy/Caddyfile` = `deploy/Caddyfile`; **TLS Let's Encrypt** выпущен для apex + www; `www→apex`
+  (301); `http→https` (308); **ufw 80/443 открыты**. `SITE_*` (вкл. `SITE_PUBLIC_BASE_URL=
+  https://rentbelgrad.com`) добавлены в `/opt/otz/.env`.
+- ✅ **Прод-smoke зелёный (external HTTPS):** `/healthz` ok, `/ /catalog /map /calculator /api/map.json
+  /static/*` → 200, фильтр ВНЖ работает, HSTS/CSP/X-Frame на месте, `/photos/../..` → 404 (Caddy jail),
+  `POST /lead` без CSRF → 403. **Админка наружу недоступна** (`/queue` → 404, :8000 не проксируется).
+  Монитор/otz-site/caddy active, `otz-monitor NRestarts=0`.
+- ⚠️ **Инцидент при деплое (устранён):** первый `deploy_sync` затёр `/opt/otz/.venv` (worktree-симлинк
+  `.venv` + `--delete-after`). БД не пострадала (исключена + бэкап); монитор не падал. Venv пересобран по
+  локальному dev-freeze (вкл. CPU torch + open_clip), chromium-shell переустановлен. Перманентный фикс в
+  `scripts/deploy_sync.sh` (исключить `.venv` без слэша + `logs/`/`.claude/`). **Урок: не rsync'ить
+  worktree с `.venv`-симлинком без точного исключения.**
 
-**Порты:** пайплайн без изменений; otz-site `127.0.0.1:8001`; Caddy займёт 80/443 (`ufw` открыть 80/443 —
-pending). Админка остаётся localhost-only, наружу не проксируется никогда.
+**Follow-up (не блокирует):** access-log Caddy в файл нужен systemd `ReadWritePaths` drop-in для юнита
+caddy (пока journald — `journalctl -u caddy`); CSP `script-src 'unsafe-inline'` можно ужесточить, вынеся
+один inline `onchange` в `filters.js`.
+
+**Порты:** пайплайн без изменений; otz-site `127.0.0.1:8001`; **Caddy 80/443 (ufw открыты)**. Outline
+(50029, 28395) не задет. Админка остаётся localhost-only, наружу не проксируется никогда.
 
 ### 0.-1.1 Инцидент 20.06.2026: первый `deploy_sync` снёс `/opt/otz/.venv`
 

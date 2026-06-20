@@ -1,22 +1,26 @@
-# Caddyfile — публичный сайт @RentBelgrad (Stage W)
-# Положить в /etc/caddy/Caddyfile на VPS, заменить DOMAIN и пути, затем: systemctl reload caddy
-# Caddy сам выпустит и продлит TLS через Let's Encrypt (нужна DNS A-запись DOMAIN -> 90.156.254.159
-# и открытые порты 80/443 в ufw). Админка (:8000) здесь НЕ проксируется — остаётся localhost-only.
+# Caddyfile — публичный сайт rentbelgrad.com (Stage W). ЭТО БОЕВОЙ КОНФИГ (развёрнут 20.06.2026).
+# Лежит в /etc/caddy/Caddyfile на VPS. Caddy сам выпускает/продлевает TLS (Let's Encrypt):
+# нужны DNS A-записи rentbelgrad.com + www.rentbelgrad.com -> 90.156.254.159 и открытые 80/443 (ufw).
+# Админка (:8000) здесь НЕ проксируется — остаётся localhost-only. После правок: systemctl reload caddy.
 
-rent.example.com {            # <-- заменить на свой сабдомен
+www.rentbelgrad.com {
+    redir https://rentbelgrad.com{uri} permanent
+}
+
+rentbelgrad.com {
 
     encode zstd gzip
 
     # Статика и фото — отдаёт сам Caddy с диска, мимо Python (быстро, far-future cache).
     handle_path /static/* {
-        root * /opt/otz/src/site/static     # <-- путь к static на VPS
+        root * /opt/otz/src/site/static
         file_server
         header Cache-Control "public, max-age=31536000, immutable"
     }
     handle_path /photos/* {
-        # photos_root = where the pipeline downloads inbound photos. public_photo_url emits
-        # /photos/<relpath-under-this-root>, so this MUST equal SITE_PHOTOS_ROOT. Jailed here
-        # (data/inbound) — NOT /opt/otz — so .env / otz.db can never be served via /photos.
+        # photos_root = куда пайплайн качает фото. public_photo_url отдаёт /photos/<relpath-под-root>,
+        # поэтому root ДОЛЖЕН совпадать с SITE_PHOTOS_ROOT. Заперт в data/inbound (НЕ /opt/otz),
+        # чтобы .env / otz.db нельзя было отдать через /photos.
         root * /opt/otz/data/inbound
         file_server
         header Cache-Control "public, max-age=604800"
@@ -27,22 +31,19 @@ rent.example.com {            # <-- заменить на свой сабдом�
         reverse_proxy 127.0.0.1:8001
     }
 
-    # Базовые security-заголовки.
     header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
-        # CSP: 'unsafe-inline' is required by the design's inline style="" attrs + one inline
-        # onchange; jsdelivr serves Leaflet (script+css), https:/data: serve OSM tiles + marker
-        # icons + the SVG favicon; everything else is same-origin. frame-ancestors/base-uri/
-        # form-action add clickjacking/base-tag/form-hijack defense.
-        # Follow-up (verify against the live site): relocate the one inline onchange into
-        # filters.js so script-src can drop 'unsafe-inline'.
+        # CSP: 'unsafe-inline' нужен из-за inline style="" в дизайне + одного inline onchange;
+        # jsdelivr отдаёт Leaflet (script+css), https:/data: — тайлы OSM + маркеры + SVG-favicon;
+        # остальное same-origin. frame-ancestors/base-uri/form-action — защита от clickjacking и т.п.
+        # Follow-up: вынести inline onchange в filters.js, тогда script-src сможет убрать 'unsafe-inline'.
         Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         -Server
     }
 
-    log {
-        output file /var/log/otz/caddy-site.log
-    }
+    # Access-log в файл требует systemd ReadWritePaths drop-in (sandbox юнита caddy блокирует
+    # запись в /var/log/otz). Пока — рантайм/ошибки в journald: journalctl -u caddy.
 }
