@@ -11,9 +11,32 @@
 <link rel="preload" href="/static/fonts/unbounded-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/css/tokens.css">
 <link rel="stylesheet" href="/static/css/site.css">
+{# Favorites control + counter live across every page; styled here (site.css is frozen for
+   this wave). Tokens only — no slop. Heart glyph fills when saved; respects reduced-motion. #}
+<style>
+  .fav{display:grid;place-items:center;width:34px;height:34px;padding:0;border:1.5px solid var(--ink);
+       border-radius:var(--r-s);background:var(--card);color:var(--ink);cursor:pointer;
+       transition:transform .12s ease,background .12s ease}
+  .fav:hover{transform:translateY(-1px)}
+  .fav svg{width:16px;height:16px;display:block}
+  .fav svg .fill{fill:none;stroke:currentColor;stroke-width:1.6}
+  .fav.is-fav{background:var(--oxblood);border-color:var(--oxblood);color:var(--paper)}
+  .fav.is-fav svg .fill{fill:currentColor;stroke:currentColor}
+  .card-l{position:relative}
+  .card-l .fav{position:absolute;right:10px;top:10px;z-index:2;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:saturate(1.1)}
+  .fav-count{font-family:var(--mono);font-size:.66rem;min-width:18px;height:18px;padding:0 5px;
+       display:inline-grid;place-items:center;border-radius:999px;background:var(--oxblood);
+       color:var(--paper);margin-left:-8px;transform:translateY(-8px)}
+  .apt-side-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .apt-side .fav{width:40px;height:40px}
+  .apt-side .fav svg{width:18px;height:18px}
+  @media(prefers-reduced-motion:reduce){.fav{transition:none}}
+</style>
 {% block head %}{% endblock %}
 </head>
-<body>
+{# hx-headers is inherited by every htmx request on the page → CSRF on all hx-post (mirrors
+   admin base.html). The lead form's hx-post /lead thus passes require_site_csrf. #}
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token|default('') }}"}'>
 <a class="skip-link" href="#main">К содержанию</a>
 
 <header class="nav">
@@ -27,6 +50,11 @@
       <a href="/calculator">Калькулятор</a>
     </nav>
     <div class="nav-cta">
+      {# favorites counter — reflects localStorage count, updated by favorites.js on toggle.
+         Hidden at zero (set by JS); no-JS users never see a stale "0". #}
+      <a class="fav" href="/catalog" aria-label="Избранное">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M12 20.5 4.3 12.9a4.6 4.6 0 0 1 6.5-6.5l1.2 1.2 1.2-1.2a4.6 4.6 0 0 1 6.5 6.5z"/></svg>
+      </a><span class="fav-count" data-fav-count hidden>0</span>
       <a class="btn ghost" href="/catalog">Смотреть каталог</a>
       <a class="btn ox" href="/#lead">Подобрать квартиру</a>
     </div>
@@ -50,6 +78,10 @@
   <div class="wrap legal"><span>© 2026 RentBelgrad</span><span>Beograd, Srbija · @RentBelgrad</span></div>
 </footer>
 
+{# htmx is self-hosted (no CDN) — drives the catalog filter swaps + lead form. defer: parse-blocking-free. #}
+<script src="/static/js/htmx.min.js" defer></script>
+{# favorites: localStorage only, runs site-wide (counter + card controls). defer so DOM is ready. #}
+<script src="/static/js/favorites.js" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -55,8 +55,16 @@
 
     {# sticky CTA side #}
     <aside class="apt-side">
-      <div class="price"><span class="mono">€{{ item.price_eur }}</span></div>
-      <div class="per">в месяц · агент €0</div>
+      <div class="apt-side-top">
+        <div>
+          <div class="price"><span class="mono">€{{ item.price_eur }}</span></div>
+          <div class="per">в месяц · агент €0</div>
+        </div>
+        {# favorites: localStorage toggle (favorites.js); glyph fills when saved, no emoji #}
+        <button type="button" class="fav" data-fav data-fav-id="{{ item.id }}" aria-pressed="false" aria-label="В избранное" title="В избранное">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M12 20.5 4.3 12.9a4.6 4.6 0 0 1 6.5-6.5l1.2 1.2 1.2-1.2a4.6 4.6 0 0 1 6.5 6.5z"/></svg>
+        </button>
+      </div>
       <a class="btn ox" href="#lead">Записаться на просмотр</a>
       {# link to the channel post (a channel URL, never a площадка) #}
       <a class="btn ghost" href="{{ item.channel_url }}" rel="noopener">Открыть в Telegram</a>

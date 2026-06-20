@@ -73,3 +73,5 @@
   {# no-JS fallback submit; HTMX submits on change #}
   <noscript><button type="submit" class="btn ox apply">Показать</button></noscript>
 </form>
+{# Progressive enhancement only (debounce, clear-all, label sync). Form works without it. #}
+<script src="/static/js/filters.js" defer></script>

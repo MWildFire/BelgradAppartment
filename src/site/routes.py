@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from src.config import get_settings
 from src.site import cache, readmodel
 from src.site.deps import (
     SITE_CSRF_TOKEN,
@@ -137,6 +139,41 @@ def _applied(request: Request) -> dict[str, object]:
     }
 
 
+# Filter params that must survive a page jump (everything except `page` itself).
+_PAGER_PRESERVE = ("vnj", "wc", "district", "price_min", "price_max", "rooms", "sort", "show_rented")
+
+
+def _qs_for_page(request: Request, page: int) -> str:
+    """Query-string for ?page=N that re-emits the current filters (multivalued-safe)."""
+    qp = request.query_params
+    pairs: list[tuple[str, str]] = []
+    for key in _PAGER_PRESERVE:
+        for val in qp.getlist(key):
+            if val != "":
+                pairs.append((key, val))
+    pairs.append(("page", str(page)))
+    return urlencode(pairs)
+
+
+def _pager(request: Request, total: int, page: int) -> dict[str, object]:
+    """Pagination context: bounds + prev/next query-strings preserving active filters.
+
+    qs_prev/qs_next are built independent of the bounds (has_prev/has_next gate rendering),
+    so deep-links + HTMX hx-get can reuse them without recomputing the filter set.
+    """
+    page_size = get_settings().site_page_size
+    total_pages = max((total + page_size - 1) // page_size, 1)
+    return {
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+        "qs_prev": _qs_for_page(request, page - 1),
+        "qs_next": _qs_for_page(request, page + 1),
+    }
+
+
 # --------------------------------------------------------------------------- routes
 
 
@@ -166,11 +203,13 @@ async def index(request: Request, db_url: str = Depends(catalog_db_url)) -> HTML
 async def catalog(request: Request, db_url: str = Depends(catalog_db_url)) -> HTMLResponse:
     items, total = await _cached_catalog(request, db_url)
     facets = await _cached_facets(db_url)
+    applied = _applied(request)
     context = {
         "items": items,
         "facets": facets,
-        "applied": _applied(request),
+        "applied": applied,
         "total": total,
+        "pager": _pager(request, total, applied["page"]),
     }
     # HTMX swaps only the results grid + pagination; full-page request gets the shell.
     template = "partials/_results.html" if "hx-request" in request.headers else "catalog.html"

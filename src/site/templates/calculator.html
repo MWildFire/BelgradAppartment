@@ -27,3 +27,8 @@
   </div>
 </section>
 {% endblock %}
+
+{% block scripts %}
+{# pure client math — no network (DATA_CONTRACT §2: чистый клиентский расчёт). #}
+<script src="/static/js/calculator.js" defer></script>
+{% endblock %}

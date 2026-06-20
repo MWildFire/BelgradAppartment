@@ -16,14 +16,22 @@
     <input type="text" id="company" name="company" tabindex="-1" autocomplete="off">
   </div>
 
+  {# form-level error slot — lead.js fills it on a server 400 (e.g. CSRF/length). #}
+  <p class="field-error" data-error-for="_form" role="alert"></p>
+
   <div class="lead-grid">
     <div class="field">
       <label for="lead-name">Как тебя зовут</label>
-      <input type="text" id="lead-name" name="name" maxlength="120" required autocomplete="name">
+      <input type="text" id="lead-name" name="name" maxlength="120" required autocomplete="name"
+             aria-describedby="err-name">
+      {# inline error (never alert); lead.js writes here, screen readers announce via role=alert #}
+      <span class="field-error" id="err-name" data-error-for="name" role="alert"></span>
     </div>
     <div class="field">
       <label for="lead-contact">Контакт (telegram / телефон / email)</label>
-      <input type="text" id="lead-contact" name="contact" maxlength="200" required>
+      <input type="text" id="lead-contact" name="contact" maxlength="200" required
+             aria-describedby="err-contact">
+      <span class="field-error" id="err-contact" data-error-for="contact" role="alert"></span>
     </div>
     <div class="field">
       <label for="lead-budget">Бюджет, €/мес</label>
@@ -46,3 +54,12 @@
     </div>
   </div>
 </form>
+
+{# inline-error styling (site.css frozen this wave); empty slot collapses to nothing. #}
+<style>
+  .lead .field-error{font-family:var(--mono);font-size:.66rem;letter-spacing:.04em;color:var(--oxblood);min-height:0}
+  .lead .field-error:empty{display:none}
+  .lead [aria-invalid="true"]{border-color:var(--oxblood)}
+</style>
+{# inline validation + server-400 surfacing; no-JS form still POSTs natively. #}
+<script src="/static/js/lead.js" defer></script>

@@ -2,6 +2,11 @@
    Reads only SiteListingView (§1). NO source/platform badge (ToS).
    Price/area/rooms in MONO. «снято» shown muted (not hidden). #}
 <article class="card-l{% if item.is_rented %} is-rented{% endif %}">
+  {# favorites: localStorage toggle, wired by favorites.js. Real <button> (keyboard-operable),
+     sibling of the card <a> so it isn't nested in an anchor; glyph fills when saved (no emoji). #}
+  <button type="button" class="fav" data-fav data-fav-id="{{ item.id }}" aria-pressed="false" aria-label="В избранное" title="В избранное">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M12 20.5 4.3 12.9a4.6 4.6 0 0 1 6.5-6.5l1.2 1.2 1.2-1.2a4.6 4.6 0 0 1 6.5 6.5z"/></svg>
+  </button>
   <a href="/apt/{{ item.id }}" aria-label="Квартира {{ item.rooms }}, {{ item.district }}, €{{ item.price_eur }} в месяц">
     <div class="ph">
       {% if item.photos %}

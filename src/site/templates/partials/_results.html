@@ -24,13 +24,13 @@
     <div class="cards">
       {% for item in items %}{% include "partials/_card.html" %}{% endfor %}
     </div>
-    {% set page = applied.page|default(1) %}
-    {% set pages = applied.pages|default(1) %}
-    {% if pages and pages > 1 %}
+    {# Pager: each control is a plain deep-link (href, no-JS) AND an HTMX swap (hx-get → #results).
+       qs_prev/qs_next come from the backend and preserve every active filter. #}
+    {% if pager and pager.total_pages > 1 %}
       <nav class="pager" aria-label="Постраничная навигация">
-        {% if page > 1 %}<a href="?{{ applied.qs_prev|default('page=' ~ (page - 1)) }}" hx-get="/catalog?{{ applied.qs_prev|default('page=' ~ (page - 1)) }}" hx-target="#results" hx-push-url="true">← назад</a>{% endif %}
-        <span class="current mono">{{ page }} / {{ pages }}</span>
-        {% if page < pages %}<a href="?{{ applied.qs_next|default('page=' ~ (page + 1)) }}" hx-get="/catalog?{{ applied.qs_next|default('page=' ~ (page + 1)) }}" hx-target="#results" hx-push-url="true">вперёд →</a>{% endif %}
+        {% if pager.has_prev %}<a href="/catalog?{{ pager.qs_prev }}" hx-get="/catalog?{{ pager.qs_prev }}" hx-target="#results" hx-push-url="true" rel="prev">← назад</a>{% endif %}
+        <span class="current mono">{{ pager.page }} / {{ pager.total_pages }}</span>
+        {% if pager.has_next %}<a href="/catalog?{{ pager.qs_next }}" hx-get="/catalog?{{ pager.qs_next }}" hx-target="#results" hx-push-url="true" rel="next">вперёд →</a>{% endif %}
       </nav>
     {% endif %}
   {% else %}

@@ -1,6 +1,37 @@
 {% extends "base.html" %}
 {% block title %}Карта квартир в Белграде — RentBelgrad{% endblock %}
 
+{% block head %}
+  {# Leaflet (CDN) — the ONLY plan-sanctioned external dependency on the public site.
+     Core + markercluster plugin; pinned versions + SRI so the bytes can't drift. #}
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+        integrity="sha256-YU3qCpj/P06tdPBJGPax0bm6Q1wltfwjsho5TR4+TYc=" crossorigin="">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+        integrity="sha256-YSWCMtmNZNwqex4CEw1nQhvFub2lmU7vcCKP+XVwwXA=" crossorigin="">
+  {# Token-styled price pins + popup mini-card. Scoped here (site.css is owned elsewhere);
+     overrides Leaflet's teardrop default. All values pull from tokens.css — no slop. #}
+  <style>
+    .price-pin{display:inline-flex;align-items:center;white-space:nowrap;
+      background:var(--ink);color:var(--paper);border:1.5px solid var(--paper);
+      border-radius:999px;padding:3px 9px;font-size:.72rem;line-height:1;
+      box-shadow:0 1px 4px rgba(0,0,0,.28);transform:translate(-50%,-50%)}
+    .price-pin.is-vnj{background:var(--sage);border-color:var(--paper)}
+    .map-pop{min-width:150px;font-family:var(--text)}
+    .map-pop-price{font-size:var(--step-1);color:var(--ink);font-weight:700}
+    .map-pop-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+      margin:4px 0 8px;font-size:var(--step--1);color:var(--ink-2)}
+    .map-pop-meta .mp-vnj{font-family:var(--mono);font-size:.62rem;letter-spacing:.06em;
+      background:var(--sage);color:#fff;padding:1px 6px;border-radius:var(--r-s)}
+    .map-pop-link{color:var(--oxblood);font-weight:600;font-size:var(--step--1)}
+    .map-pop-link:hover{text-decoration:underline}
+    @media(prefers-reduced-motion:reduce){
+      .leaflet-fade-anim .leaflet-tile,.leaflet-zoom-anim .leaflet-zoom-animated{transition:none!important}
+    }
+  </style>
+{% endblock %}
+
 {% block content %}
 <section class="bay wrap">
   <div class="sec-head">
@@ -15,4 +46,14 @@
     </div>
   </div>
 </section>
+{% endblock %}
+
+{% block scripts %}
+  {# Leaflet core + cluster plugin (CDN, SRI-pinned), then our island. defer keeps document
+     order: L is defined before map.js runs; map.js no-ops gracefully if a script fails. #}
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"
+          integrity="sha256-Hk4dIpcqOSb0hZjgyvFOP+cEmDXUKKNE/tT542ZbNQg=" crossorigin="" defer></script>
+  <script src="/static/js/map.js" defer></script>
 {% endblock %}
