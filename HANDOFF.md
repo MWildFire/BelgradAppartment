@@ -10,6 +10,71 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.-1 Этап W «Public Web Catalog» (20.06.2026) — код + миграция задеплоены, Caddy/TLS отложены
+
+> Самый свежий handoff. ADR + план: `docs/web/ARCHITECTURE.md`, `docs/web/DATA_CONTRACT.md`,
+> `docs/web/DECISIONS.md`, `docs/superpowers/plans/2026-06-20-public-web-catalog.md`.
+
+**Что это.** Stage W — **второе FastAPI+Jinja-приложение на той же VPS** (публичный каталог для
+клиентов @RentBelgrad), читает **существующую SQLite read-only** (OS-уровень `mode=ro`), под **Caddy**
+(авто-TLS). Код в `src/site/`. **Не** Astro/Vercel и **не** повторный ингест из Telegram — обоснование в
+ADR. Каталог показывает только **отобранные Дарьей** квартиры (опубличенные в @RentBelgrad), не сырые
+21.8k listings и **никогда** не линкует на площадки-конкуренты (ToS).
+
+**Что сделано (код, ветка `feature/public-web-catalog`):**
+1. **Новый сервис** `otz-site.service` (`uvicorn src.site.app:app`) на `127.0.0.1:8001`, `User=otz`,
+   `--workers 1` (CSRF-токен / rate-limiter / TTL-кэши per-process), за Caddy. `OnFailure=` — один алерт,
+   как у H1-юнитов. Юнит: `deploy/otz-site.service`.
+2. **Миграция 0006** (`0006_site_listings_leads`, alembic head теперь 0006): таблица `site_listings`
+   (курирующий оверлей: `match_id UNIQUE FK`, `is_public`, `is_for_vnj`, `is_for_white_card`,
+   `channel_post_url`, `note`) + таблица `leads` (заявки с публичной формы).
+3. **Admin** (`src/admin`) получил publish-to-site контролы: тоглы «На сайт» / «ВНЖ» / «Белый картон»
+   + `channel_post_url`/`note`; Mark-posted авто-создаёт публичный `site_listing` (авто-парсинг
+   ВНЖ/белый-картон флагов из текста поста, ручной тогл всегда перебивает). CSRF-guarded.
+4. **Публичный сайт:** главная · каталог с фильтрами (ВНЖ + белый картон на видном месте,
+   район/цена/комнаты/сортировка) · карточка `/apt/{id}` (цена+площадь моноширинным, «снято» приглушённо,
+   CTA на канал) · карта (Leaflet) · калькулятор аренды · форма заявки (→ `leads` + нотис Дарье через
+   существующий бот; honeypot-поле `company` + per-IP rate-limit + CSRF) · избранное (`localStorage`).
+5. **Фото** отдаёт Caddy `file_server` из `/opt/otz/data/inbound` (`SITE_PHOTOS_ROOT`), **не** Python;
+   публичные URL — `/photos/<relpath>`; **никогда** площадочный или TG-CDN URL в публичной выдаче (ToS).
+   `InboundPost.photo_paths` хранятся относительными (`data/inbound/...`).
+6. **Новые env-ключи** (см. `deploy/env.additions.txt` / `.env.example`): `SITE_BIND_HOST/PORT`,
+   `SITE_PUBLIC_BASE_URL`, `SITE_CACHE_TTL`, `SITE_PAGE_SIZE`, `SITE_PHOTOS_ROOT` (=/opt/otz/data/inbound),
+   `SITE_CHANNEL_URL`, `SITE_LEAD_RATELIMIT_MAX/_WINDOW`. Нотис заявки переиспользует
+   `TG_BOT_TOKEN`/`TG_BOT_RECIPIENTS`.
+7. **Тесты:** полный прогон 438 passed + 6 skipped; Playwright e2e (`RUN_E2E=1`) — 5 флоу против реального
+   uvicorn+chromium. Read-only-изоляция, no-scraping-leak, CSRF, honeypot покрыты тестами + 3-линзовое
+   security-ревью (вердикт fix_then_ship, все находки исправлены).
+
+**Деплой — статус:**
+- ✅ **Сделано на VPS (20.06.2026):** код зарсинкан, миграция 0006 применена (бэкап:
+  `data/backups/otz-2026-06-20-1813-pre-stagew.db`), `otz-site.service` установлен + enabled + active на
+  `127.0.0.1:8001`, localhost-smoke зелёный (`/healthz`, `/`, `/catalog`, `/api/map.json`, `/calculator` —
+  все 200). Монитор здоров.
+- ⏳ **Отложено (нужен реальный сабдомен + DNS A-запись → `90.156.254.159`):** установка Caddy +
+  `deploy/Caddyfile` (заменить `rent.example.com`, root `/photos` = `/opt/otz/data/inbound`), TLS,
+  `ufw allow 80,443`, добавить `SITE_PUBLIC_BASE_URL` (+ при желании остальные `SITE_*` с боевыми
+  значениями) в `/opt/otz/.env`. До этого сайт работает только на localhost (наружу недоступен).
+
+**Порты:** пайплайн без изменений; otz-site `127.0.0.1:8001`; Caddy займёт 80/443 (`ufw` открыть 80/443 —
+pending). Админка остаётся localhost-only, наружу не проксируется никогда.
+
+### 0.-1.1 Инцидент 20.06.2026: первый `deploy_sync` снёс `/opt/otz/.venv`
+
+**Что случилось.** Первый прогон `deploy_sync` при деплое Stage W **затёр `/opt/otz/.venv`**: в worktree
+`.venv` — это **симлинк**, а `deploy_sync` исключал `'.venv/'` (слэш в конце матчит только директорию, не
+симлинк), поэтому `rsync --delete-after` снёс venv на сервере. Потери БД/данных нет (`data/` исключён +
+бэкап есть); `otz-monitor` продолжал крутиться на уже загруженном в память интерпретаторе.
+
+**Восстановление.** Пересобран `/opt/otz/.venv`, запинен к локальному dev-freeze (вкл. CPU-torch +
+open_clip), переустановлен совпадающий chromium headless-shell, восстановлен ownership; монитор
+проверен — живой.
+
+**Фикс (закоммичен в `scripts/deploy_sync.sh`):** исключать `'.venv'` (БЕЗ слэша — матчит симлинк) +
+исключать `logs/`, `.claude/`, `.DS_Store`, `tests/e2e/site/_artifacts/`.
+
+**УРОК:** никогда не рсинкать worktree, чей `.venv` — симлинк, не исключив его по точному имени.
+
 ### 0.0 Инцидент 13–19.06.2026: отзыв Telethon-сессии + hardening
 
 **Что случилось.** 13.06 ~17:35 UTC владелец аккаунта (это личный аккаунт `mvstrike`, он же userbot)
@@ -210,6 +275,7 @@ ssh root@90.156.254.159
 | `otz-monitor.service` | active 24/7 | Live-listener @OtzRentBelgrad через Telethon. Каждый новый альбом → `process_new_inbound` → match → bot delivery | `/var/log/otz/monitor.log` |
 | `otz-nightly-refresh.timer` | `OnCalendar=*-*-* 03:00:00` UTC (05:00 Belgrade) | Полный (non-incremental) скрап всех 3 платформ + mark stale listings inactive (`inactive_after_days=3`) | `/var/log/otz/nightly-refresh.log` |
 | `otz-daily-summary.timer` | `OnCalendar=*-*-* 07:00:00` UTC (09:00 Belgrade) | Считает inbound / matched / no_match / delivered за 24ч, постит в бот сводку | `/var/log/otz/daily-summary.log` |
+| `otz-site.service` (этап W) | active 24/7 | Публичный веб-каталог (FastAPI/uvicorn), `127.0.0.1:8001`, `User=otz`, `--workers 1`, за Caddy. Читает БД read-only + пишет только `leads`. Юнит: [deploy/otz-site.service](deploy/otz-site.service) | journald (`journalctl -u otz-site`) |
 
 **Проверить статус:**
 ```bash
@@ -311,8 +377,10 @@ ssh -t root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && OTZ_2FA=<пар�
 - `listings` — все scraped квартиры с 3 платформ. `is_active=True/False` управляется `mark_stale_inactive`. Ключевые поля: `external_id`, `url`, `price_eur`, `area_m2`, `rooms`, `district`, `address_raw`, `lat`, `lon`, `photo_urls`, `photo_phashes`, `photo_embeddings`
 - `matches` — `(inbound_post_id, listing_id)` + `confidence`, `matched_photo_count`, `method` (`phash` / `clip` / `clip+llm`), `status` (PENDING/PUBLISHED/REJECTED)
 - `published_posts` — `(match_id, tg_message_id, post_text)` — фактическая доставка
+- `site_listings` (этап W) — курирующий оверлей для публичного каталога: `match_id` (UNIQUE FK), `is_public`, `is_for_vnj`, `is_for_white_card`, `channel_post_url`, `note`. Сайт читает джойном к `listings`; пайплайн эту таблицу не трогает (CQRS read-model)
+- `leads` (этап W) — заявки с публичной формы сайта (`name`, `contact`, `budget_eur`, `districts`, `rooms`, `message`, ...). Единственная таблица, в которую публичный app пишет (scoped writer)
 
-**Миграции:** Alembic в [alembic/](alembic/). Применять: `cd /opt/otz && .venv/bin/alembic upgrade head`.
+**Миграции:** Alembic в [alembic/](alembic/). Применять: `cd /opt/otz && .venv/bin/alembic upgrade head`. Head — **0006** (`0006_site_listings_leads`, этап W).
 
 **Backup перед опасными операциями:**
 ```bash
@@ -415,9 +483,20 @@ NIGHTLY_PRUNE_EMBEDDINGS=1        # 0 = не прунить embeddings неак�
 NIGHTLY_METRICS=1                 # 0 = не писать daily_metrics / drop-алерт
 PRICE_DROP_ALERTS=true
 PRICE_DROP_MIN_PCT=5
+# --- этап W (публичный сайт; добавить в /opt/otz/.env руками при включении Caddy) ---
+SITE_BIND_HOST=127.0.0.1
+SITE_BIND_PORT=8001
+SITE_PUBLIC_BASE_URL=https://rent.example.com   # заменить на реальный сабдомен
+SITE_CACHE_TTL=300
+SITE_PAGE_SIZE=24
+SITE_PHOTOS_ROOT=/opt/otz/data/inbound          # = root /photos в Caddyfile
+SITE_CHANNEL_URL=https://t.me/RentBelgrad
+SITE_LEAD_RATELIMIT_MAX=5
+SITE_LEAD_RATELIMIT_WINDOW=3600
+# нотис заявки уходит Дарье через уже настроенный бот (TG_BOT_TOKEN / TG_BOT_RECIPIENTS)
 ```
 
-Шаблон: [.env.example](.env.example).
+Шаблон: [.env.example](.env.example). Полный Stage-W блок + деплой-файлы — `deploy/env.additions.txt`, `deploy/Caddyfile`, `deploy/otz-site.service`.
 
 ---
 
@@ -630,13 +709,24 @@ src/
 │   ├── template.py                 # render_post
 │   ├── hashtags.py                 # build_hashtags, district_tag
 │   └── location.py                 # yandex_maps_url
-└── admin/                          # FastAPI read-only UI (опционально)
+├── admin/                          # FastAPI read-only UI + publish-to-site контролы (этап W)
+└── site/                           # этап W: публичный каталог (FastAPI+Jinja, read-only БД)
+    ├── app.py                      # uvicorn src.site.app:app (127.0.0.1:8001)
+    ├── format.py                   # нормализация rooms/district для показа (покрыт тестами)
+    ├── templates/                  # Jinja (index/catalog/apt/map/calculator + partials)
+    └── static/                     # CSS-токены, filters.js, favorites.js (отдаёт Caddy)
+
+deploy/                             # этап W: артефакты деплоя публичного сайта
+├── otz-site.service               # systemd-юнит публичного app
+├── Caddyfile                      # reverse-proxy + file_server для /static и /photos
+└── env.additions.txt              # SITE_* ключи для /opt/otz/.env
 
 scripts/
 ├── vps_install.sh                  # one-shot bootstrap для Ubuntu 24.04
 ├── deploy_sync.sh                  # rsync laptop → VPS
 ├── auth_telethon.py                # auth для otz_monitor.session
-└── auth_logger.py                  # auth для otz_logger.session
+├── auth_logger.py                  # auth для otz_logger.session
+└── auth_qr.py                      # QR-реавторизация сессий (см. §5.4)
 
 data/
 └── districts.yaml                  # район → хэштег (единственный синкаемый data-файл)

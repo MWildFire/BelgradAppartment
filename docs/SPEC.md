@@ -407,6 +407,31 @@ CLI `otz deliver-all` — однократный re-trigger для PENDING ма�
 - [x] Бюджет ночного refetch (`NIGHTLY_REFETCH_BUDGET_SEC`) + per-fetch cap — страховка от SIGTERM.
 - [x] Тесты 207 → 220; деплой + smoke на проде пройдены.
 
+### Этап W — «Public Web Catalog» (20.06.2026) — ✅ код задеплоен, Caddy/TLS отложены
+ADR + контракты: `docs/web/ARCHITECTURE.md`, `docs/web/DATA_CONTRACT.md`, `docs/web/DECISIONS.md`;
+план: `docs/superpowers/plans/2026-06-20-public-web-catalog.md`; итоги: `HANDOFF.md` §0.-1. Кратко:
+- [x] **Второе FastAPI+Jinja-приложение** (`src/site/`, `otz-site.service` на `127.0.0.1:8001`,
+      `User=otz`, `--workers 1`) на той же VPS, читает существующую SQLite **read-only**, за **Caddy**
+      (авто-TLS). Не Astro/Vercel, без повторного ингеста из Telegram.
+- [x] Миграция 0006: `site_listings` (курирующий оверлей: `match_id UNIQUE FK`, `is_public`,
+      `is_for_vnj`, `is_for_white_card`, `channel_post_url`, `note`) + `leads` (заявки с формы).
+- [x] Admin: publish-to-site контролы «На сайт» / «ВНЖ» / «Белый картон» + `channel_post_url`/`note`;
+      Mark-posted авто-создаёт публичный `site_listing` (авто-парсинг флагов из текста, ручной тогл
+      перебивает). CSRF-guarded.
+- [x] Публичный сайт: главная · каталог с фильтрами (ВНЖ + белый картон на видном месте) ·
+      карточка `/apt/{id}` · карта (Leaflet) · калькулятор · форма заявки (→ `leads` + нотис Дарье
+      через существующий бот; honeypot `company` + per-IP rate-limit + CSRF) · избранное (`localStorage`).
+- [x] Фото отдаёт Caddy `file_server` из `/opt/otz/data/inbound`, не Python; публичные URL `/photos/<relpath>`;
+      никогда площадочный/TG-CDN URL наружу (ToS).
+- [x] Новые env: `SITE_BIND_HOST/PORT`, `SITE_PUBLIC_BASE_URL`, `SITE_CACHE_TTL`, `SITE_PAGE_SIZE`,
+      `SITE_PHOTOS_ROOT`, `SITE_CHANNEL_URL`, `SITE_LEAD_RATELIMIT_MAX/_WINDOW`.
+- [x] Тесты: 438 passed + 6 skipped; Playwright e2e (`RUN_E2E=1`) 5 флоу; 3-линзовое security-ревью
+      (read-only-изоляция, no-scraping-leak, CSRF, honeypot — все находки исправлены).
+- [x] Деплой на VPS: код + миграция 0006 (бэкап `otz-2026-06-20-1813-pre-stagew.db`), сервис enabled
+      + active, localhost-smoke зелёный.
+- [ ] **Отложено (нужен сабдомен + DNS A → `90.156.254.159`):** Caddy + `deploy/Caddyfile`, TLS,
+      `ufw allow 80,443`, боевой `SITE_PUBLIC_BASE_URL` в `/opt/otz/.env`. До этого сайт — localhost-only.
+
 ---
 
 ## 8. Риски и открытые вопросы

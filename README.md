@@ -14,6 +14,8 @@
 5. Дарья проверяет, копирует и сама постит в **@RentBelgrad** (бот в канал НЕ публикует — она контролирует процесс).
 6. Веб-админка read-only: просмотр очереди, истории доставки, источников, listings.
 
+Отдельно от пайплайна есть **публичный веб-каталог** (этап W) — см. ниже.
+
 ## Установка
 
 Используется [uv](https://docs.astral.sh/uv/) для управления зависимостями.
@@ -52,7 +54,8 @@ src/
 ├── matching/          # pHash + CLIP fallback
 ├── telegram/          # monitor (Telethon) + publisher (Bot API)
 ├── post/              # генератор поста по шаблону
-├── admin/             # FastAPI + Jinja
+├── admin/             # FastAPI + Jinja (+ publish-to-site контролы, этап W)
+├── site/              # публичный веб-каталог (FastAPI + Jinja, этап W)
 ├── jobs/              # pipeline process_new_inbound
 └── cli.py             # `otz <command>`
 ```
@@ -78,6 +81,31 @@ otz match <inbound_id>      # one-off матчинг конкретного inbo
 otz stats                   # текущее состояние БД
 otz admin                   # запустить веб-просмотр (FastAPI)
 ```
+
+## Публичный веб-каталог (этап W)
+
+Второе FastAPI+Jinja-приложение (`src/site/`) — публичный каталог для клиентов @RentBelgrad. Читает
+**ту же SQLite read-only** и показывает только **отобранные Дарьей** квартиры (опубличенные в канале),
+никогда не линкует на площадки-конкуренты. Главная, каталог с фильтрами (ВНЖ + белый картон на видном
+месте), карточка квартиры, карта (Leaflet), калькулятор аренды, форма заявки (→ таблица `leads` + нотис
+Дарье через бота), избранное в `localStorage`. На проде слушает `127.0.0.1:8001` за Caddy (авто-TLS);
+фото отдаёт сам Caddy из `data/inbound` (см. [`deploy/`](deploy/): `otz-site.service`, `Caddyfile`,
+`env.additions.txt`). Обоснование архитектуры — [`docs/web/ARCHITECTURE.md`](docs/web/ARCHITECTURE.md).
+
+```bash
+# применить миграции (head 0006 заводит site_listings + leads)
+uv run alembic upgrade head
+
+# локальный запуск (хост/порт из SITE_BIND_* в .env, по умолчанию 127.0.0.1:8001)
+.venv/bin/uvicorn src.site.app:app --reload --port 8001
+# открыть http://127.0.0.1:8001/   (/healthz, /catalog, /calculator, /api/map.json)
+
+# e2e (Playwright против реального uvicorn+chromium) — только под флагом:
+RUN_E2E=1 uv run pytest tests/e2e/site -q
+```
+
+Новые env-ключи (`SITE_*`) — в [`.env.example`](.env.example) / [`deploy/env.additions.txt`](deploy/env.additions.txt).
+Нотис о заявке переиспользует `TG_BOT_TOKEN` / `TG_BOT_RECIPIENTS` (отдельных ключей не нужно).
 
 ## Статус
 
