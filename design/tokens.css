@@ -1,0 +1,73 @@
+/* ============================================================
+   RentBelgrad — Design Tokens  ("Belgrade Editorial")
+   Anti-slop system. Shared by site + Claude Code build.
+   ============================================================ */
+:root{
+  /* — surfaces — */
+  --paper:        #F4EFE6;   /* warm off-white, primary bg */
+  --paper-2:      #ECE4D6;   /* sand, secondary surface   */
+  --paper-3:      #E3D8C5;   /* deeper sand, hover/sunken  */
+  --card:         #FBF8F1;   /* near-white card           */
+
+  /* — ink — */
+  --ink:          #1B1A17;   /* near-black, text          */
+  --ink-2:        #4A463E;   /* muted body                */
+  --ink-3:        #8A8275;   /* captions / meta           */
+  --hairline:     #D8CDBA;   /* thin rules                */
+
+  /* — brand (refined Serbian flag) — */
+  --oxblood:      #A8362A;   /* primary red, oxblood      */
+  --oxblood-2:    #8E2A20;   /* pressed                   */
+  --navy:         #15324C;   /* deep blue                 */
+  --navy-2:       #0F2638;   /* pressed                   */
+  --ochre:        #D89A4E;   /* honey accent              */
+  --sage:         #4F6B57;   /* "подходит для ВНЖ" green   */
+
+  /* — type — */
+  --display: "Unbounded", system-ui, sans-serif;
+  --text:    "Golos Text", system-ui, sans-serif;
+  --mono:    "JetBrains Mono", ui-monospace, monospace;
+
+  /* — scale (fluid, editorial) — */
+  --step--1: clamp(0.78rem, 0.75rem + 0.15vw, 0.86rem);
+  --step-0:  clamp(0.98rem, 0.95rem + 0.2vw, 1.06rem);
+  --step-1:  clamp(1.2rem, 1.1rem + 0.5vw, 1.4rem);
+  --step-2:  clamp(1.5rem, 1.3rem + 0.9vw, 2.0rem);
+  --step-3:  clamp(2.0rem, 1.6rem + 1.8vw, 3.1rem);
+  --step-4:  clamp(2.8rem, 2.0rem + 3.6vw, 5.2rem);
+  --step-5:  clamp(3.6rem, 2.2rem + 6vw, 7.4rem);
+
+  /* — spacing — */
+  --gutter: clamp(1.1rem, 0.6rem + 2vw, 2.4rem);
+  --bay:    clamp(3rem, 2rem + 5vw, 7rem);
+
+  /* — geometry — (sharp, editorial; small radius only) */
+  --r-s: 3px;
+  --r-m: 6px;
+  --maxw: 1340px;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--text);
+  font-size:var(--step-0);
+  line-height:1.55;
+  font-feature-settings:"ss01","cv01";
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+h1,h2,h3,h4{font-family:var(--display);font-weight:700;line-height:1.0;margin:0;letter-spacing:-0.02em}
+p{margin:0}
+a{color:inherit;text-decoration:none}
+img{display:block;max-width:100%}
+.mono{font-family:var(--mono);font-feature-settings:normal;letter-spacing:0}
+.kicker{
+  font-family:var(--mono);font-size:var(--step--1);
+  text-transform:uppercase;letter-spacing:0.22em;color:var(--ink-3);
+}
+.wrap{max-width:var(--maxw);margin:0 auto;padding-inline:var(--gutter)}
+.rule{height:1px;background:var(--hairline);border:0;margin:0}

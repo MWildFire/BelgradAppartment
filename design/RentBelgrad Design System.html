@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>RentBelgrad — Дизайн-система · Вайрфреймы</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;600;700&family=Kalam:wght@300;400;700&family=Gloria+Hallelujah&family=Architects+Daughter&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#f5f1e8;
+    --paper-2:#efe9dc;
+    --ink:#1a1a1a;
+    --ink-soft:#3a3a3a;
+    --pencil:#6b6b6b;
+    --rule:#d9d2c2;
+    --red:#c8372d;
+    --red-soft:#e07464;
+    --blue:#0c4076;
+    --blue-soft:#3a6fa3;
+    --yellow:#e8c547;
+    --accent-wash:#fde9e4;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--paper);color:var(--ink);font-family:'Kalam',cursive;font-size:16px;line-height:1.45}
+  body{
+    background-image:
+      radial-gradient(circle at 20% 10%, rgba(200,55,45,0.04), transparent 40%),
+      radial-gradient(circle at 80% 60%, rgba(12,64,118,0.04), transparent 40%),
+      repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(12,64,118,0.05) 31px, rgba(12,64,118,0.05) 32px);
+  }
+  .mono{font-family:'JetBrains Mono',monospace}
+  .hand{font-family:'Caveat',cursive}
+  .hand2{font-family:'Gloria Hallelujah',cursive}
+  .hand3{font-family:'Architects Daughter',cursive}
+  .sans{font-family:'Inter',sans-serif}
+
+  /* ——— top bar ——— */
+  .topbar{
+    position:sticky;top:0;z-index:10;
+    background:rgba(245,241,232,0.92);
+    backdrop-filter:blur(6px);
+    border-bottom:2px solid var(--ink);
+    padding:14px 28px;
+    display:flex;align-items:center;gap:24px;flex-wrap:wrap;
+  }
+  .topbar h1{font-family:'Caveat',cursive;font-weight:700;font-size:28px;margin:0;letter-spacing:.5px}
+  .topbar h1 .red{color:var(--red)}
+  .topbar h1 .blue{color:var(--blue)}
+  .tabs{display:flex;gap:4px;flex-wrap:wrap}
+  .tab{
+    font-family:'Kalam',cursive;font-size:16px;
+    background:transparent;color:var(--ink);
+    border:1.5px solid var(--ink);border-radius:20px;
+    padding:6px 14px;cursor:pointer;
+    transition:all .15s;
+    transform:rotate(-.5deg);
+  }
+  .tab:nth-child(2n){transform:rotate(.5deg)}
+  .tab:hover{background:var(--paper-2)}
+  .tab.active{background:var(--ink);color:var(--paper)}
+  .meta{margin-left:auto;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--pencil);text-align:right}
+
+  section.panel{display:none;padding:36px 28px 80px;max-width:1400px;margin:0 auto}
+  section.panel.active{display:block}
+
+  /* ——— section headers ——— */
+  .page-title{font-family:'Caveat',cursive;font-weight:700;font-size:46px;margin:0 0 4px;line-height:1}
+  .page-sub{font-family:'Kalam',cursive;font-size:16px;color:var(--pencil);margin:0 0 28px}
+  .page-sub b{color:var(--ink)}
+
+  /* ——— generic blocks ——— */
+  .row{display:flex;gap:24px;flex-wrap:wrap;margin-bottom:32px}
+  .col{flex:1;min-width:300px}
+  .card{
+    background:#fffdf7;
+    border:2px solid var(--ink);
+    border-radius:6px;
+    padding:20px;
+    position:relative;
+    box-shadow:3px 3px 0 var(--ink);
+  }
+  .card.tilt-l{transform:rotate(-.6deg)}
+  .card.tilt-r{transform:rotate(.6deg)}
+  .card h3{font-family:'Caveat',cursive;font-weight:700;font-size:24px;margin:0 0 10px}
+  .card .annot{font-family:'Kalam',cursive;font-size:13px;color:var(--pencil);margin:0}
+  .tag{display:inline-block;background:var(--ink);color:var(--paper);font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:1px}
+  .tag.red{background:var(--red)}
+  .tag.blue{background:var(--blue)}
+  .pill{display:inline-block;border:1.5px solid var(--ink);border-radius:20px;padding:3px 10px;font-family:'Kalam',cursive;font-size:13px;background:#fffdf7}
+
+  /* arrow/callout */
+  .callout{
+    position:absolute;
+    font-family:'Caveat',cursive;font-weight:600;
+    color:var(--red);font-size:18px;
+    transform:rotate(-6deg);
+    pointer-events:none;
+  }
+  .callout svg{display:block;margin-top:-4px}
+
+  /* ——— BRAND TAB ——— */
+  .logo-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  .logo-cell{
+    background:#fffdf7;border:2px solid var(--ink);border-radius:6px;
+    padding:28px;min-height:220px;display:flex;flex-direction:column;justify-content:space-between;
+    box-shadow:3px 3px 0 var(--ink);
+    position:relative;
+  }
+  .logo-cell .label{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--pencil);text-transform:uppercase;letter-spacing:1.5px}
+  .logo-cell .show{flex:1;display:flex;align-items:center;justify-content:center;min-height:120px}
+  .logo-cell .note{font-family:'Kalam',cursive;font-size:13px;color:var(--ink-soft);border-top:1px dashed var(--rule);padding-top:8px}
+
+  /* LOGO A: wordmark */
+  .logo-wordmark{display:flex;align-items:baseline;gap:2px;font-family:'Inter',sans-serif;font-weight:700;font-size:30px;letter-spacing:-.5px;color:var(--ink)}
+  .logo-wordmark .dot{width:8px;height:8px;background:var(--red);border-radius:50%;display:inline-block;margin-right:2px;transform:translateY(-4px)}
+  .logo-wordmark .brd{color:var(--blue)}
+
+  /* LOGO B: monogram */
+  .logo-mono{width:90px;height:90px;background:var(--blue);border-radius:12px;display:flex;align-items:center;justify-content:center;color:#fff;font-family:'Inter',sans-serif;font-weight:700;font-size:40px;position:relative}
+  .logo-mono::after{content:'';position:absolute;right:10px;bottom:10px;width:14px;height:14px;background:var(--red);border-radius:50%}
+
+  /* LOGO C: key + house */
+  .logo-keyhouse{display:flex;align-items:center;gap:12px;font-family:'Inter',sans-serif;font-weight:600;font-size:22px;color:var(--ink)}
+  .kh-icon{width:48px;height:48px;border:2.5px solid var(--ink);border-radius:4px;position:relative;background:var(--paper)}
+  .kh-icon::before{content:'';position:absolute;top:-14px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:26px solid transparent;border-right:26px solid transparent;border-bottom:16px solid var(--red)}
+  .kh-icon::after{content:'';position:absolute;top:14px;left:50%;transform:translate(-50%,0);width:10px;height:10px;border-radius:50%;background:var(--blue);box-shadow:0 14px 0 -3px var(--blue)}
+
+  /* LOGO D: window */
+  .logo-window{display:flex;flex-direction:column;align-items:center;gap:6px;font-family:'Inter',sans-serif;font-weight:700;font-size:16px;color:var(--ink);letter-spacing:1px}
+  .win-icon{width:64px;height:80px;border:2.5px solid var(--ink);display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;background:var(--paper)}
+  .win-icon div{border:1px solid var(--ink)}
+  .win-icon div:nth-child(1){background:var(--red)}
+  .win-icon div:nth-child(4){background:var(--blue)}
+
+  /* LOGO E: skadarlija silhouette */
+  .logo-city{display:flex;align-items:center;gap:10px;font-family:'Caveat',cursive;font-weight:700;font-size:30px;color:var(--blue)}
+  .city-icon{width:70px;height:48px;position:relative}
+  .city-icon .roof1{position:absolute;bottom:0;left:0;width:20px;height:30px;background:var(--ink)}
+  .city-icon .roof1::before{content:'';position:absolute;top:-10px;left:0;width:0;height:0;border-left:10px solid transparent;border-right:10px solid transparent;border-bottom:10px solid var(--ink)}
+  .city-icon .roof2{position:absolute;bottom:0;left:22px;width:24px;height:40px;background:var(--red)}
+  .city-icon .roof3{position:absolute;bottom:0;left:48px;width:22px;height:24px;background:var(--blue)}
+
+  /* LOGO F: abstract */
+  .logo-abs{display:flex;align-items:center;gap:10px;font-family:'Inter',sans-serif;font-weight:500;font-size:22px;color:var(--ink)}
+  .abs-icon{width:50px;height:50px;position:relative}
+  .abs-icon div:nth-child(1){position:absolute;top:0;left:0;width:20px;height:20px;background:var(--red)}
+  .abs-icon div:nth-child(2){position:absolute;top:0;right:0;width:20px;height:20px;background:var(--paper);border:2px solid var(--ink)}
+  .abs-icon div:nth-child(3){position:absolute;bottom:0;left:0;width:20px;height:20px;background:var(--paper);border:2px solid var(--ink)}
+  .abs-icon div:nth-child(4){position:absolute;bottom:0;right:0;width:20px;height:20px;background:var(--blue)}
+
+  /* palette */
+  .swatch{border:2px solid var(--ink);border-radius:6px;overflow:hidden;box-shadow:2px 2px 0 var(--ink)}
+  .swatch .chip{height:90px}
+  .swatch .info{background:#fffdf7;padding:8px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;display:flex;justify-content:space-between}
+
+  /* type sample */
+  .type-row{display:flex;align-items:baseline;gap:20px;border-bottom:1px dashed var(--rule);padding:14px 0}
+  .type-row .lbl{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--pencil);text-transform:uppercase;letter-spacing:1.5px;width:120px;flex-shrink:0}
+
+  /* ——— TELEGRAM TAB ——— */
+  .tg-stage{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+  .tg-phone{
+    background:#000;border-radius:28px;padding:10px;width:100%;max-width:320px;margin:0 auto;
+    box-shadow:4px 4px 0 var(--ink),0 0 0 2px var(--ink);
+  }
+  .tg-screen{background:#17212b;border-radius:20px;padding:16px;color:#fff;font-family:'Inter',sans-serif;min-height:500px;position:relative}
+  .tg-header{display:flex;align-items:center;gap:10px;padding-bottom:12px;border-bottom:1px solid #2a3b4d}
+  .tg-avatar{width:44px;height:44px;border-radius:50%;overflow:hidden;flex-shrink:0}
+  .tg-name{font-size:13px;font-weight:600}
+  .tg-sub{font-size:10px;color:#8596a5}
+  .tg-post{background:#1e2c3a;border-radius:10px;padding:10px;margin-top:12px;font-size:11px}
+  .tg-post img-placeholder{display:block;height:90px;background:linear-gradient(135deg,#2a4058,#3a5578);border-radius:6px;margin-bottom:8px;position:relative;overflow:hidden}
+
+  /* avatar concepts */
+  .avatar-set{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+  .avatar{width:90px;height:90px;border-radius:50%;overflow:hidden;border:2px solid var(--ink);display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0}
+  .avatar.a1{background:var(--blue);color:#fff;font-family:'Inter',sans-serif;font-weight:800;font-size:36px}
+  .avatar.a1::after{content:'';position:absolute;right:14px;bottom:14px;width:10px;height:10px;background:var(--red);border-radius:50%}
+  .avatar.a2{background:linear-gradient(180deg,var(--red) 0% 33%,#fff 33% 66%,var(--blue) 66% 100%);display:flex;align-items:center;justify-content:center}
+  .avatar.a2::before{content:'RB';color:#fff;font-family:'Inter',sans-serif;font-weight:800;font-size:28px;background:var(--ink);padding:2px 6px;border-radius:4px}
+  .avatar.a3{background:var(--paper);color:var(--blue);font-family:'Caveat',cursive;font-weight:700;font-size:52px;line-height:.9}
+  .avatar.a4{background:var(--ink)}
+  .avatar.a4 .win{width:46px;height:54px;border:3px solid var(--paper);display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+  .avatar.a4 .win div{border:1.5px solid var(--paper)}
+  .avatar.a4 .win div:nth-child(1){background:var(--red)}
+  .avatar.a4 .win div:nth-child(4){background:var(--blue)}
+
+  /* post templates */
+  .post-tpl{background:#fffdf7;border:2px solid var(--ink);border-radius:10px;padding:14px;box-shadow:3px 3px 0 var(--ink);max-width:360px}
+  .post-tpl .ph{height:180px;background:repeating-linear-gradient(45deg,#e8e2d2,#e8e2d2 10px,#ddd6c4 10px,#ddd6c4 20px);border:1.5px dashed var(--pencil);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--pencil);margin-bottom:10px;position:relative}
+  .post-tpl .badge{position:absolute;top:10px;left:10px;background:var(--red);color:#fff;font-family:'Inter',sans-serif;font-weight:700;font-size:11px;padding:4px 10px;border-radius:14px;letter-spacing:.5px}
+  .post-tpl .badge.done{background:var(--ink)}
+  .post-tpl .price{font-family:'Inter',sans-serif;font-weight:700;font-size:22px;color:var(--ink)}
+  .post-tpl .price small{font-weight:500;font-size:13px;color:var(--pencil);margin-left:4px}
+  .post-tpl .title{font-family:'Inter',sans-serif;font-weight:600;font-size:14px;margin:4px 0 8px;color:var(--ink)}
+  .post-tpl .params{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .post-tpl .params span{font-family:'Inter',sans-serif;font-size:11px;background:var(--paper-2);border-radius:10px;padding:3px 8px;color:var(--ink-soft)}
+  .post-tpl .foot{font-family:'Kalam',cursive;font-size:13px;color:var(--pencil);border-top:1px dashed var(--rule);padding-top:8px;display:flex;justify-content:space-between}
+  .post-tpl .strike{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .post-tpl .strike div{background:var(--ink);color:#fff;font-family:'Inter',sans-serif;font-weight:800;font-size:38px;padding:8px 28px;letter-spacing:4px;transform:rotate(-10deg);border-radius:4px;opacity:.92}
+
+  /* welcome */
+  .welcome{background:#1e2c3a;color:#fff;border-radius:10px;padding:18px;font-family:'Inter',sans-serif;font-size:13px;line-height:1.6;max-width:420px;border:2px solid var(--ink);box-shadow:3px 3px 0 var(--ink)}
+  .welcome h4{font-family:'Inter',sans-serif;font-size:15px;margin:0 0 10px;color:#fff}
+  .welcome .hi{font-size:16px}
+  .welcome ul{padding-left:18px;margin:8px 0}
+  .welcome li{margin:4px 0}
+  .welcome .btns{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+  .welcome .tgbtn{background:#2b5278;color:#fff;border-radius:8px;padding:8px 12px;font-size:12px;flex:1;text-align:center;border:1px solid #3a6fa3}
+
+  /* ——— WEB TAB ——— */
+  .web-frame{background:#fffdf7;border:2px solid var(--ink);border-radius:8px;box-shadow:4px 4px 0 var(--ink);overflow:hidden;margin-bottom:24px}
+  .web-chrome{display:flex;align-items:center;gap:6px;background:var(--paper-2);padding:8px 12px;border-bottom:1.5px solid var(--ink)}
+  .web-chrome .dot{width:11px;height:11px;border-radius:50%;border:1px solid var(--ink)}
+  .web-chrome .dot:nth-child(1){background:#ff5f57}
+  .web-chrome .dot:nth-child(2){background:#ffbd2e}
+  .web-chrome .dot:nth-child(3){background:#28c940}
+  .web-chrome .url{margin-left:12px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--pencil);background:#fffdf7;padding:3px 10px;border-radius:10px;flex:1;text-align:center}
+
+  .web-body{padding:0}
+  .web-nav{display:flex;align-items:center;padding:14px 28px;border-bottom:1px solid var(--rule)}
+  .web-nav .nav-logo{font-family:'Inter',sans-serif;font-weight:700;font-size:18px;color:var(--ink);display:flex;align-items:baseline;gap:2px}
+  .web-nav .nav-logo .dot{width:7px;height:7px;background:var(--red);border-radius:50%;margin-right:3px;transform:translateY(-3px)}
+  .web-nav .nav-logo .brd{color:var(--blue)}
+  .web-nav .links{display:flex;gap:22px;margin-left:40px;font-family:'Inter',sans-serif;font-size:13px}
+  .web-nav .links a{color:var(--ink-soft)}
+  .web-nav .cta{margin-left:auto;font-family:'Inter',sans-serif;font-weight:600;font-size:13px;background:var(--ink);color:var(--paper);padding:8px 14px;border-radius:20px}
+
+  /* hero options */
+  .hero{padding:48px 28px;display:grid;grid-template-columns:1.1fr .9fr;gap:32px;align-items:center}
+  .hero h2{font-family:'Inter',sans-serif;font-weight:700;font-size:44px;margin:0 0 16px;line-height:1.05;color:var(--ink);letter-spacing:-1px}
+  .hero h2 .red{color:var(--red)}
+  .hero h2 .blue{color:var(--blue)}
+  .hero p{font-family:'Inter',sans-serif;font-size:15px;color:var(--ink-soft);max-width:440px;margin:0 0 22px;line-height:1.5}
+  .search-bar{background:#fffdf7;border:2px solid var(--ink);border-radius:40px;padding:4px 4px 4px 22px;display:flex;align-items:center;gap:8px;max-width:460px;box-shadow:3px 3px 0 var(--ink)}
+  .search-bar input{border:0;background:transparent;font-family:'Inter',sans-serif;font-size:14px;flex:1;outline:none;color:var(--ink);padding:10px 0}
+  .search-bar .go{background:var(--red);color:#fff;border:0;border-radius:30px;padding:10px 22px;font-family:'Inter',sans-serif;font-weight:600;font-size:13px;cursor:pointer}
+  .hero-art{height:300px;background:#fff;border:2px dashed var(--pencil);border-radius:12px;position:relative;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .hero-art::before{content:'';position:absolute;inset:0;background:repeating-linear-gradient(45deg,#f2ecde,#f2ecde 10px,#e8e2d2 10px,#e8e2d2 20px);opacity:.6}
+  .hero-art .ph-text{position:relative;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--pencil);text-align:center;padding:10px 20px;background:rgba(255,253,247,.9);border:1px solid var(--pencil);border-radius:4px}
+  .hero-chips{display:flex;gap:8px;flex-wrap:wrap}
+  .hero-chips .c{font-family:'Inter',sans-serif;font-size:12px;border:1.5px solid var(--ink);border-radius:16px;padding:5px 10px;background:#fffdf7}
+  .hero-chips .c.on{background:var(--ink);color:var(--paper)}
+
+  /* listing */
+  .listing{display:grid;grid-template-columns:240px 1fr;gap:0;padding:0;border-top:1px solid var(--rule)}
+  .sidebar{padding:20px;border-right:1px solid var(--rule);background:var(--paper-2)}
+  .sidebar h4{font-family:'Inter',sans-serif;font-size:12px;text-transform:uppercase;letter-spacing:1.5px;margin:0 0 10px;color:var(--pencil)}
+  .filter-group{margin-bottom:18px}
+  .filter-group .opt{font-family:'Inter',sans-serif;font-size:13px;display:flex;align-items:center;gap:8px;margin:6px 0;color:var(--ink-soft)}
+  .filter-group .opt .box{width:14px;height:14px;border:1.5px solid var(--ink);border-radius:3px;flex-shrink:0;background:#fffdf7}
+  .filter-group .opt.on .box{background:var(--red)}
+  .listing-main{padding:20px}
+  .listing-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .listing-head h3{font-family:'Inter',sans-serif;font-size:18px;margin:0}
+  .listing-head .count{font-family:'Kalam',cursive;font-size:14px;color:var(--pencil)}
+  .cards-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .lcard{background:#fffdf7;border:1.5px solid var(--ink);border-radius:8px;overflow:hidden}
+  .lcard .img{height:120px;background:repeating-linear-gradient(45deg,#e8e2d2,#e8e2d2 8px,#ddd6c4 8px,#ddd6c4 16px);position:relative;border-bottom:1.5px solid var(--ink)}
+  .lcard .img .tag-fav{position:absolute;top:8px;right:8px;width:24px;height:24px;background:#fffdf7;border:1.5px solid var(--ink);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--red)}
+  .lcard .img .tag-vnj{position:absolute;top:8px;left:8px;background:var(--blue);color:#fff;font-family:'Inter',sans-serif;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;letter-spacing:.5px}
+  .lcard .body{padding:10px 12px}
+  .lcard .price{font-family:'Inter',sans-serif;font-weight:700;font-size:18px}
+  .lcard .title{font-family:'Inter',sans-serif;font-size:12px;color:var(--ink-soft);margin:2px 0 6px}
+  .lcard .params{display:flex;gap:8px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--pencil)}
+
+  /* apt detail */
+  .detail{padding:28px}
+  .detail-grid{display:grid;grid-template-columns:1.4fr .8fr;gap:24px}
+  .gallery{display:grid;grid-template-columns:2fr 1fr 1fr;grid-template-rows:1fr 1fr;gap:6px;height:340px}
+  .gallery .g{background:repeating-linear-gradient(45deg,#e8e2d2,#e8e2d2 10px,#ddd6c4 10px,#ddd6c4 20px);border:1.5px solid var(--ink);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--pencil)}
+  .gallery .g.main{grid-row:span 2}
+  .detail-side{background:#fffdf7;border:1.5px solid var(--ink);border-radius:8px;padding:18px;position:sticky;top:20px}
+  .detail-side .price{font-family:'Inter',sans-serif;font-weight:700;font-size:28px}
+  .detail-side .per{font-family:'Kalam',cursive;color:var(--pencil);margin-bottom:14px}
+  .detail-side .btn-full{display:block;width:100%;background:var(--red);color:#fff;border:0;border-radius:6px;padding:12px;font-family:'Inter',sans-serif;font-weight:600;font-size:14px;margin-bottom:8px;cursor:pointer}
+  .detail-side .btn-ghost{display:block;width:100%;background:#fffdf7;color:var(--ink);border:1.5px solid var(--ink);border-radius:6px;padding:12px;font-family:'Inter',sans-serif;font-weight:600;font-size:14px;cursor:pointer}
+  .detail-side .bullet{font-family:'Inter',sans-serif;font-size:12px;color:var(--ink-soft);display:flex;gap:8px;margin:8px 0;border-top:1px dashed var(--rule);padding-top:8px}
+
+  /* ——— APP TAB ——— */
+  .phones-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px;align-items:start}
+  .phone{background:#000;border-radius:36px;padding:8px;max-width:300px;margin:0 auto;box-shadow:5px 5px 0 var(--ink),0 0 0 2px var(--ink);position:relative}
+  .phone::before{content:'';position:absolute;top:16px;left:50%;transform:translateX(-50%);width:80px;height:20px;background:#000;border-radius:14px;z-index:2}
+  .phone .screen{background:var(--paper);border-radius:28px;min-height:560px;padding:44px 16px 20px;font-family:'Inter',sans-serif;position:relative;overflow:hidden}
+  .phone .screen.dark{background:#0f1a2e;color:#e8e4dd}
+  .phone .caption{text-align:center;font-family:'Kalam',cursive;font-size:14px;color:var(--pencil);margin-top:10px}
+  .phone .caption b{color:var(--ink)}
+
+  .app-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+  .app-logo{font-family:'Inter',sans-serif;font-weight:700;font-size:16px;display:flex;align-items:baseline}
+  .app-logo .dot{width:6px;height:6px;background:var(--red);border-radius:50%;margin-right:3px;transform:translateY(-2px)}
+  .app-logo .brd{color:var(--blue)}
+  .app-icon{width:32px;height:32px;background:#fffdf7;border:1.5px solid var(--ink);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px}
+
+  .app-search{background:#fffdf7;border:1.5px solid var(--ink);border-radius:22px;padding:8px 14px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--pencil);margin-bottom:14px}
+  .app-chips{display:flex;gap:6px;margin-bottom:14px;overflow-x:auto;padding-bottom:4px}
+  .app-chips .c{font-size:11px;border:1.5px solid var(--ink);border-radius:14px;padding:4px 10px;background:#fffdf7;white-space:nowrap;color:var(--ink-soft)}
+  .app-chips .c.on{background:var(--ink);color:var(--paper)}
+  .app-chips .c.vnj{background:var(--blue);color:#fff;border-color:var(--blue)}
+
+  .app-card{background:#fffdf7;border:1.5px solid var(--ink);border-radius:10px;overflow:hidden;margin-bottom:10px}
+  .app-card .ph{height:100px;background:repeating-linear-gradient(45deg,#e8e2d2,#e8e2d2 8px,#ddd6c4 8px,#ddd6c4 16px);position:relative}
+  .app-card .ph .tag{position:absolute;top:8px;left:8px;background:var(--blue);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:8px;letter-spacing:.3px}
+  .app-card .ph .fav{position:absolute;top:8px;right:8px;width:22px;height:22px;background:#fffdf7;border:1.5px solid var(--ink);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--red)}
+  .app-card .body{padding:8px 10px}
+  .app-card .price{font-weight:700;font-size:15px}
+  .app-card .addr{font-size:11px;color:var(--pencil)}
+  .app-card .params{display:flex;gap:8px;margin-top:4px;font-size:10px;color:var(--ink-soft)}
+
+  /* map screen */
+  .map-bg{position:absolute;inset:44px 0 0 0;background:
+    radial-gradient(circle at 30% 40%,rgba(12,64,118,.08),transparent 40%),
+    repeating-linear-gradient(0deg,transparent,transparent 19px,rgba(12,64,118,.1) 20px),
+    repeating-linear-gradient(90deg,transparent,transparent 19px,rgba(12,64,118,.1) 20px),
+    #ebe6d7}
+  .map-bg::before{content:'';position:absolute;left:20%;top:30%;width:40%;height:3px;background:var(--blue);opacity:.5;transform:rotate(25deg)}
+  .map-bg::after{content:'';position:absolute;left:40%;top:50%;width:30%;height:8px;background:rgba(12,64,118,.15);transform:rotate(-15deg);border-radius:4px}
+  .map-pin{position:absolute;background:var(--red);color:#fff;font-family:'Inter',sans-serif;font-weight:700;font-size:11px;padding:4px 8px;border-radius:14px;border:1.5px solid var(--ink);box-shadow:2px 2px 0 var(--ink)}
+  .map-pin.sel{background:var(--blue)}
+
+  .map-bottom{position:absolute;left:12px;right:12px;bottom:12px;background:#fffdf7;border:1.5px solid var(--ink);border-radius:12px;padding:10px;display:flex;gap:10px;box-shadow:3px 3px 0 var(--ink)}
+  .map-bottom .mini{width:64px;height:64px;background:repeating-linear-gradient(45deg,#e8e2d2,#e8e2d2 6px,#ddd6c4 6px,#ddd6c4 12px);border-radius:6px;flex-shrink:0}
+  .map-bottom .info{flex:1}
+  .map-bottom .info .p{font-weight:700;font-size:14px}
+  .map-bottom .info .a{font-size:10px;color:var(--pencil)}
+
+  /* calc screen */
+  .calc-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px dashed var(--rule);font-size:13px}
+  .calc-row .lbl{color:var(--ink-soft)}
+  .calc-row .val{font-weight:600}
+  .calc-total{background:var(--ink);color:var(--paper);border-radius:10px;padding:16px;margin-top:14px;text-align:center}
+  .calc-total .big{font-weight:700;font-size:30px;display:block}
+  .calc-total small{font-size:11px;opacity:.7}
+
+  /* chat screen */
+  .chat-bub{max-width:75%;padding:8px 12px;border-radius:14px;font-size:13px;margin-bottom:8px;line-height:1.35}
+  .chat-bub.in{background:#fffdf7;border:1.5px solid var(--ink);border-bottom-left-radius:4px}
+  .chat-bub.out{background:var(--blue);color:#fff;margin-left:auto;border-bottom-right-radius:4px}
+  .chat-input{position:absolute;left:12px;right:12px;bottom:12px;background:#fffdf7;border:1.5px solid var(--ink);border-radius:22px;padding:8px 14px;font-size:12px;color:var(--pencil);display:flex;justify-content:space-between;align-items:center}
+  .chat-input .send{width:28px;height:28px;background:var(--red);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700}
+
+  /* ——— KIT TAB ——— */
+  .kit-row{display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-bottom:20px}
+  .btn{font-family:'Inter',sans-serif;font-weight:600;font-size:14px;border-radius:6px;padding:10px 18px;cursor:pointer;border:1.5px solid var(--ink)}
+  .btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+  .btn.red{background:var(--red);color:#fff;border-color:var(--red)}
+  .btn.blue{background:var(--blue);color:#fff;border-color:var(--blue)}
+  .btn.ghost{background:transparent;color:var(--ink)}
+  .btn.round{border-radius:40px}
+  .btn.lg{padding:14px 24px;font-size:15px}
+  .input{font-family:'Inter',sans-serif;font-size:14px;padding:10px 14px;border:1.5px solid var(--ink);border-radius:6px;background:#fffdf7;min-width:220px}
+  .input.round{border-radius:30px}
+
+  /* icon grid */
+  .icons{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px}
+  .icon-box{border:1.5px solid var(--ink);border-radius:6px;padding:12px;background:#fffdf7;text-align:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--pencil)}
+  .icon-box .g{width:28px;height:28px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center}
+  .icon-box svg{width:24px;height:24px;stroke:var(--ink);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+  /* divider */
+  .divider{display:flex;align-items:center;gap:16px;margin:40px 0 24px}
+  .divider .line{flex:1;height:0;border-top:2px dashed var(--ink)}
+  .divider .label{font-family:'Caveat',cursive;font-weight:700;font-size:30px;color:var(--ink)}
+
+  /* sticky-note */
+  .note{
+    background:#fff9c4;
+    border:1.5px solid var(--ink);
+    padding:12px 14px;
+    font-family:'Gloria Hallelujah',cursive;
+    font-size:13px;
+    line-height:1.4;
+    max-width:260px;
+    box-shadow:3px 3px 0 rgba(0,0,0,.2);
+    transform:rotate(-1.5deg);
+    position:relative;
+  }
+  .note::before{
+    content:'';position:absolute;top:-10px;left:50%;transform:translateX(-50%);
+    width:40px;height:14px;background:rgba(200,55,45,.45);border:1px solid rgba(0,0,0,.2);
+  }
+  .note.blue{background:#d9eaff}
+
+  /* small */
+  .small{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--pencil)}
+  .arrow-h{font-family:'Caveat',cursive;font-weight:700;color:var(--red);font-size:18px}
+
+  /* intro card */
+  .intro{
+    border:2px solid var(--ink);background:#fffdf7;border-radius:10px;padding:22px;
+    box-shadow:4px 4px 0 var(--ink);margin-bottom:28px;
+    display:grid;grid-template-columns:2fr 1fr;gap:22px;align-items:center;
+  }
+  .intro h2{font-family:'Caveat',cursive;font-weight:700;font-size:36px;margin:0 0 8px;line-height:1}
+  .intro p{margin:0 0 10px;font-size:15px;color:var(--ink-soft)}
+  .intro .tags{display:flex;gap:6px;flex-wrap:wrap}
+  .intro .flag{display:flex;flex-direction:column;border:2px solid var(--ink);width:100%;max-width:160px;box-shadow:3px 3px 0 var(--ink)}
+  .intro .flag div{height:30px}
+  .intro .flag .r{background:var(--red)}
+  .intro .flag .w{background:var(--paper)}
+  .intro .flag .b{background:var(--blue)}
+
+  /* flex layout helpers */
+  .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:24px}
+  @media (max-width:900px){
+    .grid-2,.grid-3,.logo-grid,.tg-stage,.cards-grid{grid-template-columns:1fr}
+    .hero{grid-template-columns:1fr}
+    .listing{grid-template-columns:1fr}
+    .detail-grid{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1><span class="red">●</span> Rent<span class="blue">Belgrad</span> <span class="small" style="font-family:'Caveat',cursive;font-weight:400;font-size:20px;color:var(--pencil)">— wireframes v1</span></h1>
+  <div class="tabs" id="tabs">
+    <button class="tab active" data-t="brand">① Brand</button>
+    <button class="tab" data-t="tg">② Telegram</button>
+    <button class="tab" data-t="web">③ Web</button>
+    <button class="tab" data-t="app">④ App</button>
+    <button class="tab" data-t="kit">⑤ UI kit</button>
+  </div>
+  <div class="meta">
+    low-fi · b&w + accent<br>
+    3 directions × RB
+  </div>
+</div>
+
+<!-- ============== BRAND ============== -->
+<section class="panel active" data-screen-label="01 Brand" id="brand">
+  <div class="intro">
+    <div>
+      <h2>«Свой человек в Белграде»</h2>
+      <p>Помогаем снять квартиру на длительный срок — с учётом ВНЖ и белого картона. Бренд честный, тёплый, без корпоративной пыли. Основа палитры — сербский флаг, но приглушённый, на бумажном фоне.</p>
+      <div class="tags">
+        <span class="pill">тёплое</span>
+        <span class="pill">человечное</span>
+        <span class="pill">надёжное</span>
+        <span class="pill">локальное</span>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
+      <div class="flag"><div class="r"></div><div class="w"></div><div class="b"></div></div>
+      <span class="small">цветовая основа</span>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Логотип — 6 направлений</span><div class="line"></div></div>
+  <p class="page-sub">Показываю диапазон: от чистого wordmark до полноценного знака. Выберем 1-2 и отполируем. <b>Рабочее имя — RentBelgrad</b> (не ломаем @RentBelgrad в ТГ).</p>
+
+  <div class="logo-grid">
+    <div class="logo-cell tilt-l">
+      <div class="label">A · WORDMARK + DOT</div>
+      <div class="show"><div class="logo-wordmark"><span class="dot"></span>Rent<span class="brd">Belgrad</span></div></div>
+      <div class="note">Простой словесный знак. Красная точка = локатор на карте. Безопасно, узнаваемо.</div>
+    </div>
+    <div class="logo-cell">
+      <div class="label">B · МОНОГРАММА RB</div>
+      <div class="show"><div class="logo-mono">RB</div></div>
+      <div class="note">Короткий знак для аватарок ТГ, favicon, иконки приложения. Красная точка — акцент.</div>
+    </div>
+    <div class="logo-cell tilt-r">
+      <div class="label">C · КРЫША + КЛЮЧ</div>
+      <div class="show"><div class="logo-keyhouse"><span class="kh-icon"></span>RentBelgrad</div></div>
+      <div class="note">Метафора «дом с ключом». Читается мгновенно. Возможно, самое тёплое.</div>
+    </div>
+
+    <div class="logo-cell tilt-r">
+      <div class="label">D · ОКНО БЕЛГРАДА</div>
+      <div class="show"><div class="logo-window"><span class="win-icon"><div></div><div></div><div></div><div></div></span>RENTBELGRAD</div></div>
+      <div class="note">Окно квартиры как символ поиска своего места. 2/4 — цвета флага. Интересно крутится в UI.</div>
+    </div>
+    <div class="logo-cell">
+      <div class="label">E · СИЛУЭТ СКАДАРЛИИ</div>
+      <div class="show"><div class="logo-city"><span class="city-icon"><span class="roof1"></span><span class="roof2"></span><span class="roof3"></span></span>Rent Belgrad</div></div>
+      <div class="note">Более лирично, «свой человек». Рукописный шрифт. Риск — может выглядеть тесно в малых размерах.</div>
+    </div>
+    <div class="logo-cell tilt-l">
+      <div class="label">F · АБСТРАКТНАЯ СЕТКА 2×2</div>
+      <div class="show"><div class="logo-abs"><span class="abs-icon"><div></div><div></div><div></div><div></div></span>rentbelgrad</div></div>
+      <div class="note">Геометрия. План квартиры + 4 комнаты = цвета флага. Современно, подходит для digital-first.</div>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Палитра</span><div class="line"></div></div>
+  <p class="page-sub">Сербский флаг как база, но приглушённый + тёплый бумажный фон вместо чисто белого. <b>Никаких неоновых градиентов.</b></p>
+
+  <div class="grid-3">
+    <div class="swatch"><div class="chip" style="background:var(--red)"></div><div class="info"><span>Црвени · Red</span><span>#C8372D</span></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--blue)"></div><div class="info"><span>Плави · Blue</span><span>#0C4076</span></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--paper);border:1px solid var(--rule)"></div><div class="info"><span>Папир · Paper</span><span>#F5F1E8</span></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--ink)"></div><div class="info"><span>Мастило · Ink</span><span>#1A1A1A</span></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--yellow)"></div><div class="info"><span>Акцент · Sun</span><span>#E8C547</span></div></div>
+    <div class="swatch"><div class="chip" style="background:var(--red-soft)"></div><div class="info"><span>Црвени soft</span><span>#E07464</span></div></div>
+  </div>
+
+  <div class="divider"><span class="label">Типографика</span><div class="line"></div></div>
+  <p class="page-sub">Предлагаю пару: <b>Inter</b> — рабочая, для веб/приложения (понятная кириллица, все веса). <b>Caveat</b> — рукописный акцент, для заголовков и фирменных фраз. Один моноширинный для данных — <b>JetBrains Mono</b>.</p>
+  <div class="card">
+    <div class="type-row"><div class="lbl">display · caveat</div><div class="hand" style="font-size:44px;font-weight:700;color:var(--blue);line-height:1">Снимай в Белграде как у себя дома</div></div>
+    <div class="type-row"><div class="lbl">h1 · inter 700</div><div class="sans" style="font-size:36px;font-weight:700;letter-spacing:-.5px">Квартиры для жизни, а не для галочки</div></div>
+    <div class="type-row"><div class="lbl">h2 · inter 600</div><div class="sans" style="font-size:24px;font-weight:600">Подходит для ВНЖ и белого картона</div></div>
+    <div class="type-row"><div class="lbl">body · inter 400</div><div class="sans" style="font-size:15px">Мы помогаем релокантам из РФ и СНГ найти жильё в Белграде: от первичного поиска до подписи договора и регистрации адреса.</div></div>
+    <div class="type-row"><div class="lbl">data · jetbrains mono</div><div class="mono" style="font-size:14px">€650/мес · 48m² · 1+1 · Врачар</div></div>
+    <div class="type-row"><div class="lbl">accent · caveat</div><div class="hand" style="font-size:22px;color:var(--red)">самое тёплое предложение недели ↓</div></div>
+  </div>
+
+  <div class="divider"><span class="label">Голос бренда</span><div class="line"></div></div>
+  <div class="grid-2">
+    <div class="card tilt-l">
+      <span class="tag">tone</span>
+      <h3>Как свой человек — не агент</h3>
+      <p class="annot">Мы не говорим «клиент», «объект недвижимости», «локация». Мы говорим: <b>«квартира», «район», «ты»</b> (на «вы» — если клиент сам так начинает).</p>
+      <p class="annot" style="margin-top:10px">✓ «Смотри, вот что нашёл на Врачаре»<br>✗ «Уважаемый клиент, предлагаем вашему вниманию объект недвижимости...»</p>
+    </div>
+    <div class="card tilt-r">
+      <span class="tag red">do</span> <span class="tag">don't</span>
+      <h3>Микро-правила</h3>
+      <p class="annot">✓ короткие предложения<br>✓ цены в € и параметры кодом (48m²)<br>✓ серб. слова в акцентах (Скадарлија, Врачар)<br>✗ эмодзи россыпью<br>✗ восклицательные знаки в каждом предложении<br>✗ капс</p>
+    </div>
+  </div>
+
+  <div style="margin-top:20px" class="note">это базовый набор — когда выберете логотип, соберу полный бренд-гид PDF</div>
+</section>
+
+<!-- ============== TELEGRAM ============== -->
+<section class="panel" data-screen-label="02 Telegram" id="tg">
+  <h2 class="page-title">Оформление ТГ-канала</h2>
+  <p class="page-sub">Канал уже живёт (775 подписчиков). <b>Не трогаем @handle</b> — меняем только визуал. Ниже: аватарки (4 варианта), шаблоны постов, закреп.</p>
+
+  <div class="divider"><span class="label">Аватарки</span><div class="line"></div></div>
+  <p class="page-sub">Сейчас там фото кухни — легко теряется в списке каналов. Нужно что-то яркое и опознаваемое на 40×40px.</p>
+
+  <div class="card tilt-l">
+    <div class="avatar-set">
+      <div style="text-align:center">
+        <div class="avatar a1">RB</div>
+        <div class="small" style="margin-top:6px">A · моно на синем</div>
+      </div>
+      <div style="text-align:center">
+        <div class="avatar a2"></div>
+        <div class="small" style="margin-top:6px">B · флаг + шильд</div>
+      </div>
+      <div style="text-align:center">
+        <div class="avatar a3">R</div>
+        <div class="small" style="margin-top:6px">C · рукописная R</div>
+      </div>
+      <div style="text-align:center">
+        <div class="avatar a4"><div class="win"><div></div><div></div><div></div><div></div></div></div>
+        <div class="small" style="margin-top:6px">D · окно Белграда</div>
+      </div>
+      <div class="note blue" style="transform:rotate(1deg)">Мой фаворит — <b>D «окно»</b>. Читается на мелком размере + держит метафору «смотрим, где жить».</div>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Шаблоны постов</span><div class="line"></div></div>
+  <div class="grid-3">
+    <!-- new -->
+    <div>
+      <div class="post-tpl">
+        <div class="ph">
+          <div class="badge">НОВАЯ</div>
+          [ фото квартиры ]
+        </div>
+        <div class="price">€650 <small>/ месяц</small></div>
+        <div class="title">2-комн., ремонт 2024, балкон на парк</div>
+        <div class="params"><span>48m²</span><span>1+1</span><span>Врачар</span><span>этаж 3/5</span><span style="background:var(--blue);color:#fff">✓ для ВНЖ</span></div>
+        <div class="foot"><span>📍 ул. Милоша Поцерца</span><span style="color:var(--blue)">@RentBelgrad</span></div>
+      </div>
+      <p class="small" style="text-align:center;margin-top:10px">«Новая квартира» — базовый пост</p>
+    </div>
+
+    <!-- taken -->
+    <div>
+      <div class="post-tpl" style="position:relative">
+        <div class="ph">
+          <div class="badge done">СНЯТО</div>
+          [ фото квартиры ]
+        </div>
+        <div style="opacity:.5">
+          <div class="price">€550 <small>/ месяц</small></div>
+          <div class="title">Студия в старом ядре</div>
+          <div class="params"><span>32m²</span><span>1+0</span><span>Дорћол</span></div>
+          <div class="foot"><span>помогли найти за 4 дня</span><span style="color:var(--blue)">@RentBelgrad</span></div>
+        </div>
+        <div class="strike"><div>СНЯТО</div></div>
+      </div>
+      <p class="small" style="text-align:center;margin-top:10px">«Сдано/Снято» — соц. доказательство</p>
+    </div>
+
+    <!-- review -->
+    <div>
+      <div class="post-tpl">
+        <div style="display:flex;gap:10px;margin-bottom:10px">
+          <div style="width:44px;height:44px;background:var(--blue);border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-family:'Inter',sans-serif;font-weight:700">АК</div>
+          <div>
+            <div style="font-family:'Inter',sans-serif;font-weight:600;font-size:14px">Анна К.</div>
+            <div class="small">переехала из Москвы · март 2026</div>
+          </div>
+        </div>
+        <p class="hand" style="font-size:18px;line-height:1.3;margin:0 0 10px;color:var(--ink)">«Нашли квартиру на Врачаре за 3 дня. Помогли с ugovor'ом и registracija boravišta — без них я бы месяц искала.»</p>
+        <div style="display:flex;gap:6px"><span style="color:var(--red);font-size:16px">★★★★★</span></div>
+        <div class="foot"><span>отзыв · квартира #128</span><span style="color:var(--blue)">@RentBelgrad</span></div>
+      </div>
+      <p class="small" style="text-align:center;margin-top:10px">«Отзыв» — история клиента</p>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Закреплённое сообщение</span><div class="line"></div></div>
+  <div class="grid-2">
+    <div class="welcome">
+      <h4><span class="hi">👋</span> Добро пожаловать в RentBelgrad</h4>
+      <p>Мы помогаем релокантам снять квартиру в Белграде на длительный срок — с договором, который подходит для <b>ВНЖ</b> и <b>белого картона</b>.</p>
+      <ul>
+        <li>Новые квартиры → в ленте ниже</li>
+        <li>Персональный поиск → напиши @manager</li>
+        <li>FAQ про ВНЖ и договоры → /faq</li>
+      </ul>
+      <div class="btns">
+        <div class="tgbtn">Написать менеджеру</div>
+        <div class="tgbtn">Открыть сайт</div>
+      </div>
+    </div>
+    <div class="note" style="max-width:none;transform:rotate(.5deg)">
+      <b>почему такой закреп:</b><br>
+      — 2 секунды на сканирование<br>
+      — сразу отвечает на «что здесь?»<br>
+      — две ясные CTA кнопки<br>
+      — упоминание ВНЖ / картона в первом абзаце — ключевой триггер для ЦА<br>
+      <br>
+      ⚠️ в Telegram кнопки делаются через бота — отдельная мелкая настройка
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Обложка канала (1280×720)</span><div class="line"></div></div>
+  <div class="card tilt-l" style="padding:0;overflow:hidden">
+    <div style="aspect-ratio:16/9;background:linear-gradient(180deg,var(--paper) 0%,var(--paper-2) 100%);position:relative;padding:40px;display:flex;flex-direction:column;justify-content:space-between">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div class="logo-wordmark" style="font-size:38px"><span class="dot" style="width:12px;height:12px"></span>Rent<span class="brd">Belgrad</span></div>
+        <div style="display:flex;gap:0"><div style="width:24px;height:40px;background:var(--red)"></div><div style="width:24px;height:40px;background:var(--paper)"></div><div style="width:24px;height:40px;background:var(--blue)"></div></div>
+      </div>
+      <div>
+        <div class="hand" style="font-size:54px;font-weight:700;color:var(--blue);line-height:1;margin-bottom:8px">Квартиры в Белграде.<br>Свой человек на месте.</div>
+        <div class="mono" style="font-size:14px;color:var(--pencil)">ВНЖ · БЕЛИ КАРТОН · ДОГОВОРИ · @RENTBELGRAD</div>
+      </div>
+      <div style="position:absolute;right:40px;bottom:30px">
+        <div style="width:180px;height:180px;border:3px solid var(--ink);display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;background:var(--paper)">
+          <div style="background:var(--red);border:1.5px solid var(--ink)"></div>
+          <div style="border:1.5px solid var(--ink)"></div>
+          <div style="border:1.5px solid var(--ink)"></div>
+          <div style="background:var(--blue);border:1.5px solid var(--ink)"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== WEB ============== -->
+<section class="panel" data-screen-label="03 Web" id="web">
+  <h2 class="page-title">Веб-сайт</h2>
+  <p class="page-sub">Три ключевых экрана в стиле wireframe — структура и иерархия, без полированных фото. Видно, как ляжет бренд на живой продукт.</p>
+
+  <div class="divider"><span class="label">① Главная</span><div class="line"></div></div>
+  <div class="web-frame">
+    <div class="web-chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">rentbelgrad.rs</span></div>
+    <div class="web-body">
+      <div class="web-nav">
+        <div class="nav-logo"><span class="dot"></span>Rent<span class="brd">Belgrad</span></div>
+        <div class="links"><a>Каталог</a><a>Как мы работаем</a><a>ВНЖ и договор</a><a>Отзывы</a><a>FAQ</a></div>
+        <div class="cta">Войти</div>
+      </div>
+      <div class="hero">
+        <div>
+          <div class="hand" style="font-size:22px;color:var(--red);margin-bottom:6px">свой человек в Белграде</div>
+          <h2>Снимай квартиру <span class="blue">в Белграде</span> — <br>с договором, который <span class="red">проходит на ВНЖ</span></h2>
+          <p>Помогаем релокантам из РФ и СНГ найти квартиру на длительный срок. От первого звонка до регистрации boravišta — ведём за руку.</p>
+          <div class="search-bar">
+            <span class="mono" style="color:var(--pencil)">район</span>
+            <input placeholder="Врачар, Дорћол, Нови Београд..." />
+            <button class="go">Найти</button>
+          </div>
+          <div class="hero-chips" style="margin-top:14px">
+            <span class="c on">✓ для ВНЖ</span>
+            <span class="c">до €600</span>
+            <span class="c">с балконом</span>
+            <span class="c">рядом парк</span>
+          </div>
+        </div>
+        <div class="hero-art">
+          <div class="ph-text">[ hero-фото: балкон с видом на Saborna Crkva ]</div>
+          <div class="callout" style="top:-10px;right:-10px;color:var(--red)">реальное фото →</div>
+        </div>
+      </div>
+
+      <!-- how it works strip -->
+      <div style="background:var(--ink);color:var(--paper);padding:28px;display:grid;grid-template-columns:repeat(4,1fr);gap:20px">
+        <div><div class="mono" style="color:var(--yellow);font-size:11px;letter-spacing:2px">01 / ЗАЯВКА</div><div class="sans" style="font-weight:600;font-size:15px;margin-top:6px">Рассказываешь, что нужно</div></div>
+        <div><div class="mono" style="color:var(--yellow);font-size:11px;letter-spacing:2px">02 / ПОДБОРКА</div><div class="sans" style="font-weight:600;font-size:15px;margin-top:6px">Делаем 3-5 вариантов</div></div>
+        <div><div class="mono" style="color:var(--yellow);font-size:11px;letter-spacing:2px">03 / ПРОСМОТР</div><div class="sans" style="font-weight:600;font-size:15px;margin-top:6px">Ходим с тобой на показ</div></div>
+        <div><div class="mono" style="color:var(--yellow);font-size:11px;letter-spacing:2px">04 / ДОГОВОР</div><div class="sans" style="font-weight:600;font-size:15px;margin-top:6px">Оформляем ugovor + boravište</div></div>
+      </div>
+
+      <!-- featured -->
+      <div style="padding:28px 28px 36px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px">
+          <div class="sans" style="font-weight:700;font-size:22px">Свежие квартиры</div>
+          <div class="hand" style="color:var(--red);font-size:18px">→ все 47 в каталоге</div>
+        </div>
+        <div class="cards-grid">
+          <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€650<span class="small" style="font-weight:500">/мес</span></div><div class="title">2-комн., ремонт, балкон</div><div class="params"><span>48m²</span><span>1+1</span><span>Врачар</span></div></div></div>
+          <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€550<span class="small" style="font-weight:500">/мес</span></div><div class="title">Студия в старом ядре</div><div class="params"><span>32m²</span><span>1+0</span><span>Дорћол</span></div></div></div>
+          <div class="lcard"><div class="img"><div class="tag-fav">♡</div></div><div class="body"><div class="price">€820<span class="small" style="font-weight:500">/мес</span></div><div class="title">3-комн., семье с ребёнком</div><div class="params"><span>68m²</span><span>2+1</span><span>Н. Београд</span></div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">② Листинг / каталог</span><div class="line"></div></div>
+  <div class="web-frame">
+    <div class="web-chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">rentbelgrad.rs/catalog?vnj=1&price=0-700</span></div>
+    <div class="web-body">
+      <div class="web-nav">
+        <div class="nav-logo"><span class="dot"></span>Rent<span class="brd">Belgrad</span></div>
+        <div class="links"><a style="color:var(--red);font-weight:600">Каталог</a><a>Как мы работаем</a><a>ВНЖ</a><a>Отзывы</a></div>
+        <div class="cta">Написать</div>
+      </div>
+      <div class="listing">
+        <div class="sidebar">
+          <h4>Фильтры</h4>
+          <div class="filter-group">
+            <div class="opt on"><div class="box">✓</div>Подходит для ВНЖ</div>
+            <div class="opt"><div class="box"></div>Подходит для бел. картона</div>
+            <div class="opt on"><div class="box">✓</div>С мебелью</div>
+            <div class="opt"><div class="box"></div>С балконом</div>
+            <div class="opt"><div class="box"></div>Разрешены питомцы</div>
+          </div>
+          <h4>Район</h4>
+          <div class="filter-group">
+            <div class="opt on"><div class="box">✓</div>Врачар</div>
+            <div class="opt"><div class="box"></div>Дорћол</div>
+            <div class="opt"><div class="box"></div>Стари град</div>
+            <div class="opt"><div class="box"></div>Нови Београд</div>
+            <div class="opt"><div class="box"></div>Земун</div>
+          </div>
+          <h4>Цена, €/мес</h4>
+          <div style="font-family:'Inter',sans-serif;font-size:13px;padding:4px 0"><b>400 — 700</b></div>
+          <div style="height:4px;background:var(--rule);border-radius:2px;position:relative;margin:10px 0 18px">
+            <div style="position:absolute;left:15%;right:35%;top:0;height:4px;background:var(--red);border-radius:2px"></div>
+            <div style="position:absolute;left:15%;top:-5px;width:14px;height:14px;background:var(--paper);border:1.5px solid var(--ink);border-radius:50%;transform:translateX(-50%)"></div>
+            <div style="position:absolute;left:65%;top:-5px;width:14px;height:14px;background:var(--paper);border:1.5px solid var(--ink);border-radius:50%;transform:translateX(-50%)"></div>
+          </div>
+          <h4>Комнат</h4>
+          <div class="filter-group" style="display:flex;gap:6px">
+            <span class="pill">студия</span><span class="pill" style="background:var(--ink);color:var(--paper)">1+1</span><span class="pill">2+1</span><span class="pill">3+1</span>
+          </div>
+          <button class="btn red" style="width:100%;margin-top:10px;padding:10px;font-size:13px">Показать 12 квартир</button>
+        </div>
+        <div class="listing-main">
+          <div class="listing-head">
+            <h3>Врачар · с мебелью · подходит для ВНЖ</h3>
+            <div class="count">12 квартир · сортировка: свежие ↓</div>
+          </div>
+          <div class="cards-grid">
+            <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€650<span class="small" style="font-weight:500">/мес</span></div><div class="title">2-комн., ремонт, балкон</div><div class="params"><span>48m²</span><span>1+1</span><span>Врачар</span></div></div></div>
+            <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€580<span class="small" style="font-weight:500">/мес</span></div><div class="title">Светлая 1+1 у парка</div><div class="params"><span>42m²</span><span>1+1</span><span>Врачар</span></div></div></div>
+            <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€520<span class="small" style="font-weight:500">/мес</span></div><div class="title">Угловая с эркером</div><div class="params"><span>44m²</span><span>1+1</span><span>Врачар</span></div></div></div>
+            <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€700<span class="small" style="font-weight:500">/мес</span></div><div class="title">После капремонта, высокие потолки</div><div class="params"><span>52m²</span><span>1+1</span><span>Врачар</span></div></div></div>
+            <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€610<span class="small" style="font-weight:500">/мес</span></div><div class="title">Тихий двор, 2 этаж</div><div class="params"><span>46m²</span><span>1+1</span><span>Врачар</span></div></div></div>
+            <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€680<span class="small" style="font-weight:500">/мес</span></div><div class="title">Сдаёт напрямую собственник</div><div class="params"><span>50m²</span><span>1+1</span><span>Врачар</span></div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">③ Карточка квартиры</span><div class="line"></div></div>
+  <div class="web-frame">
+    <div class="web-chrome"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">rentbelgrad.rs/apt/128-vracar-milose-pocerca</span></div>
+    <div class="web-body">
+      <div class="web-nav">
+        <div class="nav-logo"><span class="dot"></span>Rent<span class="brd">Belgrad</span></div>
+        <div class="links"><a>Каталог</a><a>ВНЖ</a><a>FAQ</a></div>
+        <div class="cta">Написать</div>
+      </div>
+      <div class="detail">
+        <div class="small" style="margin-bottom:10px">Каталог / Врачар / <b style="color:var(--ink)">ул. Милоша Поцерца, 12</b></div>
+        <div class="detail-grid">
+          <div>
+            <div class="gallery">
+              <div class="g main">[ основное фото — гостиная ]</div>
+              <div class="g">[ спальня ]</div>
+              <div class="g">[ кухня ]</div>
+              <div class="g">[ балкон ]</div>
+              <div class="g">[ +4 фото ]</div>
+            </div>
+            <h2 style="font-family:'Inter',sans-serif;font-weight:700;font-size:28px;margin:20px 0 4px;letter-spacing:-.5px">2-комн. на Врачаре, ремонт 2024</h2>
+            <div class="mono" style="color:var(--pencil);font-size:13px;margin-bottom:16px">ул. Милоша Поцерца, 12 · 3/5 этаж · 48m² · 1+1</div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px">
+              <span class="pill" style="background:var(--blue);color:#fff;border-color:var(--blue)">✓ подходит для ВНЖ</span>
+              <span class="pill" style="background:var(--blue);color:#fff;border-color:var(--blue)">✓ белый картон</span>
+              <span class="pill">с мебелью</span>
+              <span class="pill">балкон</span>
+              <span class="pill">лифт</span>
+              <span class="pill">кондиционер</span>
+            </div>
+
+            <div style="font-family:'Inter',sans-serif;font-size:15px;line-height:1.6;color:var(--ink-soft);max-width:600px">
+              Тёплая двухкомнатная квартира на третьем этаже пятиэтажного здания в сердце Врачара. Дом 1978 года, после капремонта 2024. Хозяин — Бранко, адвокат, живёт по соседству, подписывает договор сразу на 12 месяцев и даёт все справки для ВНЖ.
+              <br><br>
+              <b>До метро «Врачар»</b> — 4 минуты пешком. <b>До парка Ташмайдан</b> — 6 минут. <b>«Максi» и «DIS»</b> в двух кварталах. Тихий двор, окна не на магистраль.
+            </div>
+
+            <div class="divider" style="margin:28px 0 16px"><span class="label" style="font-size:22px">Что важно для релокантов</span><div class="line"></div></div>
+            <div class="grid-2">
+              <div class="card" style="box-shadow:none;padding:14px"><span class="tag blue">ВНЖ</span><h3 style="font-size:18px;margin:8px 0 4px">Договор на 12 мес</h3><p class="annot">Хозяин готов оформить ugovor через МУП — всё подходит для боравишта.</p></div>
+              <div class="card" style="box-shadow:none;padding:14px"><span class="tag">Счета</span><h3 style="font-size:18px;margin:8px 0 4px">Režije ~€80</h3><p class="annot">Коммуналка + инфостан. Отопление центральное — зимой без сюрпризов.</p></div>
+            </div>
+          </div>
+          <div>
+            <div class="detail-side">
+              <div class="price">€650</div>
+              <div class="per">в месяц · депозит €650 · агент €0</div>
+              <button class="btn-full">Записаться на просмотр</button>
+              <button class="btn-ghost">Написать в Telegram</button>
+              <div class="bullet"><b>✓</b> Агент бесплатно — платит хозяин</div>
+              <div class="bullet"><b>✓</b> Сопровождение на подписании</div>
+              <div class="bullet"><b>✓</b> Помощь с регистрацией адреса</div>
+              <div class="note blue" style="max-width:none;margin-top:16px;transform:none;font-size:12px">
+                <b>Маша · твой агент</b><br>
+                отвечает в Telegram обычно за 20 мин · говорит по-русски и по-сербски
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============== APP ============== -->
+<section class="panel" data-screen-label="04 App" id="app">
+  <h2 class="page-title">Мобильное приложение</h2>
+  <p class="page-sub">5 ключевых экранов. Тот же бренд, но с учётом тач-паттернов: чипы фильтров свайпаются, карточки крупнее, шрифт не мельче 13px.</p>
+
+  <div class="phones-row">
+    <!-- 1 catalog -->
+    <div>
+      <div class="phone">
+        <div class="screen">
+          <div class="app-top">
+            <div class="app-logo"><span class="dot"></span>Rent<span class="brd">Bgd</span></div>
+            <div class="app-icon">♡</div>
+          </div>
+          <div class="app-search"><span>🔍</span> <span>Врачар, 1+1, до €700</span></div>
+          <div class="app-chips">
+            <span class="c vnj">✓ ВНЖ</span>
+            <span class="c">бал-кон</span>
+            <span class="c on">до €700</span>
+            <span class="c">питомцы</span>
+          </div>
+          <div class="app-card">
+            <div class="ph"><div class="tag">✓ ВНЖ</div><div class="fav">♡</div></div>
+            <div class="body">
+              <div class="price">€650 <span style="font-weight:400;font-size:11px;color:var(--pencil)">/ мес</span></div>
+              <div class="addr">ул. Милоша Поцерца, Врачар</div>
+              <div class="params"><span>48m²</span><span>·</span><span>1+1</span><span>·</span><span>3/5</span></div>
+            </div>
+          </div>
+          <div class="app-card">
+            <div class="ph"><div class="tag">✓ ВНЖ</div><div class="fav">♡</div></div>
+            <div class="body">
+              <div class="price">€580</div>
+              <div class="addr">Светлая у парка, Врачар</div>
+              <div class="params"><span>42m²</span><span>·</span><span>1+1</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>01</b> · Каталог</div>
+    </div>
+
+    <!-- 2 map -->
+    <div>
+      <div class="phone">
+        <div class="screen" style="padding:44px 0 0 0;position:relative">
+          <div style="padding:0 16px 10px">
+            <div class="app-top">
+              <div class="app-logo"><span class="dot"></span>Карта</div>
+              <div class="app-icon">⚏</div>
+            </div>
+            <div class="app-search"><span>🔍</span> <span>Белград</span></div>
+          </div>
+          <div class="map-bg" style="top:100px">
+            <div class="map-pin sel" style="left:35%;top:30%">€650</div>
+            <div class="map-pin" style="left:20%;top:45%">€580</div>
+            <div class="map-pin" style="left:55%;top:38%">€520</div>
+            <div class="map-pin" style="left:45%;top:55%">€700</div>
+            <div class="map-pin" style="left:25%;top:65%">€610</div>
+          </div>
+          <div class="map-bottom">
+            <div class="mini"></div>
+            <div class="info">
+              <div class="p">€650 / мес <span style="font-weight:400;font-size:10px;color:var(--red)">· ✓ ВНЖ</span></div>
+              <div class="a">Врачар · 1+1 · 48m²</div>
+              <div style="margin-top:4px;font-family:'Caveat',cursive;color:var(--blue);font-size:14px">→ смотреть квартиру</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>02</b> · Карта</div>
+    </div>
+
+    <!-- 3 detail -->
+    <div>
+      <div class="phone">
+        <div class="screen" style="padding:0;overflow:hidden">
+          <div style="height:200px;background:repeating-linear-gradient(45deg,#e8e2d2,#e8e2d2 10px,#ddd6c4 10px,#ddd6c4 20px);position:relative">
+            <div style="position:absolute;top:44px;left:12px;width:36px;height:36px;background:rgba(255,255,255,.9);border:1.5px solid var(--ink);border-radius:50%;display:flex;align-items:center;justify-content:center">←</div>
+            <div style="position:absolute;top:44px;right:12px;width:36px;height:36px;background:rgba(255,255,255,.9);border:1.5px solid var(--ink);border-radius:50%;display:flex;align-items:center;justify-content:center;color:var(--red)">♡</div>
+            <div style="position:absolute;bottom:10px;right:10px;background:var(--ink);color:var(--paper);font-family:'JetBrains Mono',monospace;font-size:10px;padding:3px 8px;border-radius:10px">1 / 8</div>
+          </div>
+          <div style="padding:14px 16px">
+            <div style="font-family:'Inter',sans-serif;font-weight:700;font-size:22px">€650 <span style="font-weight:400;font-size:12px;color:var(--pencil)">/ мес</span></div>
+            <div style="font-family:'Inter',sans-serif;font-size:14px;margin-top:2px">2-комн. на Врачаре</div>
+            <div class="mono" style="font-size:11px;color:var(--pencil);margin-top:4px">ул. Милоша Поцерца · 48m² · 1+1 · 3/5</div>
+            <div style="display:flex;gap:6px;margin-top:12px;flex-wrap:wrap">
+              <span style="background:var(--blue);color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px">✓ ВНЖ</span>
+              <span style="background:var(--blue);color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:10px">✓ картон</span>
+              <span style="border:1.2px solid var(--ink);font-size:10px;padding:3px 8px;border-radius:10px">балкон</span>
+              <span style="border:1.2px solid var(--ink);font-size:10px;padding:3px 8px;border-radius:10px">лифт</span>
+            </div>
+            <div style="margin-top:14px;font-family:'Inter',sans-serif;font-size:12px;line-height:1.5;color:var(--ink-soft)">
+              Тёплая двушка на 3 этаже. Хозяин Бранко — адвокат, сразу оформит ugovor на 12 мес с регистрацией в МУПе.
+            </div>
+          </div>
+          <div style="position:absolute;left:12px;right:12px;bottom:14px;display:flex;gap:8px">
+            <button style="flex:1;background:var(--red);color:#fff;border:0;border-radius:12px;padding:14px;font-family:'Inter',sans-serif;font-weight:600;font-size:14px">Записаться</button>
+            <button style="width:56px;background:var(--blue);color:#fff;border:0;border-radius:12px;font-weight:700">💬</button>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>03</b> · Карточка</div>
+    </div>
+  </div>
+
+  <div class="phones-row" style="margin-top:40px">
+    <!-- 4 calc -->
+    <div>
+      <div class="phone">
+        <div class="screen">
+          <div class="app-top">
+            <div class="app-logo" style="font-size:14px">← Калькулятор</div>
+            <div class="app-icon">?</div>
+          </div>
+          <div class="hand" style="color:var(--blue);font-size:26px;line-height:1.1;margin:6px 0 14px">Во сколько тебе реально выйдет аренда?</div>
+
+          <div class="calc-row"><span class="lbl">Аренда</span><span class="val">€650</span></div>
+          <div class="calc-row"><span class="lbl">Режие (отопление, вода, эл-во)</span><span class="val">~€80</span></div>
+          <div class="calc-row"><span class="lbl">Инфостан (ЖКХ)</span><span class="val">~€25</span></div>
+          <div class="calc-row"><span class="lbl">Интернет</span><span class="val">€15</span></div>
+          <div class="calc-row" style="border-bottom:0"><span class="lbl">Такса (налог хозяина)</span><span class="val" style="color:var(--pencil)">в стоимости</span></div>
+          <div class="calc-total">
+            <span class="big">~€770 / мес</span>
+            <small>в месяц, всё включено</small>
+          </div>
+
+          <div style="background:var(--accent-wash);border:1.5px dashed var(--red);border-radius:10px;padding:10px;margin-top:14px;font-size:12px;color:var(--ink-soft)">
+            <b>+ разово:</b> депозит €650 · первый месяц €650 = <b>€1300</b> на старт
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>04</b> · Калькулятор</div>
+    </div>
+
+    <!-- 5 chat -->
+    <div>
+      <div class="phone">
+        <div class="screen" style="position:relative">
+          <div class="app-top" style="margin-bottom:18px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="width:36px;height:36px;background:var(--blue);border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:14px">М</div>
+              <div>
+                <div style="font-family:'Inter',sans-serif;font-weight:600;font-size:13px">Маша · агент</div>
+                <div class="small" style="color:#5a8a6a">онлайн</div>
+              </div>
+            </div>
+            <div class="app-icon">⋯</div>
+          </div>
+          <div style="font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--pencil);text-align:center;margin-bottom:10px">— сегодня —</div>
+          <div class="chat-bub in">Привет! Увидела, ты смотрел квартиру на Врачаре за €650. Хочешь, запишу на просмотр завтра в 16:00?</div>
+          <div class="chat-bub out">Привет, да, давай. Можно до 17 задержимся, если вопросы?</div>
+          <div class="chat-bub in">Конечно 🙌 Запиши адрес: ул. Милоша Поцерца, 12. Я буду на месте.</div>
+          <div class="chat-bub in" style="background:var(--accent-wash);border-color:var(--red)">
+            <div style="font-weight:700;font-size:11px;color:var(--red);margin-bottom:4px">📎 ПОДБОРКА · 3 квартиры</div>
+            <div>Посмотрела ещё 3 похожих на Врачаре — вдруг пригодится для сравнения ↓</div>
+          </div>
+          <div class="chat-input"><span>Сообщение...</span><div class="send">→</div></div>
+        </div>
+      </div>
+      <div class="caption"><b>05</b> · Чат с агентом</div>
+    </div>
+
+    <!-- dark variant note -->
+    <div>
+      <div class="phone">
+        <div class="screen dark">
+          <div class="app-top">
+            <div class="app-logo" style="color:#fff"><span class="dot"></span>Rent<span style="color:#d4a574">Bgd</span></div>
+            <div class="app-icon" style="background:#1a2a3e;border-color:#3a4a5e;color:#e8e4dd">♡</div>
+          </div>
+          <div style="background:#1a2a3e;border:1.5px solid #3a4a5e;border-radius:22px;padding:8px 14px;font-size:12px;color:#8596a5;margin-bottom:14px">🔍 Врачар, 1+1, до €700</div>
+          <div class="app-chips">
+            <span class="c" style="background:#1a2a3e;color:#e8e4dd;border-color:#3a4a5e">бал-кон</span>
+            <span class="c on" style="background:#d4a574;color:#0f1a2e;border-color:#d4a574">до €700</span>
+            <span class="c" style="background:var(--blue);color:#fff;border-color:var(--blue)">✓ ВНЖ</span>
+          </div>
+          <div style="background:#1a2a3e;border:1.5px solid #3a4a5e;border-radius:10px;overflow:hidden;margin-bottom:10px">
+            <div style="height:100px;background:repeating-linear-gradient(45deg,#24344a,#24344a 8px,#1a2a3e 8px,#1a2a3e 16px)"></div>
+            <div style="padding:8px 10px">
+              <div style="font-weight:700;font-size:15px;color:#fff">€650</div>
+              <div style="font-size:11px;color:#8596a5">Врачар · 1+1 · 48m²</div>
+            </div>
+          </div>
+          <div style="background:#1a2a3e;border:1.5px solid #3a4a5e;border-radius:10px;overflow:hidden">
+            <div style="height:100px;background:repeating-linear-gradient(45deg,#24344a,#24344a 8px,#1a2a3e 8px,#1a2a3e 16px)"></div>
+            <div style="padding:8px 10px">
+              <div style="font-weight:700;font-size:15px;color:#fff">€580</div>
+              <div style="font-size:11px;color:#8596a5">Врачар · 1+1 · 42m²</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="caption"><b>+</b> · Тёмная тема (идея)</div>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:36px">
+    <b>что ещё можно добавить</b> (скажи какой брать в работу):<br>
+    — экран профиля + сохранённые<br>
+    — заявка на персональный поиск (форма)<br>
+    — флоу «записи на просмотр»<br>
+    — уведомления о новых квартирах
+  </div>
+</section>
+
+<!-- ============== KIT ============== -->
+<section class="panel" data-screen-label="05 UI kit" id="kit">
+  <h2 class="page-title">UI kit</h2>
+  <p class="page-sub">Атомарные компоненты, с которых соберётся и веб, и мобильное приложение. Все стили — из бренда.</p>
+
+  <div class="divider"><span class="label">Кнопки</span><div class="line"></div></div>
+  <div class="card">
+    <div class="kit-row">
+      <button class="btn red lg">Записаться на просмотр</button>
+      <button class="btn primary lg">Написать агенту</button>
+      <button class="btn ghost lg">Показать на карте</button>
+    </div>
+    <div class="kit-row">
+      <button class="btn red">Primary</button>
+      <button class="btn blue">Secondary</button>
+      <button class="btn primary">Dark</button>
+      <button class="btn ghost">Ghost</button>
+      <button class="btn red round">Round</button>
+      <button class="btn ghost" style="opacity:.4;cursor:not-allowed">Disabled</button>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Поля ввода</span><div class="line"></div></div>
+  <div class="card">
+    <div class="kit-row">
+      <input class="input" placeholder="Район, адрес или метро" />
+      <input class="input round" placeholder="Поиск в каталоге" />
+      <select class="input"><option>Все районы</option></select>
+    </div>
+    <div class="kit-row">
+      <span class="pill" style="background:var(--ink);color:var(--paper)">✓ ВНЖ</span>
+      <span class="pill">белый картон</span>
+      <span class="pill">с мебелью</span>
+      <span class="pill">балкон</span>
+      <span class="pill" style="background:var(--red);color:#fff;border-color:var(--red)">снять фильтр ✕</span>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Теги и бейджи</span><div class="line"></div></div>
+  <div class="card">
+    <div class="kit-row">
+      <span class="tag blue">✓ ПОДХОДИТ ДЛЯ ВНЖ</span>
+      <span class="tag blue">✓ БЕЛИ КАРТОН</span>
+      <span class="tag red">СВЕЖЕЕ</span>
+      <span class="tag">С МЕБЕЛЬЮ</span>
+      <span style="background:#d9f2e3;color:#2d6a4a;border:1px solid #2d6a4a;font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:1px">СКИДКА −5%</span>
+      <span style="background:var(--ink);color:var(--paper);font-family:'JetBrains Mono',monospace;font-size:10px;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:1px">СНЯТО</span>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Иконки (ключевые)</span><div class="line"></div></div>
+  <div class="card">
+    <div class="icons">
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><path d="M3 11l9-8 9 8v10a1 1 0 01-1 1h-5v-6h-6v6H4a1 1 0 01-1-1z"/></svg></div>КВАРТИРА</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 2c-4.4 0-8 3.6-8 8 0 5 8 12 8 12s8-7 8-12c0-4.4-3.6-8-8-8z"/></svg></div>РАЙОН</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="7"/><path d="M21 21l-6.3-6.3"/></svg></div>ПОИСК</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 00-7.8 7.8L12 21.3l8.8-8.9a5.5 5.5 0 000-7.8z"/></svg></div>ИЗБРАННОЕ</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.4 8.4 0 01-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 01-.9-3.8A8.5 8.5 0 018.7 3.9a8.4 8.4 0 013.8-.9h.5a8.5 8.5 0 018 8z"/></svg></div>ЧАТ</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></div>ДАТА</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div>СРОК</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><path d="M12 2l3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1z"/></svg></div>ПОДХОДИТ</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><circle cx="9" cy="7" r="4"/><path d="M1 21v-2a4 4 0 014-4h8a4 4 0 014 4v2"/><circle cx="19" cy="8" r="3"/><path d="M23 21v-1.5a3 3 0 00-2.5-3"/></svg></div>АГЕНТ</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg></div>ДОГОВОР</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></div>ПРОСМОТР</div>
+      <div class="icon-box"><div class="g"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16"/></svg></div>ДЕПОЗИТ</div>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Карточка квартиры · матрица</span><div class="line"></div></div>
+  <div class="grid-3">
+    <div>
+      <div class="lcard"><div class="img"><div class="tag-vnj">✓ ВНЖ</div><div class="tag-fav">♡</div></div><div class="body"><div class="price">€650<span class="small" style="font-weight:500">/мес</span></div><div class="title">2-комн., Врачар</div><div class="params"><span>48m²</span><span>1+1</span></div></div></div>
+      <p class="small" style="text-align:center;margin-top:8px">default</p>
+    </div>
+    <div>
+      <div class="lcard" style="position:relative;opacity:.8"><div class="img"><div class="tag-vnj" style="background:var(--ink)">СНЯТО</div></div><div class="body"><div class="price" style="text-decoration:line-through">€550</div><div class="title">Студия, Дорћол</div><div class="params"><span>32m²</span><span>1+0</span></div></div></div>
+      <p class="small" style="text-align:center;margin-top:8px">снято</p>
+    </div>
+    <div>
+      <div class="lcard" style="border:2.5px solid var(--red);box-shadow:3px 3px 0 var(--red)"><div class="img"><div class="tag-vnj" style="background:var(--red)">СВЕЖЕЕ</div><div class="tag-fav" style="background:var(--red);color:#fff">♥</div></div><div class="body"><div class="price">€820<span class="small" style="font-weight:500">/мес</span></div><div class="title">3-комн., Н. Београд</div><div class="params"><span>68m²</span><span>2+1</span></div></div></div>
+      <p class="small" style="text-align:center;margin-top:8px">подсвечено</p>
+    </div>
+  </div>
+
+  <div class="divider"><span class="label">Радиусы, тени, отступы</span><div class="line"></div></div>
+  <div class="grid-3">
+    <div class="card"><h3>Радиусы</h3>
+      <div style="display:flex;gap:10px;align-items:flex-end;margin-top:10px">
+        <div style="width:50px;height:50px;background:var(--paper-2);border:1.5px solid var(--ink);border-radius:4px"></div>
+        <div style="width:50px;height:50px;background:var(--paper-2);border:1.5px solid var(--ink);border-radius:8px"></div>
+        <div style="width:50px;height:50px;background:var(--paper-2);border:1.5px solid var(--ink);border-radius:14px"></div>
+        <div style="width:50px;height:50px;background:var(--paper-2);border:1.5px solid var(--ink);border-radius:50%"></div>
+      </div>
+      <p class="mono" style="margin-top:8px;font-size:11px">4 · 8 · 14 · full</p>
+    </div>
+    <div class="card"><h3>Тени</h3>
+      <div style="display:flex;gap:14px;margin-top:10px">
+        <div style="width:50px;height:50px;background:#fff;border:1.5px solid var(--ink);border-radius:6px;box-shadow:2px 2px 0 var(--ink)"></div>
+        <div style="width:50px;height:50px;background:#fff;border:1.5px solid var(--ink);border-radius:6px;box-shadow:3px 3px 0 var(--ink)"></div>
+        <div style="width:50px;height:50px;background:#fff;border:1.5px solid var(--ink);border-radius:6px;box-shadow:4px 4px 0 var(--ink)"></div>
+      </div>
+      <p class="mono" style="margin-top:8px;font-size:11px">резкие, без размытия — бумажный вайб</p>
+    </div>
+    <div class="card"><h3>Отступы</h3>
+      <div style="display:flex;gap:6px;align-items:flex-end;margin-top:10px">
+        <div style="width:4px;height:40px;background:var(--red)"></div>
+        <div style="width:8px;height:40px;background:var(--red)"></div>
+        <div style="width:12px;height:40px;background:var(--red)"></div>
+        <div style="width:16px;height:40px;background:var(--red)"></div>
+        <div style="width:24px;height:40px;background:var(--red)"></div>
+        <div style="width:32px;height:40px;background:var(--red)"></div>
+      </div>
+      <p class="mono" style="margin-top:8px;font-size:11px">шкала 4 · 8 · 12 · 16 · 24 · 32</p>
+    </div>
+  </div>
+
+  <div class="note" style="margin-top:36px">
+    <b>следующие шаги</b><br>
+    1. выбери логотип (или пару) из 6 вариантов<br>
+    2. подтверди палитру — оставляем сербский флаг или уходим в другой вектор?<br>
+    3. hi-fi макеты одного сценария (например, первого экрана приложения) с настоящими фото<br>
+    4. бренд-гид PDF + набор ассетов для ТГ
+  </div>
+</section>
+
+<script>
+  const tabs = document.querySelectorAll('.tab');
+  const panels = document.querySelectorAll('section.panel');
+  const saved = localStorage.getItem('rb_tab') || 'brand';
+  const activate = (name) => {
+    tabs.forEach(t=>t.classList.toggle('active', t.dataset.t===name));
+    panels.forEach(p=>p.classList.toggle('active', p.id===name));
+    localStorage.setItem('rb_tab', name);
+    window.scrollTo({top:0,behavior:'instant'});
+  };
+  tabs.forEach(t=>t.addEventListener('click',()=>activate(t.dataset.t)));
+  activate(saved);
+</script>
+</body>
+</html>

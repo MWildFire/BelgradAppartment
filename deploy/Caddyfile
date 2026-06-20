@@ -1,0 +1,38 @@
+# Caddyfile — публичный сайт @RentBelgrad (Stage W)
+# Положить в /etc/caddy/Caddyfile на VPS, заменить DOMAIN и пути, затем: systemctl reload caddy
+# Caddy сам выпустит и продлит TLS через Let's Encrypt (нужна DNS A-запись DOMAIN -> 90.156.254.159
+# и открытые порты 80/443 в ufw). Админка (:8000) здесь НЕ проксируется — остаётся localhost-only.
+
+rent.example.com {            # <-- заменить на свой сабдомен
+
+    encode zstd gzip
+
+    # Статика и фото — отдаёт сам Caddy с диска, мимо Python (быстро, far-future cache).
+    handle_path /static/* {
+        root * /opt/otz/src/site/static     # <-- путь к static на VPS
+        file_server
+        header Cache-Control "public, max-age=31536000, immutable"
+    }
+    handle_path /photos/* {
+        root * /opt/otz/data/site_photos     # <-- photos_root (см. план Wave 6, шаг 5)
+        file_server
+        header Cache-Control "public, max-age=604800"
+    }
+
+    # Всё остальное — в публичное FastAPI-приложение (otz-site.service).
+    handle {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    # Базовые security-заголовки.
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    log {
+        output file /var/log/otz/caddy-site.log
+    }
+}

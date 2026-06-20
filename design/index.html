@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RentBelgrad — квартиры в Белграде для своих</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600;700;800&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/tokens.css">
+<style>
+  /* ───────── top bar ───────── */
+  .nav{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--paper) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--hairline)}
+  .nav-in{display:flex;align-items:center;gap:var(--gutter);height:68px}
+  .logo{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:700;font-size:1.2rem;letter-spacing:-0.03em}
+  .logo .mk{width:30px;height:30px;display:grid;grid-template:1fr 1fr/1fr 1fr;border:1.5px solid var(--ink)}
+  .logo .mk i{border:.75px solid var(--ink)}
+  .logo .mk i:nth-child(1){background:var(--oxblood)}
+  .logo .mk i:nth-child(4){background:var(--navy)}
+  .nav-links{display:flex;gap:28px;margin-left:18px;font-size:var(--step--1);color:var(--ink-2)}
+  .nav-links a:hover{color:var(--ink)}
+  .nav-cta{margin-left:auto;display:flex;align-items:center;gap:14px}
+  .btn{font-family:var(--text);font-weight:600;font-size:var(--step--1);padding:11px 20px;border:1.5px solid var(--ink);background:var(--ink);color:var(--paper);cursor:pointer;border-radius:var(--r-s);transition:transform .12s ease}
+  .btn:hover{transform:translateY(-1px)}
+  .btn.ox{background:var(--oxblood);border-color:var(--oxblood)}
+  .btn.ghost{background:transparent;color:var(--ink)}
+  @media(max-width:860px){.nav-links{display:none}}
+
+  /* ───────── hero ───────── */
+  .hero{padding-top:var(--bay);padding-bottom:calc(var(--bay) * .6)}
+  .hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:var(--gutter);align-items:end}
+  .hero h1{font-size:var(--step-5);letter-spacing:-0.04em}
+  .hero h1 .ox{color:var(--oxblood)}
+  .hero h1 .nv{color:var(--navy)}
+  .hero-lede{font-size:var(--step-1);color:var(--ink-2);max-width:30ch;margin-top:1.4rem;line-height:1.4}
+  .hero-side{padding-bottom:.3rem}
+  .hero-photo{aspect-ratio:4/5;background:
+      linear-gradient(155deg,var(--navy),#27506f 60%,var(--ochre));
+      border:1px solid var(--ink);border-radius:var(--r-m);position:relative;overflow:hidden;box-shadow:0 24px 50px -28px rgba(21,50,76,.6)}
+  .hero-photo .tagline{position:absolute;left:18px;bottom:16px;right:18px;color:var(--paper)}
+  .hero-photo .tagline .k{font-family:var(--mono);font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;opacity:.85}
+  .hero-photo .tagline .t{font-family:var(--display);font-weight:600;font-size:1.35rem;line-height:1.1;margin-top:6px}
+  .hero-photo .ph-note{position:absolute;top:14px;left:14px;font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.35);padding:3px 8px;border-radius:999px}
+
+  /* search */
+  .searchbar{margin-top:2.2rem;display:flex;align-items:stretch;border:1.5px solid var(--ink);border-radius:var(--r-m);background:var(--card);overflow:hidden;max-width:560px}
+  .searchbar .seg{display:flex;flex-direction:column;justify-content:center;padding:10px 16px;border-right:1px solid var(--hairline);min-width:0}
+  .searchbar .seg span{font-family:var(--mono);font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+  .searchbar .seg b{font-weight:600;font-size:var(--step-0)}
+  .searchbar .go{margin-left:auto;background:var(--oxblood);color:var(--paper);border:0;padding:0 26px;font-family:var(--text);font-weight:600;cursor:pointer;font-size:var(--step--1)}
+  .stat-row{display:flex;gap:34px;margin-top:2.6rem;flex-wrap:wrap}
+  .stat .n{font-family:var(--display);font-weight:700;font-size:var(--step-2);letter-spacing:-0.03em}
+  .stat .l{font-size:var(--step--1);color:var(--ink-3)}
+  @media(max-width:780px){.hero-grid{grid-template-columns:1fr}.hero-side{order:-1}.hero-photo{aspect-ratio:16/11}}
+
+  /* ───────── marquee strip ───────── */
+  .strip{border-block:1px solid var(--ink);background:var(--ink);color:var(--paper);overflow:hidden;white-space:nowrap}
+  .strip .track{display:inline-flex;gap:46px;padding:13px 0;animation:slide 32s linear infinite;font-family:var(--mono);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase}
+  .strip .track span{opacity:.92}
+  .strip .track i{color:var(--ochre);font-style:normal}
+  @keyframes slide{to{transform:translateX(-50%)}}
+
+  /* ───────── section frame ───────── */
+  section.bay{padding-block:var(--bay)}
+  .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--gutter);margin-bottom:2.4rem}
+  .sec-head h2{font-size:var(--step-3)}
+  .sec-head .idx{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3)}
+  .sec-head .more{font-size:var(--step--1);border-bottom:1.5px solid var(--oxblood);padding-bottom:2px;color:var(--ink);white-space:nowrap}
+
+  /* ───────── listings (TG-fed) ───────── */
+  .feed-note{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3);margin-bottom:1.6rem}
+  .feed-note .dot{width:8px;height:8px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 4px color-mix(in srgb,var(--sage) 22%,transparent)}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--gutter)}
+  @media(max-width:980px){.cards{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:620px){.cards{grid-template-columns:1fr}}
+  .card-l{background:var(--card);border:1px solid var(--ink);border-radius:var(--r-m);overflow:hidden;display:flex;flex-direction:column;transition:transform .14s ease,box-shadow .14s ease}
+  .card-l:hover{transform:translateY(-3px);box-shadow:0 20px 40px -26px rgba(27,26,23,.5)}
+  .card-l .ph{aspect-ratio:3/2;position:relative;background:var(--paper-3)}
+  .card-l .ph.d1{background:linear-gradient(145deg,#2b4a63,#5e7d8e)}
+  .card-l .ph.d2{background:linear-gradient(145deg,#7a4338,#b9826a)}
+  .card-l .ph.d3{background:linear-gradient(145deg,#4f6b57,#93a886)}
+  .card-l .ph .src{position:absolute;top:10px;right:10px;font-family:var(--mono);font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.9);background:rgba(0,0,0,.34);backdrop-filter:blur(4px);padding:4px 8px;border-radius:999px}
+  .card-l .ph .flag{position:absolute;left:10px;top:10px;display:flex;gap:6px}
+  .badge{font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;padding:4px 8px;border-radius:var(--r-s);font-weight:500}
+  .badge.vnj{background:var(--sage);color:#fff}
+  .badge.fresh{background:var(--oxblood);color:#fff}
+  .card-l .body{padding:16px 16px 18px;display:flex;flex-direction:column;gap:8px;flex:1}
+  .card-l .price{font-family:var(--display);font-weight:700;font-size:var(--step-2);letter-spacing:-0.03em}
+  .card-l .price small{font-family:var(--text);font-weight:500;font-size:var(--step--1);color:var(--ink-3)}
+  .card-l .ttl{font-weight:600;font-size:var(--step-0);line-height:1.3}
+  .card-l .meta{font-family:var(--mono);font-size:.72rem;color:var(--ink-2);display:flex;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:6px;border-top:1px solid var(--hairline)}
+  .card-l .meta i{font-style:normal;color:var(--ink-3)}
+
+  /* ───────── how it works ───────── */
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--ink);border-radius:var(--r-m);overflow:hidden;background:var(--card)}
+  .steps .step{padding:26px 22px 30px;border-right:1px solid var(--hairline);position:relative}
+  .steps .step:last-child{border-right:0}
+  .steps .step .no{font-family:var(--mono);font-size:.72rem;color:var(--oxblood);letter-spacing:.12em}
+  .steps .step h3{font-size:var(--step-1);margin:14px 0 8px;font-weight:600;letter-spacing:-0.02em}
+  .steps .step p{font-size:var(--step--1);color:var(--ink-2)}
+  @media(max-width:820px){.steps{grid-template-columns:1fr 1fr}.steps .step:nth-child(2){border-right:0}.steps .step{border-bottom:1px solid var(--hairline)}}
+  @media(max-width:480px){.steps{grid-template-columns:1fr}.steps .step{border-right:0}}
+
+  /* ───────── trust / split ───────── */
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:var(--gutter);align-items:center}
+  .split .photo{aspect-ratio:5/4;border:1px solid var(--ink);border-radius:var(--r-m);background:linear-gradient(160deg,#6f4a3c,#caa07f);position:relative;overflow:hidden}
+  .split .photo .ph-note{position:absolute;top:14px;left:14px;font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.78);border:1px solid rgba(255,255,255,.4);padding:3px 8px;border-radius:999px}
+  .split h2{font-size:var(--step-3);max-width:14ch}
+  .split p{color:var(--ink-2);margin-top:1.1rem;max-width:42ch}
+  .checks{margin-top:1.6rem;display:flex;flex-direction:column;gap:2px}
+  .checks .c{display:flex;gap:14px;padding:14px 0;border-top:1px solid var(--hairline);align-items:baseline}
+  .checks .c b{font-weight:600}
+  .checks .c .num{font-family:var(--mono);color:var(--oxblood);font-size:.8rem}
+  @media(max-width:780px){.split{grid-template-columns:1fr}.split .photo{order:-1}}
+
+  /* ───────── quote ───────── */
+  .quote{background:var(--navy);color:var(--paper);border-radius:var(--r-m)}
+  .quote .qin{padding:clamp(2.4rem,5vw,4.4rem)}
+  .quote blockquote{font-family:var(--display);font-weight:600;font-size:var(--step-2);line-height:1.25;letter-spacing:-0.02em;margin:0;max-width:24ch}
+  .quote .who{display:flex;align-items:center;gap:14px;margin-top:2rem}
+  .quote .who .av{width:46px;height:46px;border-radius:50%;background:var(--ochre);color:var(--navy-2);display:grid;place-items:center;font-family:var(--display);font-weight:700}
+  .quote .who .nm{font-weight:600}
+  .quote .who .rl{font-family:var(--mono);font-size:.72rem;opacity:.7}
+
+  /* ───────── cta band ───────── */
+  .band{border:1.5px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:clamp(2rem,4vw,3.4rem);display:flex;align-items:center;justify-content:space-between;gap:var(--gutter);flex-wrap:wrap}
+  .band h2{font-size:var(--step-3);max-width:18ch}
+  .band .actions{display:flex;gap:12px;flex-wrap:wrap}
+
+  /* ───────── footer ───────── */
+  footer{border-top:1px solid var(--ink);margin-top:var(--bay)}
+  .foot{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:var(--gutter);padding-block:var(--bay)}
+  .foot h4{font-family:var(--display);font-size:1.1rem;letter-spacing:-0.02em}
+  .foot .col h5{font-family:var(--mono);font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin:0 0 14px}
+  .foot .col a{display:block;font-size:var(--step--1);color:var(--ink-2);padding:5px 0}
+  .foot .col a:hover{color:var(--ink)}
+  .foot .bigtype{font-family:var(--display);font-weight:800;font-size:var(--step-4);letter-spacing:-0.04em;line-height:.9}
+  .foot .bigtype .ox{color:var(--oxblood)}
+  .foot .bigtype .nv{color:var(--navy)}
+  .foot .desc{color:var(--ink-2);max-width:34ch;margin-top:1rem}
+  .legal{display:flex;justify-content:space-between;padding-block:22px;border-top:1px solid var(--hairline);font-family:var(--mono);font-size:.68rem;color:var(--ink-3);flex-wrap:wrap;gap:10px}
+  @media(max-width:820px){.foot{grid-template-columns:1fr 1fr}.foot .brand-col{grid-column:1/-1}}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="logo" href="#"><span class="mk"><i></i><i></i><i></i><i></i></span>RentBelgrad</a>
+    <nav class="nav-links">
+      <a href="#feed">Каталог</a>
+      <a href="#how">Как работаем</a>
+      <a href="#vnj">ВНЖ и договор</a>
+      <a href="#">Отзывы</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="btn ghost" href="#">Войти</a>
+      <a class="btn ox" href="#feed">Подобрать квартиру</a>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<section class="hero wrap" data-screen-label="Hero">
+  <div class="hero-grid">
+    <div>
+      <p class="kicker">белград · аренда · релокация</p>
+      <h1>Снять квартиру <br>в Белграде <br><span class="ox">по-человечески</span></h1>
+      <p class="hero-lede">Помогаем релокантам найти жильё на длинный срок — с договором, который проходит на <span style="color:var(--navy);font-weight:600">ВНЖ</span> и белый картон.</p>
+
+      <div class="searchbar">
+        <div class="seg" style="flex:1.4"><span>Район</span><b>Врачар, Дорћол…</b></div>
+        <div class="seg"><span>Цена €</span><b>до 700</b></div>
+        <div class="seg"><span>Комнат</span><b>1+1</b></div>
+        <button class="go">Найти</button>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat"><div class="n">340+</div><div class="l">квартир за год</div></div>
+        <div class="stat"><div class="n">4 дня</div><div class="l">средний поиск</div></div>
+        <div class="stat"><div class="n">€0</div><div class="l">комиссия с тебя</div></div>
+      </div>
+    </div>
+
+    <div class="hero-side">
+      <div class="hero-photo">
+        <span class="ph-note">фото: вид с балкона / Врачар</span>
+        <div class="tagline">
+          <div class="k">квартира недели</div>
+          <div class="t">Светлая 1+1 <br>у парка Ташмайдан</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- MARQUEE -->
+<div class="strip">
+  <div class="track">
+    <span>Врачар</span><i>/</i><span>Дорћол</span><i>/</i><span>Стари град</span><i>/</i><span>Нови Београд</span><i>/</i><span>Земун</span><i>/</i><span>Савски венац</span><i>/</i><span>Звездара</span><i>/</i><span>Палилула</span><i>/</i>
+    <span>Врачар</span><i>/</i><span>Дорћол</span><i>/</i><span>Стари град</span><i>/</i><span>Нови Београд</span><i>/</i><span>Земун</span><i>/</i><span>Савски венац</span><i>/</i><span>Звездара</span><i>/</i><span>Палилула</span><i>/</i>
+  </div>
+</div>
+
+<!-- FEED (from Telegram) -->
+<section class="bay wrap" id="feed" data-screen-label="Listings feed">
+  <div class="sec-head">
+    <div>
+      <div class="idx">01 / каталог</div>
+      <h2>Свежие квартиры</h2>
+    </div>
+    <a class="more" href="#">Все 47 объявлений →</a>
+  </div>
+
+  <div class="feed-note"><span class="dot"></span> обновляется автоматически из <b style="color:var(--ink)">@RentBelgrad</b> — последняя синхронизация 6 минут назад</div>
+
+  <div class="cards">
+    <article class="card-l">
+      <div class="ph d1"><div class="flag"><span class="badge fresh">Свежее</span><span class="badge vnj">✓ ВНЖ</span></div><span class="src">из Telegram</span></div>
+      <div class="body">
+        <div class="price">€650 <small>/ мес</small></div>
+        <div class="ttl">Двушка с ремонтом и балконом на парк</div>
+        <div class="meta"><span>48 m²</span><i>·</i><span>1+1</span><i>·</i><span>3/5 эт.</span><i>·</i><span>Врачар</span></div>
+      </div>
+    </article>
+
+    <article class="card-l">
+      <div class="ph d2"><div class="flag"><span class="badge vnj">✓ ВНЖ</span></div><span class="src">из Telegram</span></div>
+      <div class="body">
+        <div class="price">€550 <small>/ мес</small></div>
+        <div class="ttl">Студия в старом ядре, высокие потолки</div>
+        <div class="meta"><span>32 m²</span><i>·</i><span>1+0</span><i>·</i><span>2/4 эт.</span><i>·</i><span>Дорћол</span></div>
+      </div>
+    </article>
+
+    <article class="card-l">
+      <div class="ph d3"><div class="flag"><span class="badge vnj">✓ ВНЖ</span></div><span class="src">из Telegram</span></div>
+      <div class="body">
+        <div class="price">€820 <small>/ мес</small></div>
+        <div class="ttl">Трёшка для семьи, тихий зелёный квартал</div>
+        <div class="meta"><span>68 m²</span><i>·</i><span>2+1</span><i>·</i><span>4/6 эт.</span><i>·</i><span>Нови Београд</span></div>
+      </div>
+    </article>
+  </div>
+</section>
+
+<hr class="rule wrap" style="border-top:1px solid var(--hairline)">
+
+<!-- HOW -->
+<section class="bay wrap" id="how" data-screen-label="How it works">
+  <div class="sec-head">
+    <div><div class="idx">02 / процесс</div><h2>Как мы работаем</h2></div>
+    <p style="max-width:30ch;color:var(--ink-2);font-size:var(--step--1)">Не маркетплейс. Живой агент ведёт за руку от первого сообщения до регистрации адреса.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="no">01 / заявка</div><h3>Расскажи, что нужно</h3><p>Район, бюджет, сроки, нужен ли договор под ВНЖ. Пара минут в Telegram.</p></div>
+    <div class="step"><div class="no">02 / подборка</div><h3>Готовим 3–5 вариантов</h3><p>Отбираем вручную, отсекаем то, что не проходит на боравиште.</p></div>
+    <div class="step"><div class="no">03 / просмотр</div><h3>Ходим на показ вместе</h3><p>Переводим, торгуемся, проверяем счётчики и состояние.</p></div>
+    <div class="step"><div class="no">04 / договор</div><h3>Оформляем ugovor</h3><p>Подписание, регистрация адреса, справки для ВНЖ. Всё под ключ.</p></div>
+  </div>
+</section>
+
+<!-- TRUST -->
+<section class="bay wrap" id="vnj" data-screen-label="Trust / VNJ">
+  <div class="split">
+    <div>
+      <div class="idx" style="font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3);margin-bottom:1rem">03 / почему мы</div>
+      <h2>Договор, который реально проходит на ВНЖ</h2>
+      <p>Большая часть объявлений в Белграде — «на честном слове». Мы работаем только с хозяевами, готовыми оформить официальный ugovor с регистрацией в МУПе.</p>
+      <div class="checks">
+        <div class="c"><span class="num">01</span><span><b>Проверяем хозяина</b> — есть ли право сдавать, готов ли к официальному договору.</span></div>
+        <div class="c"><span class="num">02</span><span><b>Сопровождаем сделку</b> — на подписании рядом человек, говорящий по-русски и по-сербски.</span></div>
+        <div class="c"><span class="num">03</span><span><b>Помогаем с боравиштем</b> — регистрация адреса и пакет справок для ВНЖ.</span></div>
+        <div class="c"><span class="num">04</span><span><b>Комиссию платит хозяин</b> — для тебя поиск и сопровождение бесплатны.</span></div>
+      </div>
+    </div>
+    <div class="photo"><span class="ph-note">фото: подписание договора / агент с клиентом</span></div>
+  </div>
+</section>
+
+<!-- QUOTE -->
+<section class="bay wrap">
+  <div class="quote">
+    <div class="qin">
+      <p class="kicker" style="color:var(--ochre);margin-bottom:1.4rem">отзыв · квартира #128</p>
+      <blockquote>«Нашли квартиру на Врачаре за три дня и помогли с ugovor’ом — без них я бы месяц искала вслепую.»</blockquote>
+      <div class="who">
+        <div class="av">АК</div>
+        <div><div class="nm">Анна К.</div><div class="rl">переехала из Москвы · март 2026</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="bay wrap">
+  <div class="band">
+    <h2>Расскажи, какую квартиру ищешь</h2>
+    <div class="actions">
+      <a class="btn ox" href="#">Подобрать в Telegram</a>
+      <a class="btn ghost" href="#feed">Смотреть каталог</a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap foot">
+    <div class="brand-col">
+      <div class="bigtype">Rent<span class="ox">Bel</span><span class="nv">grad</span></div>
+      <p class="desc">Свой человек в Белграде. Помогаем релокантам снять квартиру с договором под ВНЖ и белый картон.</p>
+    </div>
+    <div class="col"><h5>Каталог</h5><a href="#">Все квартиры</a><a href="#">Врачар</a><a href="#">Дорћол</a><a href="#">Нови Београд</a></div>
+    <div class="col"><h5>Помощь</h5><a href="#">Как работаем</a><a href="#">ВНЖ и договор</a><a href="#">Калькулятор аренды</a><a href="#">FAQ</a></div>
+    <div class="col"><h5>Контакты</h5><a href="#">Telegram-канал</a><a href="#">Написать агенту</a><a href="#">Instagram</a><a href="#">hello@rentbelgrad.rs</a></div>
+  </div>
+  <div class="wrap legal"><span>© 2026 RentBelgrad</span><span>Beograd, Srbija · @RentBelgrad</span></div>
+</footer>
+
+</body>
+</html>

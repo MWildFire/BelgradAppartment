@@ -63,3 +63,8 @@ htmlcov/
 # Playwright
 playwright-report/
 test-results/
+
+# Claude Code worktrees (native EnterWorktree places them here)
+.claude/worktrees/
+# Worktree-local .venv symlink (trailing-slash rule above only matches real dirs)
+.venv

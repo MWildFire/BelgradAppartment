@@ -1,0 +1,32 @@
+# otz-site.service — публичное FastAPI-приложение каталога (Stage W)
+# Положить в /etc/systemd/system/otz-site.service на VPS, затем:
+#   systemctl daemon-reload && systemctl enable --now otz-site.service
+# Слушает только localhost:8001 — наружу выставляет Caddy (см. deploy/Caddyfile).
+
+[Unit]
+Description=otz-rent-finder public web catalog (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+# Один алерт в бот при падении (паттерн этапа H1, без крэш-лупа):
+OnFailure=otz-notify-failure@%n.service
+
+[Service]
+Type=simple
+User=otz
+Group=otz
+WorkingDirectory=/opt/otz
+EnvironmentFile=/opt/otz/.env
+ExecStart=/opt/otz/.venv/bin/uvicorn src.site.app:app --host 127.0.0.1 --port 8001 --workers 2
+Restart=on-failure
+RestartSec=5
+# Не уходить в бесконечный рестарт-луп на фатальной ошибке конфигурации:
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Лёгкий sandbox (сайт только читает БД + пишет leads):
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
