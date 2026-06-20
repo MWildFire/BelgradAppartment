@@ -1,0 +1,46 @@
+<div class="site-controls" id="site-controls-{{ match_id }}">
+  <div class="site-controls-row">
+    <span class="site-controls-label">Каталог:</span>
+    <button
+      type="button"
+      class="btn-toggle{{ ' is-on' if site and site.is_public else '' }}"
+      hx-post="/match/{{ match_id }}/site/toggle-public"
+      hx-target="#site-controls-{{ match_id }}"
+      hx-swap="outerHTML"
+    >На сайт {{ '✓' if site and site.is_public else '✕' }}</button>
+    <button
+      type="button"
+      class="btn-toggle{{ ' is-on' if site and site.is_for_vnj else '' }}"
+      hx-post="/match/{{ match_id }}/site/toggle-vnj"
+      hx-target="#site-controls-{{ match_id }}"
+      hx-swap="outerHTML"
+    >ВНЖ {{ '✓' if site and site.is_for_vnj else '✕' }}</button>
+    <button
+      type="button"
+      class="btn-toggle{{ ' is-on' if site and site.is_for_white_card else '' }}"
+      hx-post="/match/{{ match_id }}/site/toggle-white-card"
+      hx-target="#site-controls-{{ match_id }}"
+      hx-swap="outerHTML"
+    >Белый картон {{ '✓' if site and site.is_for_white_card else '✕' }}</button>
+  </div>
+  <form
+    class="site-meta-form"
+    hx-post="/match/{{ match_id }}/site/meta"
+    hx-target="#site-controls-{{ match_id }}"
+    hx-swap="outerHTML"
+  >
+    <input
+      type="url"
+      name="channel_post_url"
+      placeholder="Ссылка на пост в канале (опц.)"
+      value="{{ site.channel_post_url if site and site.channel_post_url else '' }}"
+    >
+    <input
+      type="text"
+      name="note"
+      placeholder="Заметка (опц.)"
+      value="{{ site.note if site and site.note else '' }}"
+    >
+    <button type="submit" class="btn-link">Сохранить</button>
+  </form>
+</div>

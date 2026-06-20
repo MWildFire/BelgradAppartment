@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from src.admin.auth import require_admin
 from src.admin.csrf import CSRF_TOKEN, require_csrf
+from src.admin.publish import get_or_create_site_listing, parse_relocation_flags
 from src.db import (
     InboundPost,
     Listing,
@@ -22,7 +23,7 @@ from src.db import (
     SourceChannel,
     get_session,
 )
-from src.db.models import DailyMetrics
+from src.db.models import DailyMetrics, SiteListing
 from src.post import render_post
 
 logger = logging.getLogger(__name__)
@@ -159,13 +160,109 @@ async def mark_posted_action(
     _: str = Depends(require_admin),
     __: None = Depends(require_csrf),
 ) -> HTMLResponse:
-    """For 'Дарья posted it manually, the bot doesn't know' — no PublishedPost row is created."""
-    match = await _set_match_status(match_id, MatchStatus.PUBLISHED)
-    if match is None:
-        return _flash_card(request, match_id, error=f"Match {match_id} не найден")
+    """For 'Дарья posted it manually, the bot doesn't know' — no PublishedPost row is created.
+
+    Decision #3: mark-posted auto-exposes the apartment on the public site by upserting
+    a SiteListing(is_public=True) with ВНЖ/белый-картон flags defaulted from the post text.
+    Re-marking is idempotent: an EXISTING overlay keeps Дарья's manual flags/is_public/note.
+    """
+    async with get_session() as s:
+        match = await s.get(Match, match_id)
+        if match is None:
+            return _flash_card(request, match_id, error=f"Match {match_id} не найден")
+        match.status = MatchStatus.PUBLISHED
+        match.rejection_reason = None
+        site_row, created = await get_or_create_site_listing(s, match_id)
+        if created:
+            inbound = await s.get(InboundPost, match.inbound_post_id)
+            raw = inbound.raw_text if inbound is not None else None
+            site_row.is_for_vnj, site_row.is_for_white_card = parse_relocation_flags(raw)
+            # is_public stays the DB default (True) — decision #3.
     return templates.TemplateResponse(
         request, "_card_posted.html", {"match_id": match_id}
     )
+
+
+# ------------------------------------------------------------------------- Publish-to-site (W2-A1)
+# Each route upserts the SiteListing overlay for a match and toggles/sets one field.
+# All idempotent, all create the row if absent (toggles never run the text-parse —
+# that default only applies at mark-posted; a manual toggle is an explicit choice).
+
+
+def _site_controls(request: Request, match_id: int, site: SiteListing) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "_site_controls.html", {"match_id": match_id, "site": site}
+    )
+
+
+async def _require_match(s, match_id: int) -> Match:
+    match = await s.get(Match, match_id)
+    if match is None:
+        raise HTTPException(status_code=404, detail=f"Match {match_id} not found")
+    return match
+
+
+@router.post("/match/{match_id}/site/toggle-public", response_class=HTMLResponse)
+async def site_toggle_public(
+    request: Request,
+    match_id: int,
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> HTMLResponse:
+    async with get_session() as s:
+        await _require_match(s, match_id)
+        site, created = await get_or_create_site_listing(s, match_id)
+        # Absent → create exposed (is_public default True, decision #3); present → flip.
+        if not created:
+            site.is_public = not site.is_public
+    # session commits on block exit; expire_on_commit=False keeps `site` readable here.
+    return _site_controls(request, match_id, site)
+
+
+@router.post("/match/{match_id}/site/toggle-vnj", response_class=HTMLResponse)
+async def site_toggle_vnj(
+    request: Request,
+    match_id: int,
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> HTMLResponse:
+    async with get_session() as s:
+        await _require_match(s, match_id)
+        site, _created = await get_or_create_site_listing(s, match_id)
+        site.is_for_vnj = not site.is_for_vnj
+    return _site_controls(request, match_id, site)
+
+
+@router.post("/match/{match_id}/site/toggle-white-card", response_class=HTMLResponse)
+async def site_toggle_white_card(
+    request: Request,
+    match_id: int,
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> HTMLResponse:
+    async with get_session() as s:
+        await _require_match(s, match_id)
+        site, _created = await get_or_create_site_listing(s, match_id)
+        site.is_for_white_card = not site.is_for_white_card
+    return _site_controls(request, match_id, site)
+
+
+@router.post("/match/{match_id}/site/meta", response_class=HTMLResponse)
+async def site_meta(
+    request: Request,
+    match_id: int,
+    channel_post_url: str = Form(""),
+    note: str = Form(""),
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> HTMLResponse:
+    async with get_session() as s:
+        await _require_match(s, match_id)
+        site, _created = await get_or_create_site_listing(s, match_id)
+        # Empty string clears the override; flags/is_public are left untouched.
+        site.channel_post_url = channel_post_url.strip() or None
+        site.note = note.strip() or None
+    return _site_controls(request, match_id, site)
 
 
 # --------------------------------------------------------------------------- Metrics
@@ -273,6 +370,15 @@ async def _load_pending_cards() -> list[dict[str, object]]:
                 .order_by(Match.created_at.desc())
             )
         ).scalars().all()
+        # Per-match SiteListing overlay (or None) for surfacing the «на сайт» toggles.
+        site_by_match: dict[int, SiteListing] = {}
+        site_rows = (
+            await s.execute(
+                select(SiteListing).where(SiteListing.match_id.in_([m.id for m in rows]))
+            )
+        ).scalars().all() if rows else []
+        for sr in site_rows:
+            site_by_match[sr.match_id] = sr
     cards: list[dict[str, object]] = []
     for m in rows:
         listing: Listing | None = m.listing
@@ -282,6 +388,7 @@ async def _load_pending_cards() -> list[dict[str, object]]:
         rendered = render_post(listing, inbound)
         inbound_url = _inbound_post_url(inbound)
         cards.append({
+            "site": site_by_match.get(m.id),
             "match_id": m.id,
             "confidence": m.confidence,
             "matched_photo_count": m.matched_photo_count,

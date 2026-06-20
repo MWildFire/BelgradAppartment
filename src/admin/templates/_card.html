@@ -68,6 +68,10 @@
           <a href="{{ c.inbound_url }}" target="_blank" class="btn-link">источник</a>
         {% endif %}
       </div>
+
+      {% with match_id = c.match_id, site = c.site %}
+        {% include "_site_controls.html" %}
+      {% endwith %}
     </div>
   </div>
 </div>
