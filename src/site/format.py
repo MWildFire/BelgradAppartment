@@ -15,7 +15,7 @@ from typing import Protocol
 
 import yaml
 
-from src.config import get_settings
+from src.config import PROJECT_ROOT, get_settings
 from src.post.hashtags import DISTRICTS_PATH, _normalise, district_tag
 
 # Markers that mean "already rented" appearing in the source post / listing text.
@@ -90,19 +90,20 @@ def public_photo_url(local_path: str) -> str:
     """
     if not local_path:
         return ""
-    root = get_settings().site_photos_root
     # A stray remote URL must never reach a public template: collapse to basename.
     if "://" in local_path:
         return "/photos/" + Path(local_path).name
+    root = Path(get_settings().site_photos_root).resolve()
     p = Path(local_path)
-    if p.is_absolute():
-        try:
-            rel = p.relative_to(root)
-        except ValueError:
-            # Stored outside the configured root — fall back to basename, never leak path.
-            rel = Path(p.name)
-    else:
-        rel = p
+    if not p.is_absolute():
+        # Pipeline stores paths relative to the working dir, e.g. "data/inbound/1/13038/00.jpg";
+        # anchor at PROJECT_ROOT so the part under site_photos_root can be computed.
+        p = PROJECT_ROOT / p
+    try:
+        rel = p.resolve().relative_to(root)
+    except ValueError:
+        # Stored outside the configured root — fall back to basename, never leak path.
+        rel = Path(p.name)
     rel_posix = rel.as_posix()
     # Never let an absolute escape or a '..' segment reach the URL even if photo_paths
     # ever became relative/tainted; Caddy also jails /photos, but build a safe URL anyway.

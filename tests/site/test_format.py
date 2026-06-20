@@ -89,7 +89,9 @@ def test_public_photo_url_absolute_under_root() -> None:
 
 
 def test_public_photo_url_already_relative() -> None:
-    assert public_photo_url("5/100/00.jpg") == "/photos/5/100/00.jpg"
+    # Pipeline stores paths relative to the working dir under data/inbound; the data/inbound
+    # prefix is stripped so the URL tail matches Caddy's /photos root (= data/inbound).
+    assert public_photo_url("data/inbound/5/100/00.jpg") == "/photos/5/100/00.jpg"
 
 
 def test_public_photo_url_never_remote() -> None:

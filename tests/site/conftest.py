@@ -74,7 +74,7 @@ async def _seed(factory: async_sessionmaker) -> None:
             s.add(
                 InboundPost(
                     id=lid, source_channel_id=1, tg_message_id=100 + lid,
-                    raw_text="", photo_paths=[f"/abs/data/inbound/1/{lid}/00.jpg"],
+                    raw_text="", photo_paths=[f"data/inbound/1/{lid}/00.jpg"],
                 )
             )
         await s.flush()

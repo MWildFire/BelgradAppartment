@@ -14,7 +14,10 @@ rent.example.com {            # <-- заменить на свой сабдом�
         header Cache-Control "public, max-age=31536000, immutable"
     }
     handle_path /photos/* {
-        root * /opt/otz/data/site_photos     # <-- photos_root (см. план Wave 6, шаг 5)
+        # photos_root = where the pipeline downloads inbound photos. public_photo_url emits
+        # /photos/<relpath-under-this-root>, so this MUST equal SITE_PHOTOS_ROOT. Jailed here
+        # (data/inbound) — NOT /opt/otz — so .env / otz.db can never be served via /photos.
+        root * /opt/otz/data/inbound
         file_server
         header Cache-Control "public, max-age=604800"
     }
