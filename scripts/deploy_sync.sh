@@ -29,12 +29,17 @@ echo "→ rsync to $VPS:$REMOTE"
 # Note: macOS ships openrsync (2.6-compatible) which lacks --chown. We don't preserve
 # owner/group (no -o -g) and fix ownership in a follow-up ssh chown below. Falls back to
 # `data/` being owned by root, then we re-own to otz so the service can write.
+# IMPORTANT: '.venv' has NO trailing slash so it also excludes a .venv *symlink* (a worktree
+# uses one). With the trailing-slash form, rsync tried to replace the server's .venv dir with
+# the symlink and --delete-after wiped the venv. Also exclude server-only state (logs, .claude,
+# .DS_Store) so --delete-after never removes it.
 rsync -rlptzv --delete-after \
-  --exclude='.venv/' --exclude='.git/' --exclude='__pycache__/' \
+  --exclude='.venv' --exclude='.git/' --exclude='__pycache__/' \
   --exclude='*.pyc' --exclude='.pytest_cache/' --exclude='.mypy_cache/' --exclude='.ruff_cache/' \
   --include='data/' --include='data/districts.yaml' --exclude='data/*' \
   --exclude='.env' --exclude='*.session' --exclude='*.session-journal' \
-  --exclude='tests/fixtures/halooglasi/' \
+  --exclude='logs/' --exclude='.claude/' --exclude='.DS_Store' \
+  --exclude='tests/fixtures/halooglasi/' --exclude='tests/e2e/site/_artifacts/' \
   ./ "$VPS:$REMOTE/" | tail -10
 ssh "$VPS" "chown -R otz:otz $REMOTE/data $REMOTE/src $REMOTE/scripts $REMOTE/tests"
 
