@@ -253,3 +253,51 @@ class PublishedPost(Base):
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     match: Mapped[Match] = relationship(back_populates="published_post")
+
+
+class SiteListing(Base):
+    """Public-catalog overlay over a PUBLISHED Match (Stage W).
+
+    CQRS read-model: the pipeline writes its own tables; the site reads this curated
+    overlay. One row per apartment Дарья chose to expose. Everything else (price/area/
+    rooms/district/coords/photos) is joined from `listings` / `inbound_posts`.
+    """
+
+    __tablename__ = "site_listings"
+    __table_args__ = (
+        Index("ix_site_listings_is_public", "is_public"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    match_id: Mapped[int] = mapped_column(
+        ForeignKey("matches.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_for_vnj: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_for_white_card: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    channel_post_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class Lead(Base):
+    """Personal-search request submitted from the public site's lead form (Stage W)."""
+
+    __tablename__ = "leads"
+    __table_args__ = (
+        Index("ix_leads_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    contact: Mapped[str] = mapped_column(Text, nullable=False)
+    budget_eur: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    districts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rooms: Mapped[str | None] = mapped_column(Text, nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(Text, default="site", server_default="site", nullable=False)
+    status: Mapped[str] = mapped_column(Text, default="new", server_default="new", nullable=False)

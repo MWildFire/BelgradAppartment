@@ -137,7 +137,9 @@ def test_upgrade_0005_dedup_and_schema(tmp_path: Path) -> None:
 def test_downgrade_0005_reverses_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    # Pin to 0005 (not "head"): later migrations (0006+) add a new head, so "head" + "-1"
+    # would no longer land on 0004. This test is specifically about 0005's downgrade.
+    command.upgrade(cfg, "0005_indexes_dedup_metrics")
 
     command.downgrade(cfg, "-1")
 

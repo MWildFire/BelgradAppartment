@@ -103,6 +103,20 @@ class Settings(BaseSettings):
     llm_validation_min_confidence: float = 0.7
     anthropic_api_key: str = ""
 
+    # --- Public web catalog (Stage W) ---
+    site_bind_host: str = "127.0.0.1"
+    site_bind_port: int = 8001
+    site_public_base_url: str = "https://rent.example.com"
+    site_cache_ttl: int = 300
+    site_page_size: int = 24
+    # Disk root of public photos; Caddy serves it as /photos/*. InboundPost.photo_paths
+    # are written under inbound_photos_dir, so the default points there (dev). On the VPS
+    # SITE_PHOTOS_ROOT overrides this to the curated public dir.
+    site_photos_root: Path = PROJECT_ROOT / "data" / "inbound"
+    site_channel_url: str = "https://t.me/RentBelgrad"
+    site_lead_ratelimit_max: int = 5
+    site_lead_ratelimit_window: int = 3600
+
     # --- Web admin ---
     admin_host: str = "127.0.0.1"
     admin_port: int = 8000
