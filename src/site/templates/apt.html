@@ -2,6 +2,14 @@
 {% block title %}{{ item.rooms }} в районе {{ item.district }} — €{{ item.price_eur }}/мес · RentBelgrad{% endblock %}
 {% block meta_description %}{{ item.rooms }} в районе {{ item.district }} за €{{ item.price_eur }} в месяц.{% if item.for_vnj %} Подходит для ВНЖ.{% endif %}{% endblock %}
 
+{# Per-listing OpenGraph. og:title = price + district (listing identity); og:image is the
+   first photo made ABSOLUTE via site_base_url. No photo → inherit base default (no dangling). #}
+{% block og_type %}article{% endblock %}
+{% block og_title %}€{{ item.price_eur }}/мес · {{ item.rooms }} в районе {{ item.district }}{% endblock %}
+{% block og_description %}{{ item.rooms }}, €{{ item.price_eur }}/мес в районе {{ item.district }}.{% if item.area_m2 %} {{ item.area_m2|round|int }} m².{% endif %}{% if item.for_vnj %} Подходит для ВНЖ.{% endif %}{% if item.for_white_card %} Белый картон.{% endif %}{% endblock %}
+{# absolute og:image from the first photo; falls back to the site default when none exist #}
+{% block og_image %}{{ site_base_url }}{{ item.photos[0] if item.photos else '/static/og-default.png' }}{% endblock %}
+
 {% block content %}
 <section class="bay wrap">
   {# crumbs: district only — address is None per contract, never invented #}
@@ -43,7 +51,8 @@
 
       {# «важно для релокантов» #}
       <div class="reloc">
-        <h3>Что важно для релокантов</h3>
+        {# h2 (not h3): sits directly under the page h1, so h1→h2 keeps order sequential. #}
+        <h2>Что важно для релокантов</h2>
         <div class="items">
           <div class="item"><span class="k">ВНЖ</span><p>{% if item.for_vnj %}Хозяин готов оформить ugovor с регистрацией в МУПе — подходит для боравишта.{% else %}Уточним у хозяина возможность официального договора под боравиште.{% endif %}</p></div>
           <div class="item"><span class="k">картон</span><p>{% if item.for_white_card %}Подходит для белого картона.{% else %}Спросим хозяина про белый картон при показе.{% endif %}</p></div>

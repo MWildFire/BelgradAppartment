@@ -50,7 +50,25 @@
 /* skip-link for keyboard a11y */
 .skip-link{position:absolute;left:-9999px;top:0;background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:var(--r-s);z-index:60}
 .skip-link:focus{left:8px;top:8px}
+/* Global keyboard ring — oxblood@2px clears 3:1 against paper(5.7) and card(6.1). Applied to
+   EVERY interactive element (links, buttons, inputs, checkboxes/toggles, select, pager,
+   favorites control, map controls). Never removed without an equally-visible replacement. */
 :focus-visible{outline:2px solid var(--oxblood);outline-offset:2px}
+/* Pointer focus swaps the outline for a border tint via :focus:not(:focus-visible) (see .field below);
+   keyboard focus matches :focus-visible and keeps the ring defined here. */
+.field input:focus-visible,.field textarea:focus-visible,.field select:focus-visible,
+.searchbar .seg input:focus-visible,.searchbar .seg select:focus-visible,
+.price-range input:focus-visible,.calc .calc-row input:focus-visible,
+.results-head select:focus-visible,.filters select:focus-visible,
+.toggle input:focus-visible,.opt input:focus-visible,.pill input:focus-visible,
+.fav:focus-visible,.btn:focus-visible,.pager a:focus-visible,
+.leaflet-bar a:focus-visible,.leaflet-control a:focus-visible{
+  outline:2px solid var(--oxblood);outline-offset:2px}
+/* Checkbox/pill labels show the ring on the label when the hidden/native input is focused. */
+.toggle:focus-within,.opt:focus-within,.pill:focus-within{outline:2px solid var(--oxblood);outline-offset:2px}
+/* a11y USAGE override (not a token change): tokens.css .kicker uses --ink-3 (3.3:1 on paper,
+   below AA body). The kicker is a meaningful section eyebrow, so bump it to --ink-2 (8.2:1). */
+.kicker{color:var(--ink-2)}
 
 /* ───────── top bar (deliberate backdrop-blur nav — taste reference, kept 1:1) ───────── */
 .nav{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--paper) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--hairline)}
@@ -88,13 +106,15 @@
 /* search */
 .searchbar{margin-top:2.2rem;display:flex;align-items:stretch;border:1.5px solid var(--ink);border-radius:var(--r-m);background:var(--card);overflow:hidden;max-width:560px}
 .searchbar .seg{display:flex;flex-direction:column;justify-content:center;padding:10px 16px;border-right:1px solid var(--hairline);min-width:0}
-.searchbar .seg span{font-family:var(--mono);font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3)}
+/* a11y: ink-3 (#8A8275) on paper/card is 3.3-3.6:1 — below AA body (4.5). All small text
+   (captions, labels, meta, even the decorative `·` separators) now uses ink-2 (8.2:1+). */
+.searchbar .seg span{font-family:var(--mono);font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2)}
 .searchbar .seg b{font-weight:600;font-size:var(--step-0)}
 .searchbar .seg select,.searchbar .seg input{border:0;background:transparent;font-family:var(--text);font-weight:600;font-size:var(--step-0);color:var(--ink);padding:0;outline:none;width:100%}
 .searchbar .go{margin-left:auto;background:var(--oxblood);color:var(--paper);border:0;padding:0 26px;font-family:var(--text);font-weight:600;cursor:pointer;font-size:var(--step--1)}
 .stat-row{display:flex;gap:34px;margin-top:2.6rem;flex-wrap:wrap}
 .stat .n{font-family:var(--display);font-weight:700;font-size:var(--step-2);letter-spacing:-0.03em}
-.stat .l{font-size:var(--step--1);color:var(--ink-3)}
+.stat .l{font-size:var(--step--1);color:var(--ink-2)}
 @media(max-width:780px){.hero-grid{grid-template-columns:1fr}.hero-side{order:-1}.hero-photo{aspect-ratio:16/11}}
 
 /* ───────── marquee strip ───────── */
@@ -103,24 +123,25 @@
 .strip .track span{opacity:.92}
 .strip .track i{color:var(--ochre);font-style:normal}
 @keyframes slide{to{transform:translateX(-50%)}}
-@media(prefers-reduced-motion:reduce){.strip .track{animation:none}}
 
 /* ───────── section frame ───────── */
 section.bay{padding-block:var(--bay)}
 .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--gutter);margin-bottom:2.4rem}
 .sec-head h2{font-size:var(--step-3)}
-.sec-head .idx{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3)}
+.sec-head .idx{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
 .sec-head .more{font-size:var(--step--1);border-bottom:1.5px solid var(--oxblood);padding-bottom:2px;color:var(--ink);white-space:nowrap}
 
 /* ───────── listings (TG-fed) ───────── */
-.feed-note{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3);margin-bottom:1.6rem}
+.feed-note{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2);margin-bottom:1.6rem}
 .feed-note .dot{width:8px;height:8px;border-radius:50%;background:var(--sage);box-shadow:0 0 0 4px color-mix(in srgb,var(--sage) 22%,transparent)}
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--gutter)}
 @media(max-width:980px){.cards{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:620px){.cards{grid-template-columns:1fr}}
 .card-l{background:var(--card);border:1px solid var(--ink);border-radius:var(--r-m);overflow:hidden;display:flex;flex-direction:column;transition:transform .14s ease,box-shadow .14s ease}
 .card-l:hover{transform:translateY(-3px);box-shadow:0 20px 40px -26px rgba(27,26,23,.5)}
-.card-l.is-rented{opacity:.72}
+/* Rented cards stay muted (social proof, not hidden), but .72 dragged the inner text below
+   AA (4.2:1). .8 keeps the «приглушённо» feel while text clears 4.5:1 (ink-2 → 5.15:1). */
+.card-l.is-rented{opacity:.8}
 .card-l .ph{aspect-ratio:3/2;position:relative;background:var(--paper-3)}
 .card-l .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .card-l .ph .flag{position:absolute;left:10px;top:10px;display:flex;gap:6px;flex-wrap:wrap;z-index:1}
@@ -131,10 +152,10 @@ section.bay{padding-block:var(--bay)}
 .badge.rented{background:var(--ink);color:var(--paper)}
 .card-l .body{padding:16px 16px 18px;display:flex;flex-direction:column;gap:8px;flex:1}
 .card-l .price{font-family:var(--display);font-weight:700;font-size:var(--step-2);letter-spacing:-0.03em}
-.card-l .price small{font-family:var(--text);font-weight:500;font-size:var(--step--1);color:var(--ink-3)}
+.card-l .price small{font-family:var(--text);font-weight:500;font-size:var(--step--1);color:var(--ink-2)}
 .card-l .ttl{font-weight:600;font-size:var(--step-0);line-height:1.3}
 .card-l .meta{font-family:var(--mono);font-size:.72rem;color:var(--ink-2);display:flex;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:6px;border-top:1px solid var(--hairline)}
-.card-l .meta i{font-style:normal;color:var(--ink-3)}
+.card-l .meta i{font-style:normal;color:var(--ink-2)}
 
 /* ───────── how it works ───────── */
 .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--ink);border-radius:var(--r-m);overflow:hidden;background:var(--card)}
@@ -170,9 +191,11 @@ section.bay{padding-block:var(--bay)}
 .lead-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--gutter);margin-top:1.6rem}
 .field{display:flex;flex-direction:column;gap:6px}
 .field.span-2{grid-column:1/-1}
-.field label{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.field label{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2)}
 .field input,.field textarea,.field select{font-family:var(--text);font-size:var(--step-0);color:var(--ink);background:var(--paper);border:1.5px solid var(--hairline);border-radius:var(--r-s);padding:11px 13px}
-.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--ink);outline:none}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:var(--ink)}
+/* Drop the default outline ONLY for pointer focus; keyboard focus (:focus-visible above) keeps the ring. */
+.field input:focus:not(:focus-visible),.field textarea:focus:not(:focus-visible),.field select:focus:not(:focus-visible){outline:none}
 .field textarea{min-height:96px;resize:vertical}
 /* honeypot: off-screen, never visible/tabbable to humans */
 .hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
@@ -187,7 +210,7 @@ section.bay{padding-block:var(--bay)}
 @media(max-width:900px){.catalog-grid{grid-template-columns:1fr}}
 .filters{border:1px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:20px;position:sticky;top:84px}
 @media(max-width:900px){.filters{position:static}}
-.filters h3{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);font-weight:500;margin:0 0 12px}
+.filters h3{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);font-weight:500;margin:0 0 12px}
 .filters .group{padding:14px 0;border-top:1px solid var(--hairline)}
 .filters .group:first-of-type{border-top:0;padding-top:0}
 /* ВНЖ + белый картон — the prominent top toggles */
@@ -198,7 +221,7 @@ section.bay{padding-block:var(--bay)}
 .toggle.wc.on{background:var(--navy);border-color:var(--navy)}
 .opt{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:var(--step--1);color:var(--ink-2);cursor:pointer}
 .opt input{accent-color:var(--oxblood)}
-.opt .cnt{margin-left:auto;font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
+.opt .cnt{margin-left:auto;font-family:var(--mono);font-size:.7rem;color:var(--ink-2)}
 .price-range{display:flex;gap:10px;align-items:center}
 .price-range input{width:100%;font-family:var(--mono);font-size:var(--step--1);padding:9px 11px;border:1.5px solid var(--hairline);border-radius:var(--r-s);background:var(--paper);color:var(--ink)}
 .rooms-pills{display:flex;gap:6px;flex-wrap:wrap}
@@ -207,9 +230,9 @@ section.bay{padding-block:var(--bay)}
 .pill.on{background:var(--ink);color:var(--paper)}
 .filters .apply{width:100%;margin-top:6px}
 .results-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--gutter);margin-bottom:1.4rem;flex-wrap:wrap}
-.results-head .count{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3)}
+.results-head .count{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
 .results-head select{font-family:var(--text);font-size:var(--step--1);border:1.5px solid var(--hairline);border-radius:var(--r-s);padding:8px 11px;background:var(--paper);color:var(--ink)}
-.empty{padding:clamp(3rem,7vw,6rem) 2rem;text-align:center;color:var(--ink-3);border:1px dashed var(--hairline);border-radius:var(--r-m);background:var(--card)}
+.empty{padding:clamp(3rem,7vw,6rem) 2rem;text-align:center;color:var(--ink-2);border:1px dashed var(--hairline);border-radius:var(--r-m);background:var(--card)}
 .empty .big{font-family:var(--display);font-size:var(--step-2);color:var(--ink-2);margin-bottom:.6rem}
 .pager{display:flex;gap:8px;justify-content:center;margin-top:2.4rem;font-family:var(--mono);font-size:var(--step--1);flex-wrap:wrap}
 .pager a,.pager span{padding:8px 14px;border:1.5px solid var(--hairline);border-radius:var(--r-s);color:var(--ink-2)}
@@ -217,7 +240,7 @@ section.bay{padding-block:var(--bay)}
 .pager .current{background:var(--ink);color:var(--paper);border-color:var(--ink)}
 
 /* ───────── apartment detail ───────── */
-.crumbs{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3);margin-bottom:1.2rem}
+.crumbs{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2);margin-bottom:1.2rem}
 .crumbs a:hover{color:var(--ink)}
 .apt-grid{display:grid;grid-template-columns:1.5fr .9fr;gap:var(--gutter);align-items:start}
 @media(max-width:900px){.apt-grid{grid-template-columns:1fr}}
@@ -225,15 +248,16 @@ section.bay{padding-block:var(--bay)}
 .gallery .g{background:var(--paper-3);border:1px solid var(--hairline);overflow:hidden;position:relative}
 .gallery .g.main{grid-row:span 2;grid-column:1}
 .gallery .g img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.gallery .g.more{display:grid;place-items:center;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3)}
+.gallery .g.more{display:grid;place-items:center;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
 .gallery.gallery-empty{grid-template-columns:1fr;grid-template-rows:1fr}
 .apt-title{font-size:var(--step-3);margin:1.6rem 0 .4rem;letter-spacing:-0.03em}
 .apt-params{font-family:var(--mono);font-size:var(--step-0);color:var(--ink-2);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:1.2rem}
-.apt-params i{font-style:normal;color:var(--ink-3)}
+.apt-params i{font-style:normal;color:var(--ink-2)}
 .apt-badges{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.6rem}
 .apt-note{font-size:var(--step-0);line-height:1.6;color:var(--ink-2);max-width:62ch}
 .reloc{border:1px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:20px;margin-top:2rem}
-.reloc h3{font-size:var(--step-1);font-weight:600;margin-bottom:1rem;letter-spacing:-0.02em}
+/* reloc heading is <h2> for sequential order; sized like a sub-head (step-1), not a section h2. */
+.reloc h2{font-size:var(--step-1);font-weight:600;margin-bottom:1rem;letter-spacing:-0.02em}
 .reloc .items{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:560px){.reloc .items{grid-template-columns:1fr}}
 .reloc .item{display:flex;gap:12px;align-items:baseline}
@@ -243,7 +267,7 @@ section.bay{padding-block:var(--bay)}
 .apt-side{border:1.5px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:22px;position:sticky;top:84px}
 @media(max-width:900px){.apt-side{position:static}}
 .apt-side .price{font-family:var(--display);font-weight:700;font-size:var(--step-3);letter-spacing:-0.03em}
-.apt-side .per{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3);margin:4px 0 16px}
+.apt-side .per{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2);margin:4px 0 16px}
 .apt-side .btn{display:block;width:100%;text-align:center;margin-bottom:8px}
 .apt-side .bullets{margin-top:14px;display:flex;flex-direction:column;gap:2px}
 .apt-side .bullet{display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--hairline);font-size:var(--step--1);color:var(--ink-2)}
@@ -252,7 +276,7 @@ section.bay{padding-block:var(--bay)}
 /* ───────── map ───────── */
 .map-shell{border:1px solid var(--ink);border-radius:var(--r-m);overflow:hidden;background:var(--paper-2)}
 #map{width:100%;height:min(70vh,640px);background:var(--paper-3)}
-.map-empty{display:grid;place-items:center;height:100%;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-3);text-align:center;padding:2rem}
+.map-empty{display:grid;place-items:center;height:100%;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2);text-align:center;padding:2rem}
 
 /* ───────── calculator ───────── */
 .calc{max-width:560px}
@@ -269,12 +293,27 @@ section.bay{padding-block:var(--bay)}
 footer{border-top:1px solid var(--ink);margin-top:var(--bay)}
 .foot{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:var(--gutter);padding-block:var(--bay)}
 .foot h4{font-family:var(--display);font-size:1.1rem;letter-spacing:-0.02em}
-.foot .col h5{font-family:var(--mono);font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin:0 0 14px}
+/* footer column titles are <h2> for sequential heading order; styled small/mono as before. */
+.foot .col h2{font-family:var(--mono);font-weight:400;font-size:.66rem;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-2);line-height:1.2;margin:0 0 14px}
 .foot .col a{display:block;font-size:var(--step--1);color:var(--ink-2);padding:5px 0}
 .foot .col a:hover{color:var(--ink)}
 .foot .bigtype{font-family:var(--display);font-weight:800;font-size:var(--step-4);letter-spacing:-0.04em;line-height:.9}
 .foot .bigtype .ox{color:var(--oxblood)}
 .foot .bigtype .nv{color:var(--navy)}
 .foot .desc{color:var(--ink-2);max-width:34ch;margin-top:1rem}
-.legal{display:flex;justify-content:space-between;padding-block:22px;border-top:1px solid var(--hairline);font-family:var(--mono);font-size:.68rem;color:var(--ink-3);flex-wrap:wrap;gap:10px}
+.legal{display:flex;justify-content:space-between;padding-block:22px;border-top:1px solid var(--hairline);font-family:var(--mono);font-size:.68rem;color:var(--ink-2);flex-wrap:wrap;gap:10px}
 @media(max-width:820px){.foot{grid-template-columns:1fr 1fr}.foot .brand-col{grid-column:1/-1}}
+
+/* ───────── motion safety (WCAG 2.3.3) ─────────
+   Honor prefers-reduced-motion: kill the marquee, the .btn lift, the card hover transform,
+   and neutralize decorative animations/transitions. We DON'T blanket-zero `transform` (the
+   map price-pin uses translate() for centering) — only the hover lifts are reset. */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{
+    animation:none!important;transition:none!important;scroll-behavior:auto!important}
+  .strip .track{animation:none}
+  .btn,.fav,.card-l{transition:none}
+  .btn:hover,.fav:hover,.card-l:hover{transform:none}
+  /* Leaflet zoom/fade (map.html scopes these too; defensive duplicate). */
+  .leaflet-fade-anim .leaflet-tile,.leaflet-zoom-anim .leaflet-zoom-animated{transition:none!important}
+}

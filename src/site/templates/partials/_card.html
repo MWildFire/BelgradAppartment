@@ -7,7 +7,9 @@
   <button type="button" class="fav" data-fav data-fav-id="{{ item.id }}" aria-pressed="false" aria-label="В избранное" title="В избранное">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M12 20.5 4.3 12.9a4.6 4.6 0 0 1 6.5-6.5l1.2 1.2 1.2-1.2a4.6 4.6 0 0 1 6.5 6.5z"/></svg>
   </button>
-  <a href="/apt/{{ item.id }}" aria-label="Квартира {{ item.rooms }}, {{ item.district }}, €{{ item.price_eur }} в месяц">
+  {# No aria-label here: the link's visible content (price + title + meta) already forms a
+     good accessible name. A paraphrasing aria-label would trip WCAG 2.5.3 (name mismatch). #}
+  <a href="/apt/{{ item.id }}">
     <div class="ph">
       {% if item.photos %}
         <img src="{{ item.photos[0] }}" alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" width="600" height="400">

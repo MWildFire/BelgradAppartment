@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["csrf_token"] = SITE_CSRF_TOKEN
+templates.env.globals["site_base_url"] = get_settings().site_public_base_url
 
 router = APIRouter()
 

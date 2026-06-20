@@ -3,8 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#F4EFE6">
+{# Inline SVG favicon (the logo mark: oxblood + navy quadrants). Data URI → no extra request,
+   no 404. Tokens inlined as literals because data URIs can't read CSS vars. #}
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20fill='%23F4EFE6'/%3E%3Crect%20x='4'%20y='4'%20width='11'%20height='11'%20fill='%23A8362A'/%3E%3Crect%20x='17'%20y='17'%20width='11'%20height='11'%20fill='%2315324C'/%3E%3Crect%20x='17'%20y='4'%20width='11'%20height='11'%20fill='none'%20stroke='%231B1A17'/%3E%3Crect%20x='4'%20y='17'%20width='11'%20height='11'%20fill='none'%20stroke='%231B1A17'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20fill='%23F4EFE6'/%3E%3Crect%20x='4'%20y='4'%20width='11'%20height='11'%20fill='%23A8362A'/%3E%3Crect%20x='17'%20y='17'%20width='11'%20height='11'%20fill='%2315324C'/%3E%3C/svg%3E">
 <title>{% block title %}RentBelgrad — квартиры в Белграде для своих{% endblock %}</title>
 <meta name="description" content="{% block meta_description %}Помогаем релокантам снять квартиру в Белграде на длинный срок — с договором под ВНЖ и белый картон.{% endblock %}">
+
+{# OpenGraph / Twitter — default site card; per-page templates override the og_* blocks.
+   Absolute URLs use the site_base_url Jinja global (= settings.site_public_base_url). #}
+<meta property="og:site_name" content="RentBelgrad">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:type" content="{% block og_type %}website{% endblock %}">
+<meta property="og:title" content="{% block og_title %}RentBelgrad — квартиры в Белграде для своих{% endblock %}">
+<meta property="og:description" content="{% block og_description %}Помогаем релокантам снять квартиру в Белграде на длинный срок — с договором под ВНЖ и белый картон.{% endblock %}">
+<meta property="og:image" content="{% block og_image %}{{ site_base_url }}/static/og-default.png{% endblock %}">
+<meta name="twitter:card" content="{% block twitter_card %}summary_large_image{% endblock %}">
+
 {# Fonts are self-hosted via @font-face in site.css (subsets in /static/fonts). #}
 {# No external <link> to fonts.googleapis — anti-slop + no hard CDN dependency. #}
 <link rel="preload" href="/static/fonts/golos-text-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
@@ -71,9 +87,11 @@
       <div class="bigtype">Rent<span class="ox">Bel</span><span class="nv">grad</span></div>
       <p class="desc">Свой человек в Белграде. Помогаем релокантам снять квартиру с договором под ВНЖ и белый картон.</p>
     </div>
-    <div class="col"><h5>Каталог</h5><a href="/catalog">Все квартиры</a><a href="/catalog?vnj=1">Под ВНЖ</a><a href="/catalog?wc=1">Белый картон</a><a href="/map">На карте</a></div>
-    <div class="col"><h5>Помощь</h5><a href="/#how">Как работаем</a><a href="/#vnj">ВНЖ и договор</a><a href="/calculator">Калькулятор аренды</a></div>
-    <div class="col"><h5>Контакты</h5><a href="{{ channel_url|default('https://t.me/RentBelgrad') }}" rel="noopener">Telegram-канал</a><a href="/#lead">Написать агенту</a></div>
+    {# footer column titles are h2 (same level as section headings) — keeps heading order
+       sequential (no h2→h5 skip); styled by .foot .col h2, identical to the old h5 look. #}
+    <div class="col"><h2>Каталог</h2><a href="/catalog">Все квартиры</a><a href="/catalog?vnj=1">Под ВНЖ</a><a href="/catalog?wc=1">Белый картон</a><a href="/map">На карте</a></div>
+    <div class="col"><h2>Помощь</h2><a href="/#how">Как работаем</a><a href="/#vnj">ВНЖ и договор</a><a href="/calculator">Калькулятор аренды</a></div>
+    <div class="col"><h2>Контакты</h2><a href="{{ channel_url|default('https://t.me/RentBelgrad') }}" rel="noopener">Telegram-канал</a><a href="/#lead">Написать агенту</a></div>
   </div>
   <div class="wrap legal"><span>© 2026 RentBelgrad</span><span>Beograd, Srbija · @RentBelgrad</span></div>
 </footer>

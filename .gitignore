@@ -68,3 +68,6 @@ test-results/
 .claude/worktrees/
 # Worktree-local .venv symlink (trailing-slash rule above only matches real dirs)
 .venv
+
+# Stage W e2e screenshot artifacts
+tests/e2e/site/_artifacts/
