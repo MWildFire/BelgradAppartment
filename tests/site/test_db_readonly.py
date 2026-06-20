@@ -38,6 +38,20 @@ async def test_readonly_session_rejects_update(site_db: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_readonly_survives_query_only_off(site_db: str) -> None:
+    """OS-level mode=ro: a write stays blocked even after `PRAGMA query_only=OFF`.
+
+    The old PRAGMA-query_only-only approach would have ALLOWED the write here; mode=ro
+    enforces read-only at the file-descriptor level, so the flip is impotent.
+    """
+    with pytest.raises(OperationalError) as exc:
+        async with sitedb.read_session(database_url=site_db) as s:
+            await s.execute(text("PRAGMA query_only=OFF"))
+            await s.execute(text("UPDATE listings SET price_eur = 1 WHERE id = 1"))
+    assert "readonly" in str(exc.value).lower()
+
+
+@pytest.mark.asyncio
 async def test_narrow_writer_can_insert_lead(site_db: str) -> None:
     async with sitedb.writer_session(database_url=site_db) as s:
         s.add(Lead(name="Иван", contact="@ivan", budget_eur=700))

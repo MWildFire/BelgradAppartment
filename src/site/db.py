@@ -1,12 +1,16 @@
 """Engines for the public catalog — strictly separate from src/db/session.py.
 
 Two engines, by ADR isolation requirement:
-- read-only engine: PRAGMA query_only=ON on every connection — any write raises
-  "attempt to write a readonly database". Used for all catalog reads.
+- read-only engine: opened with OS-level `mode=ro` (SQLite URI) so the KERNEL — not a
+  runtime flag — enforces read-only. Any write raises "attempt to write a readonly
+  database" and CANNOT be re-enabled from SQL (`PRAGMA query_only=OFF` does not help) nor
+  leak across pooled connections. query_only=ON is still set as belt-and-suspenders. Used
+  for all catalog reads. (mode=ro reads a WAL DB fine while the pipeline writer holds it —
+  verified empirically.) The DB file must already exist (the pipeline creates it).
 - narrow writer engine: busy_timeout=5000, used ONLY for Lead inserts.
 
 Tests pass a `database_url` override (a tmp FILE DB — ":memory:" gives each connection its
-own DB, which would defeat both query_only verification and writer/reader visibility).
+own DB, which would defeat both the read-only verification and writer/reader visibility).
 """
 
 from __future__ import annotations
@@ -33,11 +37,28 @@ def _resolve_url(database_url: str | None) -> str:
     return database_url or get_settings().database_url
 
 
+def _readonly_url(url: str) -> str:
+    """Rewrite a sqlite URL to open the file OS-level read-only via the SQLite URI form.
+
+    `sqlite+aiosqlite:////abs/otz.db` -> `sqlite+aiosqlite:///file:/abs/otz.db?mode=ro&uri=true`.
+    SQLAlchemy consumes `uri=true` itself and passes `file:/abs/otz.db?mode=ro` to sqlite3.
+    Left unchanged for non-sqlite, :memory:, or already-URI urls.
+    """
+    if not url.startswith("sqlite") or ":///" not in url:
+        return url
+    scheme, path = url.split(":///", 1)
+    if not path or path.startswith("file:") or ":memory:" in path or "mode=ro" in path:
+        return url
+    return f"{scheme}:///file:{path}?mode=ro&uri=true"
+
+
 def _read_factory(database_url: str | None) -> async_sessionmaker[AsyncSession]:
     url = _resolve_url(database_url)
     cached = _read_engines.get(url)
     if cached is None:
-        engine = create_async_engine(url, echo=False, future=True)
+        # Engine is OS-level read-only (mode=ro); cache key stays the logical url so the
+        # reader and the writer engine map to the same logical DB.
+        engine = create_async_engine(_readonly_url(url), echo=False, future=True)
         if url.startswith("sqlite"):
 
             @event.listens_for(engine.sync_engine, "connect")

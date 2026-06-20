@@ -97,3 +97,14 @@ def test_public_photo_url_never_remote() -> None:
     out = public_photo_url("https://cdn.telegram.org/file/abc.jpg")
     assert not out.startswith("http")
     assert out.startswith("/photos/")
+
+
+def test_public_photo_url_rejects_relative_traversal() -> None:
+    # A '..' traversal (even if photo_paths ever became relative/tainted) collapses to basename.
+    out = public_photo_url("../../../../etc/passwd")
+    assert ".." not in out
+    assert out == "/photos/passwd"
+
+
+def test_public_photo_url_empty_is_empty() -> None:
+    assert public_photo_url("") == ""

@@ -81,7 +81,15 @@ def is_rented(listing: _HasText) -> bool:
 
 
 def public_photo_url(local_path: str) -> str:
-    """Local photo file → public '/photos/<relpath>'. Never emits a remote URL."""
+    """Local photo file → public '/photos/<relpath>'.
+
+    Never emits a remote URL, an absolute path, or a '..' traversal: a stray remote URL or
+    any path that escapes SITE_PHOTOS_ROOT collapses to the basename. (Defense-in-depth —
+    photo_paths come from the pipeline today, but this is the single point that builds a
+    public URL from a stored path.)
+    """
+    if not local_path:
+        return ""
     root = get_settings().site_photos_root
     # A stray remote URL must never reach a public template: collapse to basename.
     if "://" in local_path:
@@ -95,4 +103,9 @@ def public_photo_url(local_path: str) -> str:
             rel = Path(p.name)
     else:
         rel = p
-    return "/photos/" + rel.as_posix()
+    rel_posix = rel.as_posix()
+    # Never let an absolute escape or a '..' segment reach the URL even if photo_paths
+    # ever became relative/tainted; Caddy also jails /photos, but build a safe URL anyway.
+    if rel_posix.startswith("/") or ".." in rel_posix.split("/"):
+        rel_posix = Path(local_path).name
+    return "/photos/" + rel_posix

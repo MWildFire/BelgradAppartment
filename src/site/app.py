@@ -31,7 +31,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="otz-rent-finder site", docs_url=None, redoc_url=None, lifespan=lifespan)
+    # openapi_url=None: no /openapi.json route inventory on an internet-facing app.
+    app = FastAPI(
+        title="otz-rent-finder site",
+        docs_url=None, redoc_url=None, openapi_url=None,
+        lifespan=lifespan,
+    )
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(router)

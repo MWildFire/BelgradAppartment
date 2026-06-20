@@ -29,6 +29,13 @@ rent.example.com {            # <-- заменить на свой сабдом�
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
+        # CSP: 'unsafe-inline' is required by the design's inline style="" attrs + one inline
+        # onchange; jsdelivr serves Leaflet (script+css), https:/data: serve OSM tiles + marker
+        # icons + the SVG favicon; everything else is same-origin. frame-ancestors/base-uri/
+        # form-action add clickjacking/base-tag/form-hijack defense.
+        # Follow-up (verify against the live site): relocate the one inline onchange into
+        # filters.js so script-src can drop 'unsafe-inline'.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         -Server
     }
 
