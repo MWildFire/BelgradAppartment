@@ -1,5 +1,45 @@
 # otz-rent-finder — FEATURE PLAN
 
+---
+
+## ✅ СТАТУС ВЫПОЛНЕНИЯ (обновлено 19.06.2026)
+
+**Этап H1 — ВЫПОЛНЕН** (12.06.2026). Все волны W0-W5 отработаны мультиагентно с spec+quality ревью
+и gate `pytest` после каждой; ветка `stage-h1` → `main`, задеплоено на VPS. Тесты **105 → 207**.
+Коммиты: `30c67e8`(plan) · `47d2d9a`(W1) · `21d2bb3`(W2) · `55a7034`(W3) · `0cc149c`(W4) · `8d957c8`(W5).
+Итоги в `HANDOFF.md` §0.1. Единственное незакрытое — **W0-5 `rematch-all`** (требует согласования с
+Дарьей, генерит доставки пачкой; бэкфилл обложек 4zida при этом выполнен).
+
+**Этап H1.1 «Incident Hardening» — ВЫПОЛНЕН** (19.06.2026, коммит `c31a80e`). Внеплановый: реакция на
+прод-инцидент 13.06 (отзыв Telethon-сессии → крэш-луп монитора 3 дня + спам OnFailure ×6). Мультиагентное
+ревью (workflow: 4 ревьюера → состязательная проверка, 14 находок → 7 фиксов) + реализация + quality-пасс.
+Тесты **207 → 220**. Детали — `HANDOFF.md` §0.0. Сводка задач — ниже, раздел **H1.1**.
+
+---
+
+## 🔥 Этап H1.1 · «Incident Hardening» (внеплановый, 19.06.2026) — ВЫПОЛНЕН
+
+**Триггер:** 13.06 владелец случайно «завершил все сеансы» Telegram → `SessionRevokedError` →
+монитор при рестарте звал интерактивный `start()` в сервисе → `EOFError`/`Aborted!` → крэш-луп 6× →
+`failed` на 3 дня; `OnFailure` сработал на каждый рестарт (спам). SMS-реавторизация невозможна
+(`SentCodeTypeApp`/`next_type=None` при живой app-сессии). Восстановлено **QR-входом**.
+
+| ID | Фикс | Файлы | Статус |
+|---|---|---|---|
+| H1.1-1 | `connect_authorized()` — нет интерактивного `start()` в сервисе; отзыв/нет сессии → один алерт через бот + `exit 3`; рантайм `UnauthorizedError`/`AuthKeyDuplicatedError` ловится так же | `monitor.py`, `cli.py` (`_monitor`, `_open_userbot_if_needed`) | ✅ |
+| H1.1-2 | `RestartPreventExitStatus=3` — потеря сессии = один `failed`/алерт, без лупа (exit 3 сквозь `xvfb-run` проверен на проде) | `scripts/vps_install.sh` | ✅ |
+| H1.1-3 | Де-дуп нотификатора (маркер `/var/log/otz/.last_alert_<unit>`, cooldown ~10 мин) — smoke ×2 → 1 отправка | `cli.py` (`_notify_failure`) | ✅ |
+| H1.1-4 | Исправлена ложная модель «OnFailure только при исчерпании рестартов» | `vps_install.sh`, `PHASE5_DEPLOY §5.4`, `HANDOFF §5.4` | ✅ |
+| H1.1-5 | `scripts/auth_qr.py` — QR-реавторизация (ASCII+PNG QR, `OTZ_2FA`, `OTZ_SESSION`, коды возврата); `qrcode` в `pyproject`; HANDOFF §5.4 переписан (QR — основной, описан режим отказа SMS) | `scripts/auth_qr.py`, `pyproject.toml`, доки | ✅ |
+| H1.1-6 | Бюджет ночного refetch: общий wall-clock `NIGHTLY_REFETCH_BUDGET_SEC=7200` на heal+rolling + per-fetch `asyncio.wait_for` cap `REFETCH_PER_FETCH_TIMEOUT_SEC=90` (страховка от SIGTERM 16.06) | `orchestrator.py`, `cli.py` (`_run_nightly_steps`), `config.py` | ✅ |
+
+**Проверено на проде:** монитор перезапущен на hardened-код (`active`, NRestarts=0), `RestartPreventExitStatus=3`
+на живом юните, `xvfb-run` сохраняет exit 3, де-дуп алертов работает (smoke ×2 → 1 сообщение), `qrcode` ставится.
+**Остаточные мелочи** (в бэклог HANDOFF §0.3): `--reason` из systemd для notify-failure пропущен; root cause
+SIGTERM 16.06 не найден (не воспроизводится, смягчён бюджетом).
+
+---
+
 ## Этап H1 · «Hardening & Intelligence»
 
 > **Дата плана:** 2026-06-12 · **База:** `HANDOFF.md` (handoff 12.06), коммиты `3169d92`, `32f5c67`
@@ -56,11 +96,11 @@ flowchart LR
 
 Без кода. Оркестратор, ssh с подтверждением пользователя. Результат — короткий статус-отчёт; находки конвертируются в задачи (если что-то сломано — чинится ДО Wave 1).
 
-- [ ] **W0-1 · Ночная сводка за 13.06** (таймер 03:14 UTC). Ожидание: «Обновлено (active)» ~20-21k; у всех трёх площадок строка «покрытие N% из M» (halooglasi теперь шлёт TotalCount). Если 🚨 или «Sweep пропущен» → `/var/log/otz/nightly-refresh.log`, дебаг по §9.
-- [ ] **W0-2 · Heal-юнит `otz-adhoc-20260612-075956`** (refetch-details, ~594 битые строки) — завершился? Остаток битых:
+- [x] **W0-1 · Ночная сводка за 13.06** (таймер 03:14 UTC). Ожидание: «Обновлено (active)» ~20-21k; у всех трёх площадок строка «покрытие N% из M» (halooglasi теперь шлёт TotalCount). Если 🚨 или «Sweep пропущен» → `/var/log/otz/nightly-refresh.log`, дебаг по §9.
+- [x] **W0-2 · Heal-юнит `otz-adhoc-20260612-075956`** (refetch-details, ~594 битые строки) — завершился? Остаток битых:
   `ssh root@90.156.254.159 'sqlite3 /opt/otz/data/otz.db "SELECT platform, SUM(photo_phashes=''[]'') FROM listings WHERE is_active=1 GROUP BY platform"'`
-- [ ] **W0-3 · Скорость матчера на проде**: в `/var/log/otz/monitor.log` новые inbound должны матчиться за секунды (было 40-75с). Если нет — стоп, дебаг до продолжения этапа.
-- [ ] **W0-4 · Запустить бэкфилл обложек 4zida** (старые строки): `ssh root@90.156.254.159 'otz-bg refetch-details --platform cetiri_zida --all'` — ~7ч, **запускать утром**, чтобы не пересечься с ночным таймером 03:00 UTC. Идёт фоном параллельно волнам 1-4 (только чтение кода, конфликтов нет).
+- [x] **W0-3 · Скорость матчера на проде**: в `/var/log/otz/monitor.log` новые inbound должны матчиться за секунды (было 40-75с). Если нет — стоп, дебаг до продолжения этапа.
+- [x] **W0-4 · Запустить бэкфилл обложек 4zida** (старые строки): `ssh root@90.156.254.159 'otz-bg refetch-details --platform cetiri_zida --all'` — ~7ч, **запускать утром**, чтобы не пересечься с ночным таймером 03:00 UTC. Идёт фоном параллельно волнам 1-4 (только чтение кода, конфликтов нет).
 - [ ] **W0-5 · После W0-4**: `otz-bg rematch-all` для перепроверки старых NO_MATCH inbound'ов (по согласованию — генерит доставки Дарье, предупредить её заранее).
 
 ---
@@ -318,14 +358,14 @@ date-суффиксов (claude-haiku-4-5); ничего не публикова
 
 ## ✅ Definition of Done этапа H1
 
-- [ ] W0: все 5 проверок закрыты, бэкфилл 4zida завершён, `rematch-all` прогнан (по согласованию с Дарьей)
-- [ ] Весь P1 закрыт: auto-heal в nightly · гонка дедупа (индекс + код + тест) · индексы listings · rolling re-fetch деталей
-- [ ] Весь P2 закрыт: column-select в embed-all/hash-listings · прунинг embeddings · кэш match-all · CPU-скан в to_thread
-- [ ] P3 закрыт частично (план): CSRF · notify-failure wiring + докстринг · тесты stages 2-4 и monitor events
-- [ ] Фичи: OnFailure-алерты · drop-алерт active>20% · photo coverage в сводке · admin reject/mark-posted · `/metrics` (или явно перенесён) · llm-report · districts-report · price-drop алерты
-- [ ] `pytest -q` зелёный, тестов ≥ 120 (база 105 + новые)
-- [ ] Прод: миграция применена после backup, monitor перезапущен, smoke из W5-8 пройден
-- [ ] `HANDOFF.md` §0, `docs/SPEC.md`, `.env.example` обновлены; коммит запушен
+- [~] W0: проверки + бэкфилл 4zida закрыты; **`rematch-all` НЕ прогнан** (по согласованию с Дарьей — см. HANDOFF §0.2)
+- [x] Весь P1 закрыт: auto-heal в nightly · гонка дедупа (индекс + код + тест) · индексы listings · rolling re-fetch деталей
+- [x] Весь P2 закрыт: column-select в embed-all/hash-listings · прунинг embeddings · кэш match-all · CPU-скан в to_thread
+- [x] P3 закрыт частично (план): CSRF · notify-failure wiring + докстринг · тесты stages 2-4 и monitor events
+- [x] Фичи: OnFailure-алерты · drop-алерт active>20% · photo coverage в сводке · admin reject/mark-posted · `/metrics` (или явно перенесён) · llm-report · districts-report · price-drop алерты
+- [x] `pytest -q` зелёный — **207** тестов после H1 (база 105), **220** после H1.1
+- [x] Прод: миграция применена после backup, monitor перезапущен, smoke из W5-8 пройден
+- [x] `HANDOFF.md` §0, `docs/SPEC.md`, `.env.example` обновлены; коммит запушен
 
 ---
 

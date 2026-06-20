@@ -396,6 +396,17 @@ CLI `otz deliver-all` — однократный re-trigger для PENDING ма�
 - [x] Intel: лог LLM-вердиктов + `llm-report` · `districts-report` · price-drop алерты.
 - [x] Тесты 105 → 207 (stages 2-4 матчера, события монитора, миграция, nightly, admin).
 
+### Этап H1.1 — «Incident Hardening» (19.06.2026) — ✅ закрыт
+Внеплановый, реакция на прод-инцидент 13.06 (случайный отзыв Telethon-сессии → крэш-луп
+монитора 3 дня + спам OnFailure). Итоги: `HANDOFF.md` §0.0, `FEATURE_PLAN.md` раздел H1.1. Кратко:
+- [x] Монитор не зовёт интерактивный `start()` в сервисе (`connect_authorized`); отзыв сессии →
+      один алерт через бот + `exit 3`; `RestartPreventExitStatus=3` → один `failed`/алерт без лупа.
+- [x] Де-дуп нотификатора (cooldown ~10 мин); исправлена ложная модель OnFailure в доках.
+- [x] `scripts/auth_qr.py` — QR-реавторизация в обход недоставляемых SMS-кодов; `qrcode` в deps;
+      HANDOFF §5.4 переписан (QR — основной способ).
+- [x] Бюджет ночного refetch (`NIGHTLY_REFETCH_BUDGET_SEC`) + per-fetch cap — страховка от SIGTERM.
+- [x] Тесты 207 → 220; деплой + smoke на проде пройдены.
+
 ---
 
 ## 8. Риски и открытые вопросы
