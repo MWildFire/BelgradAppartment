@@ -117,6 +117,19 @@ class Settings(BaseSettings):
     site_lead_ratelimit_max: int = 5
     site_lead_ratelimit_window: int = 3600
 
+    # --- Conversion & polish (Stage W2) ---
+    # F5: permanent "Написать в Telegram" CTA points at Дарья's DM (not the channel).
+    site_telegram_url: str = "https://t.me/Darya_kralj"
+    # F4: lead-form submissions are e-mailed here (in addition to the bot notice).
+    site_lead_email_to: str = "d.mashukova@bk.ru"
+    # F4: SMTP relay for sending lead e-mails (relay-agnostic; creds live in the server .env).
+    site_smtp_host: str = ""
+    site_smtp_port: int = 587
+    site_smtp_user: str = ""
+    site_smtp_password: str = Field(default="", repr=False)
+    site_smtp_from: str = "no-reply@rentbelgrad.com"
+    site_smtp_starttls: bool = True
+
     # --- Web admin ---
     admin_host: str = "127.0.0.1"
     admin_port: int = 8000
