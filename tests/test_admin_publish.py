@@ -210,7 +210,13 @@ async def test_mark_posted_preserves_manual_overrides(client, db):
 
 @pytest.mark.parametrize(
     "route",
-    ["site/toggle-public", "site/toggle-vnj", "site/toggle-white-card", "site/meta"],
+    [
+        "site/toggle-public",
+        "site/toggle-vnj",
+        "site/toggle-white-card",
+        "site/toggle-featured",
+        "site/meta",
+    ],
 )
 def test_site_routes_without_csrf_are_403(client, db, route):
     r = client.post(f"/match/1/{route}", headers=AUTH)
@@ -250,6 +256,49 @@ async def test_toggle_white_card_creates_and_flips(client, db):
     assert sl is not None and sl.is_for_white_card is True
     client.post(f"/match/{match_id}/site/toggle-white-card", headers={**AUTH, **CSRF})
     assert (await _site_listing(db, match_id)).is_for_white_card is False
+
+
+@pytest.mark.asyncio
+async def test_toggle_featured_creates_then_flips(client, db):
+    match_id = await _seed_match(db)
+    # absent → create with is_featured True (idempotent upsert)
+    r = client.post(f"/match/{match_id}/site/toggle-featured", headers={**AUTH, **CSRF})
+    assert r.status_code == 200
+    sl = await _site_listing(db, match_id)
+    assert sl is not None and sl.is_featured is True
+    # present → flip back to False
+    client.post(f"/match/{match_id}/site/toggle-featured", headers={**AUTH, **CSRF})
+    sl = await _site_listing(db, match_id)
+    assert sl.is_featured is False
+    assert await _site_listing_count(db) == 1  # upsert, not a second row
+
+
+@pytest.mark.asyncio
+async def test_toggle_featured_creating_row_keeps_other_defaults(client, db):
+    """Toggling featured on a fresh match sets only is_featured; is_public default True, flags False."""
+    match_id = await _seed_match(db, raw_text="под ВНЖ и бели картон")
+    client.post(f"/match/{match_id}/site/toggle-featured", headers={**AUTH, **CSRF})
+    sl = await _site_listing(db, match_id)
+    assert sl.is_featured is True
+    assert sl.is_public is True
+    # creating via a toggle does not run the text-parse
+    assert sl.is_for_vnj is False
+    assert sl.is_for_white_card is False
+
+
+@pytest.mark.asyncio
+async def test_toggle_featured_preserves_existing_flags(client, db):
+    match_id = await _seed_match(db)
+    async with db() as s:
+        s.add(SiteListing(match_id=match_id, is_public=False, is_for_vnj=True, note="ручная"))
+        await s.commit()
+    client.post(f"/match/{match_id}/site/toggle-featured", headers={**AUTH, **CSRF})
+    sl = await _site_listing(db, match_id)
+    assert sl.is_featured is True
+    # toggling featured must not clobber other curated fields
+    assert sl.is_public is False
+    assert sl.is_for_vnj is True
+    assert sl.note == "ручная"
 
 
 @pytest.mark.asyncio
@@ -313,4 +362,6 @@ async def test_queue_card_shows_site_toggles(client, db):
     assert "/site/toggle-public" in r.text
     assert "/site/toggle-vnj" in r.text
     assert "/site/toggle-white-card" in r.text
+    assert "/site/toggle-featured" in r.text
     assert "На сайт" in r.text
+    assert "Квартира недели" in r.text

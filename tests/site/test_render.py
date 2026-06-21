@@ -176,6 +176,40 @@ def test_index_checks_04_no_longer_contradicts_50pct_commission() -> None:
     assert "комиссия за подбор" in html
 
 
+def test_index_hero_week_card_renders_real_apartment() -> None:
+    """W3-2: the hero side-card («квартира недели») renders the real `week` apartment —
+    its photo (with alt), price (mono, with €), Cyrillic district, and a «подробнее»
+    link to /apt/{week.id}."""
+    week = FakeView(id=512, price_eur=720, district="Дорћол")
+    html = _render(
+        "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF, week=week
+    )
+    # the hero side-card links to the featured apartment's detail page
+    assert "/apt/512" in html
+    assert "подробнее" in html
+    # price with € and the numeric value rendered for the week card
+    assert "€" in html
+    assert "720" in html
+    # Cyrillic district
+    assert "Дорћол" in html
+    # the week photo is shown with alt text
+    assert 'src="/photos/a.webp"' in html
+    assert "alt=" in html
+    # placeholder copy must NOT show when a real week apartment is present
+    assert "скоро здесь" not in html
+
+
+def test_index_hero_week_card_placeholder_when_none() -> None:
+    """W3-2: when `week` is None the hero side-card keeps the «скоро здесь» placeholder
+    and emits no /apt detail link from that card."""
+    html = _render(
+        "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF, week=None
+    )
+    assert "скоро здесь" in html
+    # no «подробнее» CTA for a non-existent week apartment
+    assert "подробнее" not in html
+
+
 def test_index_renders_featured_and_stats() -> None:
     html = _render(
         "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF

@@ -31,7 +31,10 @@ from src.site.deps import (
 
 _STUBS = {
     "base.html": "BASE",
-    "index.html": "TPL:index featured={{ featured|length }} active={{ stats.active }}",
+    "index.html": (
+        "TPL:index featured={{ featured|length }} active={{ stats.active }} "
+        "week={{ week.id if week else 'none' }}"
+    ),
     "catalog.html": (
         "TPL:catalog items={{ items|length }} total={{ total }} "
         "vnj={{ applied.vnj }} districts={{ applied.district|join(',') }}"
@@ -185,6 +188,42 @@ def test_index_renders_index_with_featured_and_stats(client):
     assert "TPL:index" in r.text
     assert "featured=3" in r.text  # 3 public listings seeded
     assert "active=3" in r.text
+
+
+def test_index_passes_week_featured_one(client):
+    # No row is is_featured in the seed, so featured_one falls back to the newest
+    # public listing by posted_dt: site_listing 1 has a PublishedPost at _dt(10),
+    # newer than 2/3's created_at, so the «квартира недели» is id=1.
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "week=1" in r.text  # the «квартира недели» context key reaches the template
+
+
+def test_index_week_is_none_when_no_public(client, monkeypatch):
+    async def no_featured(*, database_url=None):
+        return None
+
+    monkeypatch.setattr(routes.readmodel, "featured_one", no_featured)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "week=none" in r.text  # placeholder path when there is no «квартира недели»
+
+
+def test_index_week_comes_from_featured_one(client, monkeypatch):
+    captured = {}
+
+    class _W:
+        id = 777
+
+    async def fake_featured(*, database_url=None):
+        captured["database_url"] = database_url
+        return _W()
+
+    monkeypatch.setattr(routes.readmodel, "featured_one", fake_featured)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "week=777" in r.text  # the route uses featured_one()'s return as `week`
+    assert captured["database_url"] is not None  # db seam forwarded
 
 
 def test_catalog_renders_catalog_full_page(client):

@@ -22,6 +22,13 @@
       hx-target="#site-controls-{{ match_id }}"
       hx-swap="outerHTML"
     >Белый картон {{ '✓' if site and site.is_for_white_card else '✕' }}</button>
+    <button
+      type="button"
+      class="btn-toggle{{ ' is-on' if site and site.is_featured else '' }}"
+      hx-post="/match/{{ match_id }}/site/toggle-featured"
+      hx-target="#site-controls-{{ match_id }}"
+      hx-swap="outerHTML"
+    >Квартира недели {{ '✓' if site and site.is_featured else '✕' }}</button>
   </div>
   <form
     class="site-meta-form"

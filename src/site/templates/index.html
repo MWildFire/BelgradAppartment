@@ -47,21 +47,28 @@
     </div>
 
     <div class="hero-side">
-      <div class="hero-photo">
-        {% if featured and featured[0].photos %}
-          <img src="{{ featured[0].photos[0] }}" alt="Квартира недели в районе {{ featured[0].district }}">
+      {% if week %}
+      <a class="hero-photo" href="/apt/{{ week.id }}">
+        {% if week.photos %}
+          <img src="{{ week.photos[0] }}" alt="Квартира недели — {{ week.rooms }} в районе {{ week.district }}">
         {% endif %}
         <span class="ph-note">квартира недели</span>
         <div class="tagline">
-          {% if featured %}
-            <div class="k">квартира недели</div>
-            <div class="t">{{ featured[0].rooms }} <br>в районе {{ featured[0].district }}</div>
-          {% else %}
-            <div class="k">скоро здесь</div>
-            <div class="t">Свежие квартиры <br>из @RentBelgrad</div>
-          {% endif %}
+          <div class="k">квартира недели</div>
+          <div class="price"><span class="mono">€{{ week.price_eur }}</span> <small>/ мес</small></div>
+          <div class="t">{{ week.rooms }} <br>в районе {{ week.district }}</div>
+          <span class="more">подробнее →</span>
+        </div>
+      </a>
+      {% else %}
+      <div class="hero-photo">
+        <span class="ph-note">квартира недели</span>
+        <div class="tagline">
+          <div class="k">скоро здесь</div>
+          <div class="t">Свежие квартиры <br>из @RentBelgrad</div>
         </div>
       </div>
+      {% endif %}
     </div>
   </div>
 </section>

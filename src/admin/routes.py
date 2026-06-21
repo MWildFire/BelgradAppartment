@@ -247,6 +247,23 @@ async def site_toggle_white_card(
     return _site_controls(request, match_id, site)
 
 
+@router.post("/match/{match_id}/site/toggle-featured", response_class=HTMLResponse)
+async def site_toggle_featured(
+    request: Request,
+    match_id: int,
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> HTMLResponse:
+    """«Квартира недели» flag. Upserts the overlay and flips is_featured idempotently.
+    Creating via this toggle never runs the text-parse and leaves other fields at their
+    DB defaults (is_public True, flags False)."""
+    async with get_session() as s:
+        await _require_match(s, match_id)
+        site, _created = await get_or_create_site_listing(s, match_id)
+        site.is_featured = not site.is_featured
+    return _site_controls(request, match_id, site)
+
+
 @router.post("/match/{match_id}/site/meta", response_class=HTMLResponse)
 async def site_meta(
     request: Request,

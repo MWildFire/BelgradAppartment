@@ -188,6 +188,8 @@ async def index(request: Request, db_url: str = Depends(catalog_db_url)) -> HTML
     items, _total = await readmodel.list_public(
         Filters(), sort="new", page=1, page_size=FEATURED_N, database_url=db_url
     )
+    # «Квартира недели»: a single curated apartment for the hero side-card (W3-2).
+    week = await readmodel.featured_one(database_url=db_url)
     facets = await _cached_facets(db_url)
     stats = {
         "active": facets.counts.get("total", 0),
@@ -196,7 +198,7 @@ async def index(request: Request, db_url: str = Depends(catalog_db_url)) -> HTML
         "white_card": facets.counts.get("white_card", 0),
     }
     return templates.TemplateResponse(
-        request, "index.html", {"featured": items, "stats": stats}
+        request, "index.html", {"featured": items, "week": week, "stats": stats}
     )
 
 
