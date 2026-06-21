@@ -118,6 +118,16 @@
 .stat .n{font-family:var(--display);font-weight:700;font-size:var(--step-2);letter-spacing:-0.03em}
 .stat .l{font-size:var(--step--1);color:var(--ink-2)}
 @media(max-width:780px){.hero-grid{grid-template-columns:1fr}.hero-side{order:-1}.hero-photo{aspect-ratio:16/11}}
+/* mobile: the 3-segment search row overlaps badly below ~560px — stack it vertically so each
+   field (район combobox, цена, комнат) is full-width, with the «Найти» button as a full bar. */
+@media(max-width:560px){
+  .searchbar{flex-direction:column;align-items:stretch;max-width:none}
+  .searchbar .seg{border-right:0;border-bottom:1px solid var(--hairline)}
+  .searchbar .go{margin-left:0;width:100%;padding:14px 0;border-radius:0 0 calc(var(--r-m) - 1.5px) calc(var(--r-m) - 1.5px)}
+  /* section headers put a heading + an intro <p> in a non-wrapping flex row; stack them so the
+     fixed-width <p> (e.g. the /catalog intro) can't push the page wider than the viewport. */
+  .sec-head{flex-direction:column;align-items:flex-start;gap:10px}
+}
 
 /* ───────── marquee strip ───────── */
 .strip{border-block:1px solid var(--ink);background:var(--ink);color:var(--paper);overflow:hidden;white-space:nowrap}
@@ -235,7 +245,11 @@ section.bay{padding-block:var(--bay)}
 /* ───────── район combobox (F2 — progressive enhancement over native <select>) ─────────
    Tokens only, no purple/glass. The native <select> stays in the DOM as the form control
    but is hidden once .combobox-ready enhances; if JS is off it renders as a normal select. */
-.combobox-native{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);border:0}
+/* sr-only with !important: `.searchbar .seg select{width:100%}` (higher specificity) was
+   overriding width:1px, leaving the enhanced native <select> full-width. Harmless while the
+   bar clipped overflow, but once .searchbar went overflow:visible (to unclip the dropdown) the
+   wide hidden <select> pushed ~120px of horizontal page overflow. Force the hide so it can't win. */
+.combobox-native{position:absolute!important;width:1px!important;height:1px!important;margin:-1px!important;padding:0!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;clip-path:inset(50%)!important;border:0!important}
 .combobox{position:relative}
 .combobox-field{display:flex;flex-wrap:wrap;align-items:center;gap:6px;border:1.5px solid var(--ink);border-radius:var(--r-s);background:var(--paper);padding:6px 8px;cursor:text}
 .combobox.is-open .combobox-field{border-color:var(--oxblood)}
@@ -357,10 +371,29 @@ footer{border-top:1px solid var(--ink);margin-top:var(--bay)}
 .tg-fab .tg-ico{width:20px;height:20px}
 /* mobile: collapse the header CTA label to icon-only, and make the FAB a circle. */
 @media(max-width:860px){
-  .btn.tg .tg-lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
-  .btn.tg{padding:11px 13px}
+  /* On mobile the header Telegram button is dropped — the always-visible sticky FAB (and the
+     footer link) carry the F5 «Написать в Telegram» CTA, and the header CTA cluster (logo +
+     heart + «Подобрать») was overflowing the viewport (~70px) with it in. */
+  .btn.tg{display:none}
   .tg-fab .tg-fab-lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
   .tg-fab{padding:0;width:52px;height:52px;justify-content:center}
+}
+/* tablet / small-laptop: links + heart + both CTA buttons were ~8px too wide near 1024px —
+   tighten the link and CTA gaps before the ≤860 breakpoint drops the links entirely. */
+@media(max-width:1100px){.nav-links{gap:18px;margin-left:10px}.nav-cta{gap:10px}}
+@media(max-width:430px){
+  /* very narrow: tighten the CTA cluster so logo + heart + «Подобрать» never overflow, and
+     step the hero headline down a notch — --step-5 bottoms out at 3.6rem, too wide for «Белграда». */
+  .nav-cta{gap:8px}
+  .nav-in{gap:10px}
+  .btn{padding:10px 14px}
+  .hero h1{font-size:var(--step-4)}
+  .foot .bigtype{font-size:var(--step-3)}
+}
+@media(max-width:380px){
+  /* iPhone-SE-class widths: drop the header favourites heart (still reachable via «Каталог» and
+     the heart on each card) so logo + «Подобрать» fit without horizontal scroll. */
+  .nav-cta .fav,.nav-cta .fav-count{display:none}
 }
 @media(prefers-reduced-motion:reduce){
   .tg-fab{transition:none}

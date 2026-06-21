@@ -403,3 +403,22 @@ def test_hero_combobox_dropdown_is_not_clipped(page, site_server: str) -> None:
     assert result["overflowY"] != "hidden", "searchbar still clips its dropdown (overflow:hidden)"
     assert result["extendsBelowBar"] > 20, "dropdown is not rendering below the bar"
     assert result["hitIsList"], "dropdown is clipped — a point below the bar isn't the listbox"
+
+
+@requires_e2e
+def test_no_horizontal_overflow_responsive(page, site_server: str) -> None:
+    """Regression: the page must not overflow horizontally at common widths.
+
+    Two regressions this guards: (1) the район combobox-native <select> kept width:100% and, once
+    .searchbar went overflow:visible to unclip the dropdown, pushed ~120px of horizontal overflow;
+    (2) on phones the nav CTA cluster and the unstacked 3-segment search row overflowed. The
+    marquee strip is intentionally wide but clipped by .strip{overflow:hidden}, so document
+    scrollWidth (which excludes clipped overflow) is the right signal.
+    """
+    for w in (360, 390, 768, 1024, 1440):
+        page.set_viewport_size({"width": w, "height": 820})
+        page.goto(f"{site_server}/", wait_until="networkidle")
+        overflow = page.evaluate(
+            "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
+        )
+        assert overflow <= 1, f"horizontal overflow of {overflow}px at viewport width {w}px"
