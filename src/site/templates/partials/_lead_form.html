@@ -5,7 +5,7 @@
       hx-post="/lead" hx-target="#lead" hx-swap="outerHTML">
   <p class="kicker">персональный поиск</p>
   <h2>Расскажи, какую квартиру ищешь</h2>
-  <p class="lede">Район, бюджет, нужен ли договор под ВНЖ — пара полей, и Дарья соберёт подборку под тебя. Комиссии с тебя нет.</p>
+  <p class="lede">Район, бюджет, нужен ли договор под ВНЖ — пара полей, и Дарья соберёт подборку под тебя.</p>
 
   {# CSRF — synchronizer token, same field name as admin #}
   <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">

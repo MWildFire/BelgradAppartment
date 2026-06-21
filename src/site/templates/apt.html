@@ -57,7 +57,7 @@
           <div class="item"><span class="k">ВНЖ</span><p>{% if item.for_vnj %}Хозяин готов оформить ugovor с регистрацией в МУПе — подходит для боравишта.{% else %}Уточним у хозяина возможность официального договора под боравиште.{% endif %}</p></div>
           <div class="item"><span class="k">картон</span><p>{% if item.for_white_card %}Подходит для белого картона.{% else %}Спросим хозяина про белый картон при показе.{% endif %}</p></div>
           <div class="item"><span class="k">счета</span><p>Режие + инфостан считаются отдельно — поможем прикинуть в калькуляторе.</p></div>
-          <div class="item"><span class="k">агент</span><p>Сопровождаем на показе и подписании. Комиссию платит хозяин.</p></div>
+          <div class="item"><span class="k">агент</span><p>Сопровождаем на показе и подписании — переводим, проверяем, торгуемся.</p></div>
         </div>
       </div>
     </div>
@@ -67,7 +67,7 @@
       <div class="apt-side-top">
         <div>
           <div class="price"><span class="mono">€{{ item.price_eur }}</span></div>
-          <div class="per">в месяц · агент €0</div>
+          <div class="per">в месяц</div>
         </div>
         {# favorites: localStorage toggle (favorites.js); glyph fills when saved, no emoji #}
         <button type="button" class="fav" data-fav data-fav-id="{{ item.id }}" aria-pressed="false" aria-label="В избранное" title="В избранное">
@@ -78,7 +78,7 @@
       {# link to the channel post (a channel URL, never a площадка) #}
       <a class="btn ghost" href="{{ item.channel_url }}" rel="noopener">Открыть в Telegram</a>
       <div class="bullets">
-        <div class="bullet"><span class="num">✓</span><span>Агент бесплатно — платит хозяин</span></div>
+        <div class="bullet"><span class="num">✓</span><span>Сопровождение на сербском и русском</span></div>
         <div class="bullet"><span class="num">✓</span><span>Сопровождение на подписании</span></div>
         <div class="bullet"><span class="num">✓</span><span>Помощь с регистрацией адреса</span></div>
       </div>

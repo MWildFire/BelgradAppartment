@@ -242,6 +242,34 @@ def test_apt_rented_badge() -> None:
     assert "снято" in html
 
 
+def test_apt_agent_copy_no_longer_contradicts_50pct_commission() -> None:
+    """F3 (continuation, DECISIONS-W2): the apt detail page carried two false claims —
+    «агент … Комиссию платит хозяин» (reloc item) and «Агент бесплатно — платит хозяин»
+    (sticky-CTA bullet). Both contradict the honest 50% подбор-commission. They must be
+    reworded to true value-props that do NOT say the service is free or that the landlord
+    pays. The «€0» price-side glyph is a separate F-task and is not asserted here."""
+    html = _render("apt.html", item=FakeView(), similar=[FakeView(id=200)], csrf_token=_CSRF)
+    # the contradicting / false claims are gone
+    assert "Комиссию платит хозяин" not in html
+    assert "платит хозяин" not in html
+    assert "бесплатно" not in html
+    assert "бесплат" not in html  # no «бесплатно/бесплатный» anywhere either
+
+
+def test_no_false_zero_commission_claims_on_apt_and_lead_form() -> None:
+    """F3 (final commission-honesty sweep, DECISIONS-W2): nothing on the site may say
+    the подбор-commission is €0 / free / nonexistent. Two false claims remained —
+    the apt sticky-CTA price suffix «· агент €0», and the lead-form lede sentence
+    «Комиссии с тебя нет.». Both must be removed (no invented commission terms in
+    their place). Rendered output of BOTH templates must carry neither falsehood."""
+    apt = _render("apt.html", item=FakeView(), similar=[FakeView(id=200)], csrf_token=_CSRF)
+    lead = _render("partials/_lead_form.html", csrf_token=_CSRF)
+    for html in (apt, lead):
+        assert "€0" not in html  # no «€0» zero-fee glyph
+        assert "агент €" not in html  # no «агент €0» price suffix
+        assert "Комиссии с тебя нет" not in html  # no «комиссии … нет» claim
+
+
 # ---------------------------------------------------------------------------- map
 def test_map_renders_container() -> None:
     html = _render("map.html")
