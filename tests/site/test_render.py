@@ -102,6 +102,45 @@ def test_index_hero_headline_is_klyuchi_ot_belgrada() -> None:
     assert "Помогаем релокантам" in html  # hero-lede subheading unchanged
 
 
+def test_index_commission_stat_is_honest_50pct() -> None:
+    """F3 (DECISIONS-W2): the 3rd hero stat is no longer the «€0 / комиссия с тебя»
+    lie. It reads «50% / комиссия за подбор» (mono numeric, per sibling-stat
+    convention). The first two stats stay dynamic (3 stats in the row)."""
+    html = _render(
+        "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF
+    )
+    assert "50%" in html
+    assert "комиссия за подбор" in html
+    # the old dishonest stat is gone
+    assert "€0" not in html
+    assert "комиссия с тебя" not in html
+    # first two stats remain dynamic, still 3 stats in the row
+    assert "47" in html  # stats.active rendered
+    assert "8" in html  # stats.districts rendered
+    assert html.count('class="stat"') == 3
+
+
+def test_index_checks_04_no_longer_contradicts_50pct_commission() -> None:
+    """F3 (continuation, DECISIONS-W2): the «почему мы» check-list #04 used to claim
+    «Комиссию платит хозяин — … бесплатны», which contradicts the honest 50% hero
+    stat. It must be reworded to a true value-prop (transparency / no hidden fees)
+    that does NOT say the service is free or that the landlord pays. The block keeps
+    all 4 checks and the 50% hero stat is untouched."""
+    html = _render(
+        "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF
+    )
+    # the contradicting / false claim is gone
+    assert "Комиссию платит хозяин" not in html
+    assert "бесплатны" not in html
+    assert "бесплат" not in html  # no «бесплатно/бесплатный» anywhere either
+    # the check-list still has exactly 4 items, with «04» preserved
+    assert html.count('class="c"') == 4
+    assert ">04<" in html
+    # no regression on the honest hero stat (F3)
+    assert "50%" in html
+    assert "комиссия за подбор" in html
+
+
 def test_index_renders_featured_and_stats() -> None:
     html = _render(
         "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF
