@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Как мы работаем — RentBelgrad{% endblock %}
+{% block meta_description %}Как проходит подбор квартиры в Белграде: заявка, подборка, просмотр, договор, заселение. Комиссия за подбор — 50% от месячной аренды, разово при заселении.{% endblock %}
+
+{% block content %}
+<!-- INTRO -->
+<section class="bay wrap">
+  <div class="sec-head">
+    <div>
+      <div class="idx">процесс / как это устроено</div>
+      <h2>Как мы работаем</h2>
+    </div>
+    <p style="max-width:38ch;color:var(--ink-2);font-size:var(--step--1)">Не маркетплейс. Живой агент ведёт за руку от первого сообщения до заселения и регистрации адреса.</p>
+  </div>
+</section>
+
+<!-- STEPS -->
+<section class="bay wrap" id="steps" style="padding-top:0">
+  <div class="steps">
+    <div class="step"><div class="no">01 / заявка</div><h3>Расскажи, что нужно</h3><p>Район, бюджет, сроки, нужен ли договор под ВНЖ. Пара минут в Telegram.</p></div>
+    <div class="step"><div class="no">02 / подборка</div><h3>Готовим 3–5 вариантов</h3><p>Отбираем вручную, отсекаем то, что не проходит на боравиште.</p></div>
+    <div class="step"><div class="no">03 / просмотр</div><h3>Ходим на показ вместе</h3><p>Переводим, торгуемся, проверяем счётчики и состояние.</p></div>
+    <div class="step"><div class="no">04 / договор</div><h3>Оформляем ugovor</h3><p>Подписание, регистрация адреса, справки для ВНЖ. Всё под ключ.</p></div>
+    <div class="step"><div class="no">05 / заселение</div><h3>Заезжаешь и живёшь</h3><p>Передача ключей, приёмка квартиры — и ты на месте, с договором на руках.</p></div>
+  </div>
+</section>
+
+<hr class="rule wrap">
+
+<!-- COMMISSION -->
+<section class="bay wrap" id="commission">
+  <div class="split">
+    <div>
+      <div class="idx" style="font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2);margin-bottom:1rem">01 / стоимость</div>
+      <h2>Сколько стоит подбор</h2>
+      <p>Стоимость услуги называем сразу, до показов — без скрытых платежей и без накрутки на аренду.</p>
+      <div class="checks">
+        <div class="c"><span class="num mono">50%</span><span><b>Комиссия за подбор — 50% от месячной аренды, разово при заселении.</b></span></div>
+        <div class="c"><span class="num">→</span><span><b>Разово</b> — платится один раз, при заселении (на подписании договора), а не ежемесячно.</span></div>
+        <div class="c"><span class="num">→</span><span><b>Прозрачно</b> — сумму знаешь заранее; цену аренды не накручиваем.</span></div>
+      </div>
+    </div>
+    <div class="photo"><span class="ph-note">фото: ключи / заселение</span></div>
+  </div>
+</section>
+
+<hr class="rule wrap">
+
+<!-- WHY US -->
+<section class="bay wrap" id="why">
+  <div class="sec-head">
+    <div><div class="idx">02 / чем отличаемся</div><h2>Почему с нами проще</h2></div>
+    <p style="max-width:34ch;color:var(--ink-2);font-size:var(--step--1)">Курация вместо ленты объявлений и человек на твоей стороне.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="no">— курация</div><h3>Отбор вручную</h3><p>Не вся лента подряд: смотрим варианты глазами и показываем то, что подходит под запрос.</p></div>
+    <div class="step"><div class="no">— честно</div><h3>Без накрутки</h3><p>Цену аренды не поднимаем и не добавляем скрытых платежей сверху.</p></div>
+    <div class="step"><div class="no">— хозяева</div><h3>Проверенные арендодатели</h3><p>Работаем с теми, кто готов к официальному договору и адресной регистрации.</p></div>
+  </div>
+</section>
+
+<hr class="rule wrap">
+
+<!-- CTA -->
+<section class="bay wrap" id="cta">
+  <div class="sec-head">
+    <div><div class="idx">дальше</div><h2>Начнём подбор?</h2></div>
+    <p style="max-width:36ch;color:var(--ink-2);font-size:var(--step--1)">Напишите Дарье в Telegram — расскажите, что ищете, и получите первую подборку.</p>
+  </div>
+  <p><a class="btn tg" href="{{ telegram_url }}" target="_blank" rel="noopener">
+    <svg class="tg-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 3.2 2.8 10.6c-.9.35-.88 1.62.03 1.95l4.6 1.64 1.78 5.4c.27.78 1.27.96 1.8.32l2.5-3.05 4.6 3.4c.6.45 1.47.13 1.65-.6L23 4.3c.2-.83-.6-1.5-1.5-1.1Zm-3.1 3.6-7.9 7.05c-.18.16-.3.4-.32.65l-.2 2.5-1.36-4.13 9.78-6.07Z"/></svg>
+    <span class="tg-lbl">Написать в Telegram</span>
+  </a></p>
+</section>
+{% endblock %}

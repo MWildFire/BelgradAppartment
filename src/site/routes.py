@@ -249,6 +249,19 @@ async def calculator(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "calculator.html", {})
 
 
+@router.get("/vnj", response_class=HTMLResponse)
+async def vnj(request: Request) -> HTMLResponse:
+    # Static content page «ВНЖ и договор» — no DB; base.html globals (telegram_url,
+    # district_options, csrf_token) are supplied via the shared Jinja env.
+    return templates.TemplateResponse(request, "vnj.html", {})
+
+
+@router.get("/how", response_class=HTMLResponse)
+async def how(request: Request) -> HTMLResponse:
+    # Static content page «Как работаем» (incl. the 50% commission breakdown) — no DB.
+    return templates.TemplateResponse(request, "how.html", {})
+
+
 @router.post("/lead")
 async def lead(
     request: Request,

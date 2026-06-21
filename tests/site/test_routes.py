@@ -42,6 +42,8 @@ _STUBS = {
     "apt.html": "TPL:apt id={{ item.id }} similar={{ similar|length }}",
     "map.html": "TPL:map",
     "calculator.html": "TPL:calculator",
+    "vnj.html": "TPL:vnj договор checklist tg={{ telegram_url }}",
+    "how.html": "TPL:how 50% при заселении tg={{ telegram_url }}",
     "partials/_results.html": "TPL:_results items={{ items|length }} total={{ total }}",
     "partials/_card.html": "TPL:_card id={{ item.id }}",
     "partials/_filters.html": "TPL:_filters",
@@ -290,6 +292,23 @@ def test_calculator_page(client):
     r = client.get("/calculator")
     assert r.status_code == 200
     assert "TPL:calculator" in r.text
+
+
+def test_vnj_page_renders_vnj_template(client):
+    # W3-3: static content page «ВНЖ и договор» — no DB, just the template.
+    r = client.get("/vnj")
+    assert r.status_code == 200
+    assert "TPL:vnj" in r.text
+    assert "договор" in r.text  # key content node (checklist heading)
+
+
+def test_how_page_renders_how_template_with_commission(client):
+    # W3-3: «Как работаем» must carry the F3 commission breakdown (DECISIONS-W2).
+    r = client.get("/how")
+    assert r.status_code == 200
+    assert "TPL:how" in r.text
+    assert "50%" in r.text  # commission: 50% от месячной аренды
+    assert "при заселении" in r.text  # ...разово при заселении
 
 
 # ============================================================== routes: filter args reach readmodel (mock)

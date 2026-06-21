@@ -122,6 +122,45 @@ def test_base_has_no_external_font_link() -> None:
     assert "fonts.googleapis" not in html
 
 
+# ------------------------------------------------------------- W3-3 content pages
+def test_base_nav_links_point_to_vnj_and_how_pages() -> None:
+    """W3-3: the «ВНЖ и договор» / «Как работаем» nav links resolve to the new
+    standalone pages /vnj and /how (no longer the homepage anchors /#vnj, /#how)."""
+    html = _render("base.html", telegram_url="https://t.me/Darya_kralj")
+    assert 'href="/vnj"' in html
+    assert 'href="/how"' in html
+    # the nav must not still point those two items at the old homepage anchors
+    assert 'href="/#vnj"' not in html
+    assert 'href="/#how"' not in html
+
+
+def test_vnj_page_renders_contract_content() -> None:
+    """W3-3: «ВНЖ и договор» content page — extends base, carries the checklist of
+    what a lease needs (official registered ugovor), a common-mistakes section, and
+    a Telegram CTA. Only general, non-invented statements (Дарья verifies specifics)."""
+    tg = "https://t.me/Darya_kralj"
+    html = _render("vnj.html", telegram_url=tg)
+    assert "договор" in html  # the page is about the lease/ugovor
+    assert "ugovor" in html  # official Serbian term, consistent with site copy
+    assert "боравиште" in html or "регистрац" in html  # address registration angle
+    assert tg in html  # Telegram CTA uses the global
+
+
+def test_how_page_renders_commission_breakdown() -> None:
+    """W3-3 / F3 (DECISIONS-W2): «Как работаем» carries the EXACT commission breakdown
+    — 50% of one month's rent, one-time, on move-in — plus a Telegram CTA. No «бесплатно»
+    / «платит хозяин» falsehoods (commission-honesty sweep)."""
+    tg = "https://t.me/Darya_kralj"
+    html = _render("how.html", telegram_url=tg)
+    assert "50%" in html
+    assert "месячной аренды" in html
+    assert "при заселении" in html
+    assert tg in html  # Telegram CTA uses the global
+    # no commission-honesty regressions
+    assert "бесплат" not in html
+    assert "платит хозяин" not in html
+
+
 # -------------------------------------------------------------------------- index
 def test_index_hero_headline_is_klyuchi_ot_belgrada() -> None:
     """F1 (DECISIONS-W2): hero <h1> reads «Ключи от Белграда»; the old

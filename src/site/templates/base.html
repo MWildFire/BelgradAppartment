@@ -60,8 +60,8 @@
     <a class="logo" href="/" aria-label="RentBelgrad — на главную"><span class="mk" aria-hidden="true"><i></i><i></i><i></i><i></i></span>RentBelgrad</a>
     <nav class="nav-links" aria-label="Основная навигация">
       <a href="/catalog">Каталог</a>
-      <a href="/#how">Как работаем</a>
-      <a href="/#vnj">ВНЖ и договор</a>
+      <a href="/how">Как работаем</a>
+      <a href="/vnj">ВНЖ и договор</a>
       <a href="/map">Карта</a>
       <a href="/calculator">Калькулятор</a>
     </nav>
@@ -96,7 +96,7 @@
     {# footer column titles are h2 (same level as section headings) — keeps heading order
        sequential (no h2→h5 skip); styled by .foot .col h2, identical to the old h5 look. #}
     <div class="col"><h2>Каталог</h2><a href="/catalog">Все квартиры</a><a href="/catalog?vnj=1">Под ВНЖ</a><a href="/catalog?wc=1">Белый картон</a><a href="/map">На карте</a></div>
-    <div class="col"><h2>Помощь</h2><a href="/#how">Как работаем</a><a href="/#vnj">ВНЖ и договор</a><a href="/calculator">Калькулятор аренды</a></div>
+    <div class="col"><h2>Помощь</h2><a href="/how">Как работаем</a><a href="/vnj">ВНЖ и договор</a><a href="/calculator">Калькулятор аренды</a></div>
     {# F5: footer Telegram CTA = DM to Дарья ({{ telegram_url }}) — distinct from the
        Telegram-канал link above (channel vs personal DM). #}
     <div class="col"><h2>Контакты</h2><a href="{{ channel_url|default('https://t.me/RentBelgrad') }}" rel="noopener">Telegram-канал</a><a href="{{ telegram_url }}" target="_blank" rel="noopener">Написать в Telegram</a><a href="/#lead">Написать агенту</a></div>
