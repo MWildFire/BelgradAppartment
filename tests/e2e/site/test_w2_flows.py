@@ -365,3 +365,41 @@ def test_reduced_motion_honored_on_fab(page, browser, site_server: str) -> None:
         )
     finally:
         context.close()
+
+
+@requires_e2e
+def test_hero_combobox_dropdown_is_not_clipped(page, site_server: str) -> None:
+    """Regression: the «Район» dropdown must overlay BELOW the searchbar, not be clipped by it.
+
+    The bug was `.searchbar{overflow:hidden}` slicing the absolutely-positioned listbox down to
+    the bar's own height — only a ~7px sliver showed, so a район was effectively unpickable.
+    Guard: searchbar overflow isn't `hidden`, the open list extends below the bar, and a point
+    inside that below-the-bar region resolves to the listbox (i.e. it isn't clipped/behind).
+    """
+    page.goto(f"{site_server}/", wait_until="networkidle")
+
+    combo = page.locator("form.searchbar input[role='combobox']")
+    if combo.count() == 0:
+        pytest.skip("combobox.js did not enhance the <select> (no-JS fallback) — clip N/A")
+
+    combo.first.focus()
+    page.wait_for_selector("form.searchbar .combobox-list .combobox-option", timeout=4000)
+
+    result = page.evaluate(
+        """() => {
+            const bar = document.querySelector('form.searchbar');
+            const list = document.querySelector('form.searchbar .combobox-list');
+            const lr = list.getBoundingClientRect(), sr = bar.getBoundingClientRect();
+            const px = lr.left + lr.width / 2;
+            const py = sr.bottom + Math.min(40, (lr.bottom - sr.bottom) / 2);
+            const hit = document.elementFromPoint(px, py);
+            return {
+                overflowY: getComputedStyle(bar).overflowY,
+                extendsBelowBar: lr.bottom - sr.bottom,
+                hitIsList: !!(hit && hit.closest && hit.closest('.combobox-list')),
+            };
+        }"""
+    )
+    assert result["overflowY"] != "hidden", "searchbar still clips its dropdown (overflow:hidden)"
+    assert result["extendsBelowBar"] > 20, "dropdown is not rendering below the bar"
+    assert result["hitIsList"], "dropdown is clipped — a point below the bar isn't the listbox"

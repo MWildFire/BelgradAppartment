@@ -63,11 +63,8 @@
   }
 
   function init(points) {
-    if (!points || !points.length) {
-      // leave .map-empty visible — nothing to plot.
-      return;
-    }
-    // clear the placeholder before mounting the canvas.
+    // Leaflet is present (guarded above), so ALWAYS render a real map — even with zero points —
+    // so the page never reads as broken/loading. Clear the no-JS placeholder first.
     mount.innerHTML = "";
 
     var map = L.map(mount, {
@@ -81,6 +78,22 @@
       maxZoom: 19,
       attribution: "© OpenStreetMap",
     }).addTo(map);
+
+    var plotted = (points || []).filter(function (p) {
+      return typeof p.lat === "number" && typeof p.lon === "number";
+    });
+
+    // Empty catalog (or no geocoded points yet): keep the Belgrade map on screen and overlay a
+    // non-blocking note that points at the list — far better than a dead grey placeholder.
+    if (!plotted.length) {
+      var note = document.createElement("div");
+      note.className = "map-note";
+      note.innerHTML =
+        'Пока нет квартир на карте. <a href="/catalog">Открыть каталог списком →</a>';
+      mount.appendChild(note);
+      map.invalidateSize();
+      return;
+    }
 
     // Cluster layer (plugin); fall back to a plain layer group if it's unavailable.
     var layer;
@@ -96,16 +109,13 @@
     }
 
     var bounds = [];
-    points.forEach(function (p) {
-      if (typeof p.lat !== "number" || typeof p.lon !== "number") return;
+    plotted.forEach(function (p) {
       layer.addLayer(priceMarker(p));
       bounds.push([p.lat, p.lon]);
     });
     map.addLayer(layer);
-
-    if (bounds.length) {
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15, animate: !REDUCE });
-    }
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15, animate: !REDUCE });
+    map.invalidateSize();
   }
 
   fetch(src, { headers: { Accept: "application/json" } })
@@ -117,6 +127,8 @@
       init((data && data.points) || []);
     })
     .catch(function () {
-      // network/parse failure → keep the graceful empty state, no alert.
+      // Couldn't load points (network/parse): still render the base Belgrade map (L is loaded)
+      // so it isn't a dead box; the empty note covers the "no points" wording.
+      init([]);
     });
 })();

@@ -26,6 +26,12 @@
       background:var(--sage);color:#fff;padding:1px 6px;border-radius:var(--r-s)}
     .map-pop-link{color:var(--oxblood);font-weight:600;font-size:var(--step--1)}
     .map-pop-link:hover{text-decoration:underline}
+    /* non-blocking overlay shown when the map renders with zero points (empty catalog). */
+    .map-note{position:absolute;z-index:600;left:50%;top:14px;transform:translateX(-50%);
+      max-width:calc(100% - 28px);background:var(--card);border:1.5px solid var(--ink);
+      border-radius:999px;padding:9px 18px;font-size:var(--step--1);color:var(--ink);
+      box-shadow:0 10px 28px -16px rgba(27,26,23,.55);text-align:center}
+    .map-note a{color:var(--oxblood);font-weight:600;white-space:nowrap}
     @media(prefers-reduced-motion:reduce){
       .leaflet-fade-anim .leaflet-tile,.leaflet-zoom-anim .leaflet-zoom-animated{transition:none!important}
     }

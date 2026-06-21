@@ -48,3 +48,28 @@ def test_map(page, site_server: str) -> None:
     popup_link = page.locator(".leaflet-popup a[href^='/apt/']").first
     href = popup_link.get_attribute("href")
     assert href is not None and re.match(r"^/apt/\d+$", href), f"popup link not /apt/N: {href}"
+
+
+@requires_e2e
+def test_map_renders_base_map_when_empty(page, site_server: str) -> None:
+    """Regression: with ZERO points the map must still render Belgrade (not a dead placeholder)
+    and surface a non-blocking empty note. The seeded server has points, so we stub
+    /api/map.json to an empty set to exercise the empty-catalog path (the live prod state).
+    """
+    page.route(
+        "**/api/map.json",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body='{"points":[]}'
+        ),
+    )
+    page.goto(f"{site_server}/map", wait_until="networkidle")
+
+    # The real Leaflet map mounts even though there are no points.
+    page.wait_for_selector(".leaflet-container", timeout=10000)
+    # The no-JS placeholder is replaced; a clear empty note points at the list.
+    assert page.locator(".map-empty").count() == 0
+    note = page.locator(".map-note")
+    note.wait_for(timeout=4000)
+    assert "каталог" in note.inner_text().lower()
+    # No markers/pins when the set is empty.
+    assert page.locator(".price-pin, .leaflet-marker-icon").count() == 0
