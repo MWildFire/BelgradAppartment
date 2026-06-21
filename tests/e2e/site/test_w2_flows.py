@@ -382,6 +382,12 @@ def test_hero_combobox_dropdown_is_not_clipped(page, site_server: str) -> None:
     if combo.count() == 0:
         pytest.skip("combobox.js did not enhance the <select> (no-JS fallback) — clip N/A")
 
+    # The «квартира недели» card makes the hero tall, pushing the searchbar low; scroll it up so
+    # the 248px dropdown opens within the viewport (else elementFromPoint below the bar is off-screen).
+    page.evaluate(
+        "() => { const sb = document.querySelector('form.searchbar');"
+        " window.scrollTo(0, sb.getBoundingClientRect().top + window.scrollY - 120); }"
+    )
     combo.first.focus()
     page.wait_for_selector("form.searchbar .combobox-list .combobox-option", timeout=4000)
 
@@ -422,3 +428,20 @@ def test_no_horizontal_overflow_responsive(page, site_server: str) -> None:
             "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
         )
         assert overflow <= 1, f"horizontal overflow of {overflow}px at viewport width {w}px"
+
+
+@requires_e2e
+def test_featured_week_card_renders_with_height(page, site_server: str) -> None:
+    """Regression: the «Квартира недели» card is an <a> (default display:inline); without
+    display:block its aspect-ratio is ignored and it collapses to ~0 height — the featured
+    apartment is invisible. The seed has a featured listing (id=1), so this is the <a> variant.
+    """
+    page.set_viewport_size({"width": 1280, "height": 900})
+    page.goto(f"{site_server}/", wait_until="networkidle")
+    card = page.locator(".hero-side .hero-photo").first
+    assert card.evaluate("el => el.tagName.toLowerCase()") == "a", "expected the linked featured card"
+    box = card.bounding_box()
+    assert box is not None and box["height"] > 200, (
+        f"«Квартира недели» card collapsed (height={box and round(box['height'])}px) — "
+        "the <a class=hero-photo> needs display:block for aspect-ratio to apply"
+    )

@@ -96,7 +96,11 @@
 .hero h1 .nv{color:var(--navy)}
 .hero-lede{font-size:var(--step-1);color:var(--ink-2);max-width:30ch;margin-top:1.4rem;line-height:1.4}
 .hero-side{padding-bottom:.3rem}
-.hero-photo{aspect-ratio:4/5;background:linear-gradient(155deg,var(--navy),#27506f 60%,var(--ochre));border:1px solid var(--ink);border-radius:var(--r-m);position:relative;overflow:hidden;box-shadow:0 24px 50px -28px rgba(21,50,76,.6)}
+/* display:block is REQUIRED: the «Квартира недели» variant is an <a> (default display:inline),
+   on which aspect-ratio is ignored — the card collapsed to ~0 height and the apartment was
+   invisible whenever a listing was actually featured. The placeholder variant is a <div> (block)
+   so it always showed; this latent bug only surfaced once a real flat got featured. */
+.hero-photo{display:block;aspect-ratio:4/5;background:linear-gradient(155deg,var(--navy),#27506f 60%,var(--ochre));border:1px solid var(--ink);border-radius:var(--r-m);position:relative;overflow:hidden;box-shadow:0 24px 50px -28px rgba(21,50,76,.6)}
 .hero-photo img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .hero-photo .tagline{position:absolute;left:18px;bottom:16px;right:18px;color:var(--paper)}
 .hero-photo .tagline .k{font-family:var(--mono);font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;opacity:.85}
