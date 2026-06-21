@@ -73,6 +73,12 @@
       </a><span class="fav-count" data-fav-count hidden>0</span>
       <a class="btn ghost" href="/catalog">Смотреть каталог</a>
       <a class="btn ox" href="/#lead">Подобрать квартиру</a>
+      {# F5: permanent DM-to-Дарья CTA (navy, distinct from the oxblood «подобрать»).
+         Inline mono paper-plane SVG — no emoji. New tab + noopener. #}
+      <a class="btn tg" href="{{ telegram_url }}" target="_blank" rel="noopener">
+        <svg class="tg-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 3.2 2.8 10.6c-.9.35-.88 1.62.03 1.95l4.6 1.64 1.78 5.4c.27.78 1.27.96 1.8.32l2.5-3.05 4.6 3.4c.6.45 1.47.13 1.65-.6L23 4.3c.2-.83-.6-1.5-1.5-1.1Zm-3.1 3.6-7.9 7.05c-.18.16-.3.4-.32.65l-.2 2.5-1.36-4.13 9.78-6.07Z"/></svg>
+        <span class="tg-lbl">Написать в Telegram</span>
+      </a>
     </div>
   </div>
 </header>
@@ -91,10 +97,20 @@
        sequential (no h2→h5 skip); styled by .foot .col h2, identical to the old h5 look. #}
     <div class="col"><h2>Каталог</h2><a href="/catalog">Все квартиры</a><a href="/catalog?vnj=1">Под ВНЖ</a><a href="/catalog?wc=1">Белый картон</a><a href="/map">На карте</a></div>
     <div class="col"><h2>Помощь</h2><a href="/#how">Как работаем</a><a href="/#vnj">ВНЖ и договор</a><a href="/calculator">Калькулятор аренды</a></div>
-    <div class="col"><h2>Контакты</h2><a href="{{ channel_url|default('https://t.me/RentBelgrad') }}" rel="noopener">Telegram-канал</a><a href="/#lead">Написать агенту</a></div>
+    {# F5: footer Telegram CTA = DM to Дарья ({{ telegram_url }}) — distinct from the
+       Telegram-канал link above (channel vs personal DM). #}
+    <div class="col"><h2>Контакты</h2><a href="{{ channel_url|default('https://t.me/RentBelgrad') }}" rel="noopener">Telegram-канал</a><a href="{{ telegram_url }}" target="_blank" rel="noopener">Написать в Telegram</a><a href="/#lead">Написать агенту</a></div>
   </div>
   <div class="wrap legal"><span>© 2026 RentBelgrad</span><span>Beograd, Srbija · @RentBelgrad</span></div>
 </footer>
+
+{# F5: floating sticky DM CTA — fixed bottom-right, above page chrome, safe-area aware.
+   Desktop = icon + label; mobile = icon-only (label collapses, aria-label carries the name).
+   aria-label is always present so the icon-only state stays accessible. #}
+<a class="tg-fab" href="{{ telegram_url }}" target="_blank" rel="noopener" aria-label="Написать в Telegram">
+  <svg class="tg-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 3.2 2.8 10.6c-.9.35-.88 1.62.03 1.95l4.6 1.64 1.78 5.4c.27.78 1.27.96 1.8.32l2.5-3.05 4.6 3.4c.6.45 1.47.13 1.65-.6L23 4.3c.2-.83-.6-1.5-1.5-1.1Zm-3.1 3.6-7.9 7.05c-.18.16-.3.4-.32.65l-.2 2.5-1.36-4.13 9.78-6.07Z"/></svg>
+  <span class="tg-fab-lbl">Написать в&nbsp;Telegram</span>
+</a>
 
 {# htmx is self-hosted (no CDN) — drives the catalog filter swaps + lead form. defer: parse-blocking-free. #}
 <script src="/static/js/htmx.min.js" defer></script>

@@ -304,6 +304,37 @@ footer{border-top:1px solid var(--ink);margin-top:var(--bay)}
 .legal{display:flex;justify-content:space-between;padding-block:22px;border-top:1px solid var(--hairline);font-family:var(--mono);font-size:.68rem;color:var(--ink-2);flex-wrap:wrap;gap:10px}
 @media(max-width:820px){.foot{grid-template-columns:1fr 1fr}.foot .brand-col{grid-column:1/-1}}
 
+/* ───────── F5 — «Написать в Telegram» CTA (header btn + floating sticky) ─────────
+   Header button is navy (.btn.tg) so it reads distinct from the oxblood «подобрать».
+   The sticky FAB is fixed bottom-right, above all chrome, and respects the iOS
+   safe-area so it never tucks under the home-indicator. Inline mono SVG glyph. */
+.btn.tg{background:var(--navy);border-color:var(--navy);display:inline-flex;align-items:center;gap:8px}
+.btn.tg:hover{background:var(--navy-2);border-color:var(--navy-2)}
+.tg-ico{width:16px;height:16px;display:block;fill:currentColor;flex:0 0 auto}
+
+/* floating sticky: pill on desktop (icon + label), circle on mobile (icon only).
+   z above .nav (40); margins use env() so it clears the home-indicator / notch. */
+.tg-fab{position:fixed;z-index:60;right:max(18px,env(safe-area-inset-right));
+  bottom:max(18px,env(safe-area-inset-bottom));display:inline-flex;align-items:center;gap:10px;
+  padding:13px 18px;border-radius:999px;background:var(--navy);color:var(--paper);
+  border:1.5px solid var(--navy);box-shadow:0 4px 14px rgba(27,26,23,.22);
+  font-family:var(--text);font-weight:600;font-size:var(--step--1);line-height:1;
+  transition:transform .12s ease,background .12s ease}
+.tg-fab:hover{background:var(--navy-2);border-color:var(--navy-2);transform:translateY(-2px)}
+.tg-fab:focus-visible{outline:2px solid var(--oxblood);outline-offset:2px}
+.tg-fab .tg-ico{width:20px;height:20px}
+/* mobile: collapse the header CTA label to icon-only, and make the FAB a circle. */
+@media(max-width:860px){
+  .btn.tg .tg-lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+  .btn.tg{padding:11px 13px}
+  .tg-fab .tg-fab-lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}
+  .tg-fab{padding:0;width:52px;height:52px;justify-content:center}
+}
+@media(prefers-reduced-motion:reduce){
+  .tg-fab{transition:none}
+  .tg-fab:hover{transform:none}
+}
+
 /* ───────── motion safety (WCAG 2.3.3) ─────────
    Honor prefers-reduced-motion: kill the marquee, the .btn lift, the card hover transform,
    and neutralize decorative animations/transitions. We DON'T blanket-zero `transform` (the

@@ -78,6 +78,41 @@ def _render(name: str, **ctx: object) -> str:
     return _env().get_template(name).render(**ctx)
 
 
+# ----------------------------------------------------------------- F5 telegram CTA
+def test_app_registers_telegram_url_global() -> None:
+    """F5: importing src.site.app must register a Jinja global `telegram_url`
+    (= settings.site_telegram_url) on the shared `templates` env, so every page
+    can emit the «Написать в Telegram» CTA via {{ telegram_url }}."""
+    import src.site.app  # noqa: F401 — import side-effect registers the global
+    from src.config import get_settings
+    from src.site.routes import templates
+
+    assert templates.env.globals.get("telegram_url") == get_settings().site_telegram_url
+
+
+def test_base_has_telegram_cta_in_three_places_with_a11y() -> None:
+    """F5: «Написать в Telegram» CTA appears in header + footer + floating sticky
+    (≥3 occurrences of the DM url), each opens in a new tab safely, the icon-only
+    variants carry an aria-label, and no emoji char is used (inline mono SVG only)."""
+    tg = "https://t.me/Darya_kralj"
+    html = _render(
+        "index.html",
+        featured=[FakeView()],
+        stats=_STATS,
+        csrf_token=_CSRF,
+        telegram_url=tg,
+    )
+    # header + footer + sticky = at least 3 links to Дарья's DM
+    assert html.count(tg) >= 3
+    # opens safely in a new tab
+    assert 'target="_blank"' in html
+    assert 'rel="noopener"' in html
+    # accessible label for the (icon-only) Telegram CTA
+    assert 'aria-label="Написать в Telegram"' in html
+    # anti-slop: NO emoji glyph anywhere in the markup (inline mono SVG instead)
+    assert "✈" not in html and "📲" not in html and "📩" not in html and "💬" not in html
+
+
 # --------------------------------------------------------------------------- base
 def test_base_has_no_external_font_link() -> None:
     """Anti-slop / contract: fonts are self-hosted; no fonts.googleapis <link> ships."""

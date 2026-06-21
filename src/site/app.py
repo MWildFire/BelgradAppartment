@@ -18,10 +18,16 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from src.config import get_settings
 from src.site.db import dispose_engines
-from src.site.routes import router
+from src.site.routes import router, templates
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+# F5: site-wide «Написать в Telegram» CTA. Register the DM url as a Jinja global on
+# the SHARED templates env (the one routes.py renders through) so every page can use
+# {{ telegram_url }} — mirrors the csrf_token / site_base_url globals set in routes.py.
+templates.env.globals["telegram_url"] = get_settings().site_telegram_url
 
 
 @asynccontextmanager

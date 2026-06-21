@@ -37,10 +37,12 @@ from src.site.deps import (
     lead_rate_limiter,
 )
 
-# The public site's own channel link is allowed everywhere; everything else with a scheme
-# (source listing URLs http://x/1, remote photo CDNs http://cdn/..., any площадка t.me deep
-# link to a listing) must NEVER reach a public template.
+# The site's OWN Telegram links are allowed everywhere: the channel and (Stage W2 F5) the
+# permanent agent-DM CTA. Everything else with a scheme (source listing URLs http://x/1,
+# remote photo CDNs http://cdn/..., a площадка t.me deep-link to a listing) must NEVER reach
+# a public template.
 ALLOWED_CHANNEL = "https://t.me/RentBelgrad"
+ALLOWED_AGENT_DM = "https://t.me/Darya_kralj"  # F5 «Написать в Telegram» CTA (header/footer/sticky)
 
 
 @pytest.fixture(autouse=True)
@@ -86,10 +88,10 @@ def client(site_db, notifier_spy):
 def _no_listing_url_leaks(html: str) -> None:
     """Assert the rendered HTML leaks no source listing / remote-photo / площадка URL.
 
-    The channel link (https://t.me/RentBelgrad) is allowed; we strip every occurrence of it
-    first, then assert nothing else carrying a URL scheme or a площадка marker survives.
+    The site's own Telegram links (channel + agent DM) are allowed; we strip every occurrence
+    of them first, then assert nothing else carrying a URL scheme or a площадка marker survives.
     """
-    stripped = html.replace(ALLOWED_CHANNEL, "")
+    stripped = html.replace(ALLOWED_CHANNEL, "").replace(ALLOWED_AGENT_DM, "")
     # Seeded source listing urls (http://x/N) and remote photo CDNs (http://cdn/...).
     assert "http://x/" not in stripped, "source listing URL (listings.url) leaked"
     assert "http://cdn/" not in stripped, "remote photo CDN URL leaked"
