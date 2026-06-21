@@ -11,9 +11,16 @@
       <p class="hero-lede">Помогаем релокантам найти жильё на длинный срок — с договором, который проходит на <span style="color:var(--navy);font-weight:600">ВНЖ</span> и белый картон.</p>
 
       <form class="searchbar" method="get" action="/catalog">
-        <div class="seg" style="flex:1.4">
+        {# F2: район is a searchable single-select. Native <select> is the no-JS fallback;
+           combobox.js (data-combobox) progressively enhances it into a type-to-filter listbox. #}
+        <div class="seg" style="flex:1.4" data-combobox data-combobox-placeholder="Врачар, Дорћол…">
           <span>Район</span>
-          <input name="district" placeholder="Врачар, Дорћол…" aria-label="Район">
+          <select name="district" aria-label="Район">
+            <option value="">любой район</option>
+            {% for name in district_options|default([]) %}
+              <option value="{{ name }}">{{ name }}</option>
+            {% endfor %}
+          </select>
         </div>
         <div class="seg">
           <span>Цена €</span>
@@ -126,4 +133,9 @@
 <section class="bay wrap">
   {% include "partials/_lead_form.html" %}
 </section>
+{% endblock %}
+
+{% block scripts %}
+{# F2: progressive enhancement for the район dropdown. Native <select> works without it. #}
+<script src="/static/js/combobox.js" defer></script>
 {% endblock %}

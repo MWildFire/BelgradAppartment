@@ -229,6 +229,36 @@ section.bay{padding-block:var(--bay)}
 .pill input{display:none}
 .pill.on{background:var(--ink);color:var(--paper)}
 .filters .apply{width:100%;margin-top:6px}
+
+/* ───────── район combobox (F2 — progressive enhancement over native <select>) ─────────
+   Tokens only, no purple/glass. The native <select> stays in the DOM as the form control
+   but is hidden once .combobox-ready enhances; if JS is off it renders as a normal select. */
+.combobox-native{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);border:0}
+.combobox{position:relative}
+.combobox-field{display:flex;flex-wrap:wrap;align-items:center;gap:6px;border:1.5px solid var(--ink);border-radius:var(--r-s);background:var(--paper);padding:6px 8px;cursor:text}
+.combobox.is-open .combobox-field{border-color:var(--oxblood)}
+.combobox-input{flex:1;min-width:7ch;border:0;background:transparent;outline:none;font-family:var(--text);font-size:var(--step--1);color:var(--ink);padding:3px 2px}
+.combobox-input::placeholder{color:var(--ink-2)}
+.combobox-chips{display:contents}
+.combobox-chip{display:inline-flex;align-items:center;gap:6px;background:var(--ink);color:var(--paper);border-radius:999px;padding:3px 6px 3px 10px;font-size:var(--step--1);font-family:var(--mono)}
+.combobox-chip-x{border:0;background:transparent;color:inherit;cursor:pointer;font-size:1.05em;line-height:1;padding:0 2px;border-radius:999px}
+.combobox-chip-x:hover{background:color-mix(in srgb,var(--paper) 25%,transparent)}
+/* popup listbox */
+.combobox-list{position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;max-height:248px;overflow-y:auto;background:var(--card);border:1.5px solid var(--ink);border-radius:var(--r-s);box-shadow:0 16px 36px -22px rgba(27,26,23,.55)}
+.combobox-option{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border-radius:var(--r-s);font-size:var(--step--1);color:var(--ink);cursor:pointer}
+.combobox-option .combobox-option-count{color:var(--ink-2)}
+.combobox-option.is-active{background:var(--paper-3)}
+.combobox-option[aria-selected="true"]{background:var(--oxblood);color:var(--paper)}
+.combobox-option[aria-selected="true"] .combobox-option-count{color:var(--paper)}
+.combobox-option[aria-selected="true"].is-active{background:var(--oxblood-2)}
+.combobox-empty{padding:10px;font-size:var(--step--1);color:var(--ink-2)}
+/* the hero searchbar segment hosts a combobox: drop the inner padding so it sits flush */
+.searchbar .seg[data-combobox]{padding-block:8px}
+.searchbar .seg .combobox-field{border:0;border-radius:0;background:transparent;padding:2px 0}
+.searchbar .seg .combobox.is-open .combobox-field{border:0}
+.searchbar .seg .combobox-input{font-weight:600;font-size:var(--step-0);padding:0}
+@media(prefers-reduced-motion:reduce){.combobox-field,.combobox-option{transition:none}}
+
 .results-head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--gutter);margin-bottom:1.4rem;flex-wrap:wrap}
 .results-head .count{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
 .results-head select{font-family:var(--text);font-size:var(--step--1);border:1.5px solid var(--hairline);border-radius:var(--r-s);padding:8px 11px;background:var(--paper);color:var(--ink)}

@@ -18,16 +18,29 @@
     </label>
   </div>
 
-  {# — district (multi) — #}
+  {# — district (multi) —
+     F2: a native <select multiple> is the no-JS, deep-linkable fallback (each selected
+     <option> submits its own `district` query param, preserving multi-select semantics);
+     combobox.js (data-combobox) enhances it into a searchable multi-select listbox.
+     Options carry facets.districts counts when present, else fall back to the curated
+     district_options superset (so the control is never empty on a cold catalog). #}
   <div class="group">
-    <h3>Район</h3>
-    {% for name, count in facets.districts %}
-      <label class="opt">
-        <input type="checkbox" name="district" value="{{ name }}"{% if name in applied.district %} checked{% endif %}>
-        {{ name }}
-        <span class="cnt">{{ count }}</span>
-      </label>
-    {% endfor %}
+    <h3 id="district-label">Район</h3>
+    <div class="combo-mount" data-combobox data-combobox-multiple
+         data-combobox-placeholder="Искать район…">
+      <select name="district" multiple size="6" aria-labelledby="district-label">
+        {% if facets.districts %}
+          {% for name, count in facets.districts %}
+            <option value="{{ name }}"{% if name in applied.district %} selected{% endif %}
+                    data-count="{{ count }}">{{ name }} ({{ count }})</option>
+          {% endfor %}
+        {% else %}
+          {% for name in district_options|default([]) %}
+            <option value="{{ name }}"{% if name in applied.district %} selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        {% endif %}
+      </select>
+    </div>
   </div>
 
   {# — price range — #}
@@ -75,3 +88,5 @@
 </form>
 {# Progressive enhancement only (debounce, clear-all, label sync). Form works without it. #}
 <script src="/static/js/filters.js" defer></script>
+{# F2: searchable район combobox over the native <select multiple>. No-JS uses the select. #}
+<script src="/static/js/combobox.js" defer></script>

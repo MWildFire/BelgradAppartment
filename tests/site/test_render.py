@@ -319,6 +319,92 @@ def test_calculator_renders_shell() -> None:
     assert "€" in html  # static shell shows currency
 
 
+# ----------------------------------------------------------- F2 district dropdown
+# Curated Cyrillic display superset (a subset of data/districts.yaml's Cyrillic keys),
+# alphabetically sorted — mirrors what app.py registers as the `district_options` global.
+_DISTRICT_OPTIONS = ["Врачар", "Дорћол", "Звездара", "Земун", "Нови Београд"]
+
+
+def test_app_registers_district_options_global() -> None:
+    """F2: importing src.site.app must register a Jinja global `district_options`
+    on the shared `templates` env — a non-empty, alphabetically-sorted list of
+    Cyrillic display names derived from data/districts.yaml (works even with no facets)."""
+    import src.site.app  # noqa: F401 — import side-effect registers the global
+    from src.site.routes import templates
+
+    opts = templates.env.globals.get("district_options")
+    assert isinstance(opts, (list, tuple))
+    assert len(opts) > 0
+    assert "Врачар" in opts  # a known curated Cyrillic district
+    assert "Звездара" in opts
+    assert list(opts) == sorted(opts)  # alphabetical
+    assert len(set(opts)) == len(opts)  # de-duplicated
+
+
+def test_index_hero_district_is_native_select_from_options() -> None:
+    """F2: the hero searchbar район segment is a native <select name="district"> whose
+    options come from `district_options` (no-JS fallback; combobox.js enhances it).
+    An empty «любой район» default option is present so submit without choosing works."""
+    html = _render(
+        "index.html",
+        featured=[FakeView()],
+        stats=_STATS,
+        csrf_token=_CSRF,
+        district_options=_DISTRICT_OPTIONS,
+    )
+    # native <select name="district"> exists (no-JS degradation)
+    assert re.search(r'<select[^>]*\bname="district"', html)
+    # the old free-text input is gone (район is now a <select>, not <input>)
+    assert not re.search(r'<input[^>]*\bname="district"', html)
+    # options rendered from district_options
+    assert ">Врачар<" in html
+    assert ">Дорћол<" in html
+    # empty default option («любой район») — value="" so it submits as no filter
+    assert 'value=""' in html
+    assert "любой район" in html
+
+
+def test_filters_district_options_with_counts() -> None:
+    """F2: the filter rail district control offers a native multi-select fallback over the
+    same options; when facets.districts has counts, the counts render next to the names."""
+    html = _render(
+        "partials/_filters.html",
+        facets=_FACETS,
+        applied=_APPLIED,
+        district_options=_DISTRICT_OPTIONS,
+    )
+    # native multi-select control exists for no-JS deep-linkable multi-select
+    assert re.search(r'<select[^>]*\bname="district"[^>]*\bmultiple', html) or re.search(
+        r'<select[^>]*\bmultiple[^>]*\bname="district"', html
+    )
+    assert "Врачар" in html  # district name
+    assert "(7)" in html  # count from facets.districts for Врачар
+    # applied district preselected (deep-link round-trip)
+    assert re.search(r'<option[^>]*value="Врачар"[^>]*selected', html)
+
+
+def test_filters_district_falls_back_to_options_when_facets_empty() -> None:
+    """F2: with no facets (empty catalog), the district filter falls back to the full
+    `district_options` superset so the control is never empty."""
+    empty_facets = {
+        "districts": [],
+        "price_bounds": (0, 0),
+        "rooms": [],
+        "counts": {"vnj": 0, "white_card": 0, "total": 0},
+    }
+    applied_empty = {**_APPLIED, "district": []}
+    html = _render(
+        "partials/_filters.html",
+        facets=empty_facets,
+        applied=applied_empty,
+        district_options=_DISTRICT_OPTIONS,
+    )
+    # still a native <select name="district"> with the curated options
+    assert re.search(r'<select[^>]*\bname="district"', html)
+    assert "Врачар" in html
+    assert "Звездара" in html
+
+
 # --------------------------------------------------- lead form (index) full check
 @pytest.mark.parametrize("template", ["index.html", "apt.html"])
 def test_lead_form_has_honeypot_and_csrf(template: str) -> None:
