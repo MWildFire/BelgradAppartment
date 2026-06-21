@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
@@ -23,7 +23,7 @@ from src.db import (
     SourceChannel,
     get_session,
 )
-from src.db.models import DailyMetrics, SiteListing
+from src.db.models import DailyMetrics, Lead, SiteListing
 from src.post import render_post
 
 logger = logging.getLogger(__name__)
@@ -313,7 +313,56 @@ async def metrics_view(request: Request, _: str = Depends(require_admin)) -> HTM
     )
 
 
-# --------------------------------------------------------------------------- Photo proxy
+# --------------------------------------------------------------------------- Leads inbox (W4-1)
+# Flat convention (like /queue, /metrics): GET /leads lists requests from the public
+# lead form; POST /leads/{id}/status is the CSRF-guarded single status mutation.
+
+LEAD_STATUSES = ("new", "contacted", "closed")
+
+
+@router.get("/leads", response_class=HTMLResponse)
+async def leads_view(
+    request: Request,
+    status_filter: str | None = Query(None, alias="status"),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    # `status_filter` aliases ?status= so it never shadows the imported fastapi `status`.
+    # Unknown values are ignored (no 500) — the filter UI only emits valid statuses.
+    active_filter = status_filter if status_filter in LEAD_STATUSES else None
+    async with get_session() as s:
+        stmt = select(Lead).order_by(Lead.created_at.desc())  # newest first
+        if active_filter:
+            stmt = stmt.where(Lead.status == active_filter)
+        rows = (await s.execute(stmt)).scalars().all()
+    return templates.TemplateResponse(
+        request,
+        "leads.html",
+        {
+            "leads": rows,
+            "active_nav": "leads",
+            "active_filter": active_filter,
+            "statuses": LEAD_STATUSES,
+        },
+    )
+
+
+@router.post("/leads/{lead_id}/status")
+async def lead_status_action(
+    lead_id: int,
+    new_status: str = Form(..., alias="status"),
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> RedirectResponse:
+    # Validate before any DB write — an out-of-range status is a 400, never persisted.
+    if new_status not in LEAD_STATUSES:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    async with get_session() as s:
+        lead = await s.get(Lead, lead_id)
+        if lead is None:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        lead.status = new_status
+    return RedirectResponse(url="/leads", status_code=status.HTTP_303_SEE_OTHER)
+
 
 
 @router.get("/photo/inbound/{inbound_id}/{idx}")

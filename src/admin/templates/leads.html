@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Заявки — otz-rent-finder{% endblock %}
+{% block content %}
+<h1>Заявки{% if active_filter %} — {{ active_filter }}{% endif %}</h1>
+
+<div class="meta" style="margin-bottom:14px;">
+  <a href="/leads" {% if not active_filter %}style="color:var(--fg);font-weight:600;"{% endif %}>все</a>
+  {% for st in statuses %}
+    <a href="/leads?status={{ st }}"
+       {% if active_filter == st %}style="color:var(--fg);font-weight:600;"{% endif %}>{{ st }}</a>
+  {% endfor %}
+</div>
+
+{% if not leads %}
+  <div class="empty">Заявок пока нет.</div>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Дата</th>
+      <th>Имя</th>
+      <th>Контакт</th>
+      <th>Бюджет</th>
+      <th>Районы</th>
+      <th>Комнаты</th>
+      <th>Сообщение</th>
+      <th>Квартира</th>
+      <th>Статус</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for lead in leads %}
+    <tr>
+      <td>{{ lead.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ lead.name }}</td>
+      <td>{{ lead.contact }}</td>
+      <td>{{ lead.budget_eur if lead.budget_eur is not none else '—' }}</td>
+      <td>{{ lead.districts or '—' }}</td>
+      <td>{{ lead.rooms or '—' }}</td>
+      <td>{{ lead.message or '—' }}</td>
+      <td>
+        {% if lead.kind == 'listing' and lead.site_listing_id %}
+          <a href="/apt/{{ lead.site_listing_id }}" target="_blank" rel="noopener">квартира #{{ lead.site_listing_id }}</a>
+        {% else %}—{% endif %}
+      </td>
+      <td><span class="badge">{{ lead.status }}</span></td>
+      <td>
+        <form method="post" action="/leads/{{ lead.id }}/status" style="display:flex;gap:4px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <select name="status">
+            {% for st in statuses %}
+            <option value="{{ st }}" {% if st == lead.status %}selected{% endif %}>{{ st }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn">OK</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
