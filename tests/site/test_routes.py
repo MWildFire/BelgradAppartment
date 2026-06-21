@@ -48,6 +48,9 @@ _STUBS = {
     "partials/_card.html": "TPL:_card id={{ item.id }}",
     "partials/_filters.html": "TPL:_filters",
     "partials/_lead_ok.html": "TPL:_lead_ok",
+    # W3-4: the custom 404 handler renders this through the SAME env (globals available),
+    # so the stub echoes the telegram_url global + a /catalog link to prove they reached it.
+    "404.html": "TPL:404 tg={{ telegram_url }} <a href=\"/catalog\">каталог</a>",
 }
 
 
@@ -575,6 +578,97 @@ def test_lead_rate_limit_blocks_after_max(client, monkeypatch):
 def test_map_json_is_serializable(client):
     r = client.get("/api/map.json")
     json.loads(r.text)  # raises if not valid JSON
+
+
+# ============================================================== W3-4: SEO — sitemap / robots / 404
+
+
+def test_sitemap_xml_is_valid_and_lists_static_and_public(client):
+    import xml.etree.ElementTree as ET
+
+    from src.config import get_settings
+
+    base = get_settings().site_public_base_url
+    r = client.get("/sitemap.xml")
+    assert r.status_code == 200
+    assert "xml" in r.headers["content-type"]  # application/xml or text/xml
+
+    # valid, parseable XML (urlset/url/loc); raises on malformed output
+    root = ET.fromstring(r.text)
+    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    locs = [el.text for el in root.findall(".//sm:loc", ns)]
+    assert locs, "sitemap must contain <loc> entries"
+
+    # every <loc> is ABSOLUTE (site_public_base_url), never a relative path
+    assert all(loc.startswith(base) for loc in locs)
+
+    # static pages are present (absolute)
+    for path in ("/", "/catalog", "/map", "/calculator", "/vnj", "/how"):
+        assert f"{base}{path}" in locs
+
+    # all public listings appear; the private one (id=4) does NOT
+    assert f"{base}/apt/1" in locs
+    assert f"{base}/apt/2" in locs
+    assert f"{base}/apt/3" in locs
+    assert f"{base}/apt/4" not in locs  # site_listing 4 is is_public=False
+
+
+def test_robots_txt_allows_and_points_to_sitemap(client):
+    from src.config import get_settings
+
+    base = get_settings().site_public_base_url
+    r = client.get("/robots.txt")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    body = r.text
+    assert "User-agent: *" in body
+    assert "Allow: /" in body
+    assert f"Sitemap: {base}/sitemap.xml" in body
+
+
+def test_404_renders_custom_template_with_globals(client):
+    # An unknown path → custom handler renders 404.html (status 404) THROUGH the shared
+    # env, so base.html globals (telegram_url) and the /catalog CTA are available.
+    r = client.get("/nonexistent-path")
+    assert r.status_code == 404
+    assert "TPL:404" in r.text  # the custom 404 template was rendered (not the bare JSON)
+    assert "t.me/Darya_kralj" in r.text  # telegram_url global reached the template
+    assert 'href="/catalog"' in r.text  # link back to the catalog
+
+
+def test_apt_og_tags_reconciled_to_w2_format():
+    """W3-4: /apt/{id} <head> carries W2-format OpenGraph — og:title = «{price}€ · {district}»,
+    og:image absolute (site_base_url + the site /photos path, never a площадка/CDN url),
+    og:url canonical absolute, plus og:type and a canonical <link>. Rendered via the real env
+    (the route's autouse stub env can't render D's real apt.html markup)."""
+    env = _real_env()
+    base = "https://rent.example.com"
+    item = _FakeItem()
+    item.photos = ["/photos/1/1/00.jpg"]  # site /photos path (already absolutized server-side)
+    html = env.get_template("apt.html").render(item=item, similar=[])
+
+    # og:title = «{price_eur}€ · {district}» (W2 exact format)
+    assert f'property="og:title" content="{item.price_eur}€ · {item.district}"' in html
+    # og:image is ABSOLUTE: site_base_url + the /photos path; NEVER a площадка/CDN url
+    assert f'property="og:image" content="{base}/photos/1/1/00.jpg"' in html
+    assert "cdn/" not in html and "://cdn" not in html  # no remote/площадка image
+    # og:url canonical absolute /apt/{id}
+    assert f'property="og:url" content="{base}/apt/{item.id}"' in html
+    # og:type set + a canonical <link>
+    assert "property=\"og:type\"" in html
+    assert f'<link rel="canonical" href="{base}/apt/{item.id}">' in html
+    # no duplicated og:title (reconciled, not appended)
+    assert html.count('property="og:title"') == 1
+
+
+def test_apt_og_image_falls_back_to_default_when_no_photos():
+    """No photos → og:image falls back to the absolute site default (no dangling/relative url)."""
+    env = _real_env()
+    base = "https://rent.example.com"
+    item = _FakeItem()
+    item.photos = []
+    html = env.get_template("apt.html").render(item=item, similar=[])
+    assert f'property="og:image" content="{base}/static/og-default.png"' in html
 
 
 # ============================================================== templates: lead CTA + hidden id (real markup)

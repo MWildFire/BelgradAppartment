@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Страница не найдена — RentBelgrad{% endblock %}
+{% block meta_description %}Такой страницы нет. Откройте каталог квартир в Белграде или напишите Дарье в Telegram — подберём вариант под ВНЖ и белый картон.{% endblock %}
+
+{% block content %}
+<section class="bay wrap" id="notfound">
+  <div class="sec-head">
+    <div>
+      <div class="idx" style="font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)">ошибка 404</div>
+      <h1>Этой страницы нет</h1>
+    </div>
+    <p style="max-width:40ch;color:var(--ink-2);font-size:var(--step--1)">Возможно, объявление сняли с публикации или ссылка устарела. Это не тупик — квартиры рядом.</p>
+  </div>
+
+  <p style="max-width:62ch;color:var(--ink-2)">Откройте каталог и подберите квартиру в Белграде с договором под ВНЖ и белый картон — или напишите Дарье, она поможет найти вариант под ваш случай.</p>
+
+  <p class="notfound-cta" style="display:flex;flex-wrap:wrap;gap:.75rem;margin-top:2rem">
+    <a class="btn ox" href="/catalog">Смотреть каталог</a>
+    <a class="btn tg" href="{{ telegram_url }}" target="_blank" rel="noopener">
+      <svg class="tg-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 3.2 2.8 10.6c-.9.35-.88 1.62.03 1.95l4.6 1.64 1.78 5.4c.27.78 1.27.96 1.8.32l2.5-3.05 4.6 3.4c.6.45 1.47.13 1.65-.6L23 4.3c.2-.83-.6-1.5-1.5-1.1Zm-3.1 3.6-7.9 7.05c-.18.16-.3.4-.32.65l-.2 2.5-1.36-4.13 9.78-6.07Z"/></svg>
+      <span class="tg-lbl">Написать в Telegram</span>
+    </a>
+  </p>
+</section>
+{% endblock %}

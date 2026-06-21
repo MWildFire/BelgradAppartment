@@ -18,8 +18,11 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src.config import get_settings
 from src.post.hashtags import DISTRICTS_PATH  # reuse the canonical districts.yaml path
@@ -63,6 +66,19 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await dispose_engines()
 
 
+async def _not_found_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    """W3-4: custom styled 404 → templates/404.html, status 404.
+
+    Renders through routes.templates — the SAME Jinja env that carries the globals
+    (telegram_url, district_options, csrf_token, site_base_url) — so 404.html can extend
+    base.html and emit the «Написать в Telegram» CTA + the link back to /catalog.
+    Non-404 HTTP errors fall through to Starlette's default handling.
+    """
+    if exc.status_code != 404:
+        return await http_exception_handler(request, exc)
+    return templates.TemplateResponse(request, "404.html", {}, status_code=404)
+
+
 def create_app() -> FastAPI:
     # openapi_url=None: no /openapi.json route inventory on an internet-facing app.
     app = FastAPI(
@@ -73,6 +89,8 @@ def create_app() -> FastAPI:
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(router)
+    # Custom 404 (unknown path AND a route raising HTTPException(404), e.g. /apt/{missing}).
+    app.add_exception_handler(StarletteHTTPException, _not_found_handler)
     return app
 
 

@@ -64,6 +64,15 @@ def _parse_filters(request: Request) -> tuple[Filters, str, int]:
     return filters, sort, max(page, 1)
 
 
+def _xml_escape(text: str) -> str:
+    """Minimal XML-text escaping for <loc> values (defense-in-depth; site paths are clean)."""
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
 def _as_int(value: str | None) -> int | None:
     if value is None or value == "":
         return None
@@ -247,6 +256,41 @@ async def map_json(db_url: str = Depends(catalog_db_url)) -> JSONResponse:
 @router.get("/calculator", response_class=HTMLResponse)
 async def calculator(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "calculator.html", {})
+
+
+# Static pages that always belong in the sitemap (absolute via site_public_base_url).
+_SITEMAP_STATIC = ("/", "/catalog", "/map", "/calculator", "/vnj", "/how")
+
+
+@router.get("/sitemap.xml")
+async def sitemap(db_url: str = Depends(catalog_db_url)) -> Response:
+    """sitemaps.org urlset — static pages + every is_public /apt/{id}, all <loc> ABSOLUTE.
+
+    Public ids are enumerated via list_public with a large page_size (the public set is small,
+    a single page covers it). Private listings never surface — list_public is scoped to
+    is_public. No remote/площадка urls: every <loc> is site_public_base_url + a site path.
+    """
+    base = get_settings().site_public_base_url.rstrip("/")
+    items, _total = await readmodel.list_public(
+        Filters(show_rented=True), sort="new", page=1, page_size=10000, database_url=db_url
+    )
+    locs = [f"{base}{path}" for path in _SITEMAP_STATIC]
+    locs.extend(f"{base}/apt/{item.id}" for item in items)
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "".join(f"  <url><loc>{_xml_escape(loc)}</loc></url>\n" for loc in locs)
+        + "</urlset>\n"
+    )
+    return Response(content=body, media_type="application/xml")
+
+
+@router.get("/robots.txt")
+async def robots() -> Response:
+    """text/plain robots — allow all crawling, point at the absolute sitemap url."""
+    base = get_settings().site_public_base_url.rstrip("/")
+    body = f"User-agent: *\nAllow: /\nSitemap: {base}/sitemap.xml\n"
+    return Response(content=body, media_type="text/plain")
 
 
 @router.get("/vnj", response_class=HTMLResponse)

@@ -2,13 +2,21 @@
 {% block title %}{{ item.rooms }} в районе {{ item.district }} — €{{ item.price_eur }}/мес · RentBelgrad{% endblock %}
 {% block meta_description %}{{ item.rooms }} в районе {{ item.district }} за €{{ item.price_eur }} в месяц.{% if item.for_vnj %} Подходит для ВНЖ.{% endif %}{% endblock %}
 
-{# Per-listing OpenGraph. og:title = price + district (listing identity); og:image is the
-   first photo made ABSOLUTE via site_base_url. No photo → inherit base default (no dangling). #}
+{# Per-listing OpenGraph (W2 format, DATA_CONTRACT-W2 §OpenGraph) — RECONCILED from Stage W:
+   og:title is now «{price_eur}€ · {district}» (listing identity, no rooms/«в районе»);
+   og:image is the first photo made ABSOLUTE via site_base_url (the site /photos path — NEVER
+   a площадка/CDN url; no photo → the absolute site default, never dangling/relative);
+   og:url is the canonical absolute /apt/{id}, mirrored by a <link rel="canonical">. #}
 {% block og_type %}article{% endblock %}
-{% block og_title %}€{{ item.price_eur }}/мес · {{ item.rooms }} в районе {{ item.district }}{% endblock %}
-{% block og_description %}{{ item.rooms }}, €{{ item.price_eur }}/мес в районе {{ item.district }}.{% if item.area_m2 %} {{ item.area_m2|round|int }} m².{% endif %}{% if item.for_vnj %} Подходит для ВНЖ.{% endif %}{% if item.for_white_card %} Белый картон.{% endif %}{% endblock %}
-{# absolute og:image from the first photo; falls back to the site default when none exist #}
+{% block og_title %}{{ item.price_eur }}€ · {{ item.district }}{% endblock %}
+{% block og_description %}{{ item.rooms }}, €{{ item.price_eur }}/мес в районе {{ item.district }}.{% if item.area_m2 %} {{ item.area_m2|round|int }} m².{% endif %}{% if item.for_vnj %} Подходит для ВНЖ.{% endif %}{% if item.for_white_card %} Белый картон.{% endif %} Аренда в Белграде.{% endblock %}
 {% block og_image %}{{ site_base_url }}{{ item.photos[0] if item.photos else '/static/og-default.png' }}{% endblock %}
+
+{# og:url + canonical: base.html carries no og:url meta and no og_url block, so emit both the
+   property="og:url" meta and the <link rel="canonical"> here via base.html's {% block head %}.
+   Canonical absolute /apt/{id} — site_base_url = settings.site_public_base_url. #}
+{% block head %}<meta property="og:url" content="{{ site_base_url }}/apt/{{ item.id }}">
+<link rel="canonical" href="{{ site_base_url }}/apt/{{ item.id }}">{% endblock %}
 
 {% block content %}
 <section class="bay wrap">
