@@ -111,3 +111,37 @@ class Facets:
 - Не строит фото-URL (получает готовые из `SiteListingView.photos`).
 - Не решает, что public (бэкенд уже отфильтровал по `is_public`).
 - Любая динамика на клиенте (фильтры-HTMX, карта, калькулятор, избранное, валидация формы) ест только данные из таблицы §2 и эндпоинт `/api/map.json`.
+
+## 8. Дельта Stage W2 «Conversion & Polish» (применена 21.06.2026)
+
+> Влито из `DATA_CONTRACT-W2.md`. Контракт backend↔frontend для конверсионной доводки (этап W2).
+
+### 8.1 Изменённые/новые роуты
+- `POST /lead` — принимает опц. `site_listing_id: int` (валидируется: существует и `is_public`) и `kind`
+  (`general`/`listing`/`subscription`); при публичной квартире письмо/нотис включают её сводку. Канал
+  доставки: **e-mail на `SITE_LEAD_EMAIL_TO` (обяз.)** + бот-нотис. Honeypot (`company`)/CSRF/rate-limit — без изменений.
+- `GET /` — контекст пополнен: `district_options` (hero-дропдаун), `featured: SiteListingView | None` («квартира недели»).
+- `GET /vnj`, `GET /how` — новые контентные страницы (`templates/vnj.html`, `how.html`; на `/how` — разбор комиссии 50%).
+- `GET /sitemap.xml` — статические страницы + все `is_public` `/apt/{id}` (абсолютные URL).
+- `GET /robots.txt` — allow + ссылка на sitemap.
+- 404 — кастомный handler → `templates/404.html` (Telegram-CTA + ссылка в каталог).
+- `GET/POST /admin/leads` — админка заявок (список новых сверху, фильтр по статусу, смена `status` POST с CSRF).
+
+### 8.2 Новые Jinja-globals
+- `telegram_url` = `SITE_TELEGRAM_URL` (=`https://t.me/Darya_kralj`) — кнопка «Написать в Telegram» (шапка/футер/липкая), F5.
+- `district_options` — курированный Cyrillic-список районов (`data/districts.yaml` ∪ фасеты), дропдаун района в hero и фильтрах, F2.
+
+### 8.3 Read-model / схема (миграция 0007)
+- `site_listings.is_featured: bool` («квартира недели», admin-тоггл) + частичный индекс.
+- `leads.site_listing_id: int | None` (FK ON DELETE SET NULL), `leads.kind: str` (`general`/`listing`/`subscription`).
+- `readmodel.featured_one() -> SiteListingView | None` (featured → newest public → None);
+  `readmodel.apartment_summary(site_listing_id) -> dict | None` (сводка для письма/нотиса).
+
+### 8.4 OpenGraph на `/apt/{id}`
+`og:title` = «{price}€ · {district}», `og:description`, `og:image` = первое фото (абсолютный URL через
+`SITE_PUBLIC_BASE_URL`), `og:url` = canonical — богатые превью при шеринге ссылки в Telegram.
+
+### 8.5 Новые env
+`SITE_TELEGRAM_URL`, `SITE_LEAD_EMAIL_TO`, `SITE_SMTP_HOST/PORT/USER/PASSWORD/FROM/STARTTLS`. E-mail-релей =
+**Resend** (`smtp.resend.com:587` STARTTLS, `FROM=no-reply@rentbelgrad.com`, домен `rentbelgrad.com` верифицирован:
+DKIM/SPF/DMARC). Креды (API-ключ `re_…`) — в серверном `/opt/otz/.env` руками, никогда не в коде/логах/гите.

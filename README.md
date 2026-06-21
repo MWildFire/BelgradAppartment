@@ -82,7 +82,7 @@ otz stats                   # текущее состояние БД
 otz admin                   # запустить веб-просмотр (FastAPI)
 ```
 
-## Публичный веб-каталог (этап W)
+## Публичный веб-каталог (этапы W / W2)
 
 Второе FastAPI+Jinja-приложение (`src/site/`) — публичный каталог для клиентов @RentBelgrad. Читает
 **ту же SQLite read-only** и показывает только **отобранные Дарьей** квартиры (опубличенные в канале),
@@ -106,6 +106,13 @@ RUN_E2E=1 uv run pytest tests/e2e/site -q
 
 Новые env-ключи (`SITE_*`) — в [`.env.example`](.env.example) / [`deploy/env.additions.txt`](deploy/env.additions.txt).
 Нотис о заявке переиспользует `TG_BOT_TOKEN` / `TG_BOT_RECIPIENTS` (отдельных ключей не нужно).
+
+**Доводка (этап W2, 21.06):** заголовок «Ключи от Белграда», дропдаун районов, комиссия 50%, заявки на
+e-mail Дарьи (`SITE_LEAD_EMAIL_TO`) через **Resend** SMTP (`SITE_SMTP_*`; релей-агностик `src/site/email.py`,
+aiosmtplib) + бот-нотис, per-listing заявки, «Квартира недели» (admin `is_featured`), `/vnj` · `/how`,
+SEO (OG / `sitemap.xml` / `robots.txt` / кастомный 404), admin leads inbox. Миграция 0007. SMTP-креды
+(Resend `re_…`) — в `/opt/otz/.env` руками, не в гите. План:
+[`docs/superpowers/plans/2026-06-21-web-conversion-polish.md`](docs/superpowers/plans/2026-06-21-web-conversion-polish.md).
 
 ## Статус
 

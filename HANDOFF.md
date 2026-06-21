@@ -10,6 +10,27 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.-2 Этап W2 «Conversion & Polish» (21.06.2026) — 🚀 ЗАПУЩЕН на https://rentbelgrad.com
+
+> Самый свежий handoff. План: `docs/superpowers/plans/2026-06-21-web-conversion-polish.md`;
+> решения: `docs/web/DECISIONS-W2.md`; дельта контракта: `docs/web/DATA_CONTRACT-W2.md` (влита в `docs/web/DATA_CONTRACT.md` §8).
+
+**Что это.** Конверсионная доводка Stage W: 5 обязательных фиксов + фичи. **Задеплоено 21.06** (rsync + миграция 0007 + e-mail-релей Resend).
+
+**Что сделано (ветка `feature/web-conversion-polish`, влита в `main`):**
+- **F1** hero-заголовок → «Ключи от Белграда» (был «по-человечески»).
+- **F2** дропдаун районов (combobox над нативным `<select>`, no-JS fallback) в hero и фильтрах; источник — `data/districts.yaml` ∪ фасеты. Убран джанк-алиас «Воџовац» из списка.
+- **F3** стат комиссии €0 → **50%** («50% от месячной аренды, разово при заселении»); ложное «бесплатно / платит арендодатель» вычищено; разбор на `/how`.
+- **F4** заявки уходят на **`d.mashukova@bk.ru`** через `src/site/email.py` (aiosmtplib, релей-агностик, no-op при пустом `SITE_SMTP_HOST`) + бот-нотис; lead коммитится ДО отправок, каждый канал не критичен → заявка не теряется.
+- **F5** «Написать в Telegram» → `https://t.me/Darya_kralj` (шапка/футер/липкая) на каждой странице.
+- **Фичи:** per-listing заявка (`leads.kind`/`site_listing_id`), реальная «Квартира недели» (admin `is_featured`), `/vnj` + `/how`, SEO (OG, `/sitemap.xml`, `/robots.txt`, кастомный 404), admin leads inbox (`/admin/leads`).
+- **Миграция 0007** (`0007_featured_lead_fields`, head): `site_listings.is_featured` + частичный индекс; `leads.site_listing_id` FK (ON DELETE SET NULL) + `leads.kind`.
+- **E-mail-релей = Resend** — домен `rentbelgrad.com` верифицирован (DKIM/SPF/DMARC, аккаунт mvstrike17@gmail.com). `SITE_SMTP_HOST=smtp.resend.com`, порт 587 STARTTLS, `SITE_SMTP_USER=resend`, `FROM=no-reply@rentbelgrad.com`. API-ключ `re_…` — в `/opt/otz/.env` руками, **не в коде/гите** (рассмотреть ротацию — был вставлен в чат).
+- **Новые env** (в `.env.example`; на сервере руками): `SITE_TELEGRAM_URL`, `SITE_LEAD_EMAIL_TO`, `SITE_SMTP_HOST/PORT/USER/PASSWORD/FROM/STARTTLS`.
+- **Тесты:** 506 passed, 19 skipped; e2e (`RUN_E2E=1`) 18 passed. Деплой-smoke на проде зелёный: заголовок/50%/Telegram-CTA/`/vnj`/`/how`/`/sitemap.xml`/`/robots.txt`/кастомный 404; боевая заявка (`POST /lead` → 303, lead id=1 `kind='general'`) — e-mail ушёл без ошибок (SMTP-путь отдельно проверен с VPS → `VPS_SMTP_OK`).
+- **Бэкап перед миграцией:** `data/backups/otz-2026-06-21-1245-pre-stagew2.db`.
+- ⚠️ **Открыто:** на проде `site_listings` пусто (0 публичных листингов) → per-listing-заявку / OG на `/apt/{id}` / «Квартиру недели» нельзя досмокать, пока Дарья не опубликует листинг (покрыто e2e-тестами). Глазами подтвердить приход письма в инбоксе `d.mashukova@bk.ru` (проверить «Спам»).
+
 ### 0.-1 Этап W «Public Web Catalog» (20.06.2026) — 🚀 ЗАПУЩЕН на https://rentbelgrad.com
 
 > Самый свежий handoff. ADR + план: `docs/web/ARCHITECTURE.md`, `docs/web/DATA_CONTRACT.md`,

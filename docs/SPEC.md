@@ -432,6 +432,22 @@ ADR + контракты: `docs/web/ARCHITECTURE.md`, `docs/web/DATA_CONTRACT.md
 - [ ] **Отложено (нужен сабдомен + DNS A → `90.156.254.159`):** Caddy + `deploy/Caddyfile`, TLS,
       `ufw allow 80,443`, боевой `SITE_PUBLIC_BASE_URL` в `/opt/otz/.env`. До этого сайт — localhost-only.
 
+> Обновление: **Caddy + TLS запущены 21.06** — `rentbelgrad.com` в проде (см. `HANDOFF.md` §0.-1/§0.-2).
+
+### Этап W2 — «Conversion & Polish» (21.06.2026) — ✅ задеплоен на https://rentbelgrad.com
+План: `docs/superpowers/plans/2026-06-21-web-conversion-polish.md`; решения: `docs/web/DECISIONS-W2.md`;
+дельта контракта: `docs/web/DATA_CONTRACT-W2.md` (влита в `docs/web/DATA_CONTRACT.md` §8); итоги: `HANDOFF.md` §0.-2. Кратко:
+- [x] **5 обязательных фиксов:** F1 заголовок «Ключи от Белграда»; F2 дропдаун районов (combobox + `<select>`-fallback);
+      F3 комиссия €0 → **50%** + вычистка ложного «бесплатно»; F4 заявки на **`d.mashukova@bk.ru`** (e-mail-канал)
+      + бот-нотис (lead не теряется при сбое); F5 «Написать в Telegram» → `t.me/Darya_kralj` на каждой странице.
+- [x] **Конверсия/контент:** per-listing заявка (`leads.kind`/`site_listing_id`), «Квартира недели»
+      (admin `is_featured`), `/vnj` + `/how`, SEO (OG, `/sitemap.xml`, `/robots.txt`, кастомный 404), admin leads inbox.
+- [x] **Миграция 0007** (`0007_featured_lead_fields`): `site_listings.is_featured` + индекс; `leads.site_listing_id` FK + `leads.kind`.
+- [x] **E-mail-релей = Resend** (`rentbelgrad.com` верифицирован: DKIM/SPF/DMARC; `smtp.resend.com:587` STARTTLS,
+      `FROM=no-reply@rentbelgrad.com`). Креды (API-ключ `re_…`) — в `/opt/otz/.env` руками, не в гите. `src/site/email.py` — aiosmtplib, релей-агностик.
+- [x] Новые env: `SITE_TELEGRAM_URL`, `SITE_LEAD_EMAIL_TO`, `SITE_SMTP_HOST/PORT/USER/PASSWORD/FROM/STARTTLS`.
+- [x] Тесты 506 passed + 19 skipped; e2e 18. Деплой 21.06 (бэкап `otz-2026-06-21-1245-pre-stagew2.db`), smoke зелёный, боевая заявка дошла (e-mail без ошибок).
+
 ---
 
 ## 8. Риски и открытые вопросы
