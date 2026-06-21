@@ -25,8 +25,8 @@
 {# No external <link> to fonts.googleapis — anti-slop + no hard CDN dependency. #}
 <link rel="preload" href="/static/fonts/golos-text-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/static/fonts/unbounded-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/static/css/tokens.css">
-<link rel="stylesheet" href="/static/css/site.css">
+<link rel="stylesheet" href="/static/css/tokens.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/site.css?v={{ asset_v }}">
 {# Favorites control + counter live across every page; styled here (site.css is frozen for
    this wave). Tokens only — no slop. Heart glyph fills when saved; respects reduced-motion. #}
 <style>
@@ -114,9 +114,9 @@
 </a>
 
 {# htmx is self-hosted (no CDN) — drives the catalog filter swaps + lead form. defer: parse-blocking-free. #}
-<script src="/static/js/htmx.min.js" defer></script>
+<script src="/static/js/htmx.min.js?v={{ asset_v }}" defer></script>
 {# favorites: localStorage only, runs site-wide (counter + card controls). defer so DOM is ready. #}
-<script src="/static/js/favorites.js" defer></script>
+<script src="/static/js/favorites.js?v={{ asset_v }}" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

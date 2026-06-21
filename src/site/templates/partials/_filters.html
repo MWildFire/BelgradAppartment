@@ -87,6 +87,6 @@
   <noscript><button type="submit" class="btn ox apply">Показать</button></noscript>
 </form>
 {# Progressive enhancement only (debounce, clear-all, label sync). Form works without it. #}
-<script src="/static/js/filters.js" defer></script>
+<script src="/static/js/filters.js?v={{ asset_v }}" defer></script>
 {# F2: searchable район combobox over the native <select multiple>. No-JS uses the select. #}
-<script src="/static/js/combobox.js" defer></script>
+<script src="/static/js/combobox.js?v={{ asset_v }}" defer></script>

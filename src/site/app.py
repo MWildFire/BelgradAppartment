@@ -11,6 +11,7 @@ for a DictLoader stub, so the app must not create a second Jinja2Templates insta
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -58,6 +59,26 @@ templates.env.globals["telegram_url"] = get_settings().site_telegram_url
 # F2: район dropdowns (hero combobox + filter rail) read this curated Cyrillic superset.
 # Registered as a global so templates need no per-route context for the static option list.
 templates.env.globals["district_options"] = district_options()
+
+
+def _asset_version() -> str:
+    """Content hash over the local css+js bundle → cache-busting token for /static URLs.
+
+    Caddy serves /static as `immutable, max-age=1y`, which is only safe with fingerprinted
+    URLs — otherwise a deploy that changes site.css/map.js never reaches browsers that cached
+    the old bytes. Templates append `?v={{ asset_v }}`; the token changes iff any css/js changes,
+    so unchanged assets keep their long cache and changed ones bust. Computed once per process
+    (a deploy restarts otz-site, recomputing it).
+    """
+    h = hashlib.sha1()
+    for path in sorted(STATIC_DIR.rglob("*")):
+        if path.is_file() and path.suffix in (".css", ".js"):
+            h.update(path.read_bytes())
+    return h.hexdigest()[:10]
+
+
+# Cache-busting token appended to local /static asset URLs (see _asset_version).
+templates.env.globals["asset_v"] = _asset_version()
 
 
 @asynccontextmanager
