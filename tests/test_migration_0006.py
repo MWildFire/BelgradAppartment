@@ -57,10 +57,16 @@ def _seed_match(con: sqlite3.Connection) -> int:
     return 1
 
 
+# 0006 is no longer the tip (0007 follows it), so target this revision explicitly
+# instead of "head" / "-1" — keeps these tests pinned to the 0006↔0005 boundary.
+REV = "0006_site_listings_leads"
+PREV = "0005_indexes_dedup_metrics"
+
+
 def test_upgrade_0006_creates_tables_indexes_defaults(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, REV)
 
     con = sqlite3.connect(db_path)
     con.execute("PRAGMA foreign_keys=ON")
@@ -108,14 +114,14 @@ def test_upgrade_0006_creates_tables_indexes_defaults(tmp_path: Path) -> None:
 def test_downgrade_0006_drops_tables(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, REV)
 
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, PREV)
 
     con = sqlite3.connect(db_path)
     assert (
         con.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        == "0005_indexes_dedup_metrics"
+        == PREV
     )
     tables = {
         r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -134,16 +140,17 @@ def test_models_match_migration_ddl() -> None:
     Base.metadata.create_all(engine)
     insp = inspect(engine)
 
+    # Subset (not ==): later migrations (0007+) add more columns; assert 0006's are present.
     site_cols = {c["name"] for c in insp.get_columns("site_listings")}
-    assert site_cols == {
+    assert {
         "id", "match_id", "is_public", "is_for_vnj", "is_for_white_card",
         "channel_post_url", "note", "created_at", "updated_at",
-    }
+    } <= site_cols
     lead_cols = {c["name"] for c in insp.get_columns("leads")}
-    assert lead_cols == {
+    assert {
         "id", "created_at", "name", "contact", "budget_eur",
         "districts", "rooms", "message", "source", "status",
-    }
+    } <= lead_cols
     site_idx = {ix["name"] for ix in insp.get_indexes("site_listings")}
     assert "ix_site_listings_is_public" in site_idx
     lead_idx = {ix["name"] for ix in insp.get_indexes("leads")}

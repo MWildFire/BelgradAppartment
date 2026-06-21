@@ -266,6 +266,12 @@ class SiteListing(Base):
     __tablename__ = "site_listings"
     __table_args__ = (
         Index("ix_site_listings_is_public", "is_public"),
+        # Partial index: only the tiny featured set is indexed — fast «квартира недели» lookup.
+        Index(
+            "ix_site_listings_featured",
+            "is_featured",
+            sqlite_where=text("is_featured = 1"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -273,6 +279,9 @@ class SiteListing(Base):
         ForeignKey("matches.id", ondelete="CASCADE"), unique=True, nullable=False
     )
     is_public: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_featured: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=False
+    )
     is_for_vnj: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_for_white_card: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     channel_post_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -299,5 +308,13 @@ class Lead(Base):
     districts: Mapped[str | None] = mapped_column(Text, nullable=True)
     rooms: Mapped[str | None] = mapped_column(Text, nullable=True)
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Optional link to a specific apartment the lead is about; SET NULL keeps the lead if it's gone.
+    site_listing_id: Mapped[int | None] = mapped_column(
+        ForeignKey("site_listings.id", ondelete="SET NULL"), nullable=True
+    )
+    # general | listing | subscription — drives which notice/e-mail body is rendered.
+    kind: Mapped[str] = mapped_column(
+        Text, default="general", server_default="general", nullable=False
+    )
     source: Mapped[str] = mapped_column(Text, default="site", server_default="site", nullable=False)
     status: Mapped[str] = mapped_column(Text, default="new", server_default="new", nullable=False)
