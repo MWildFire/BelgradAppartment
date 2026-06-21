@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from src.admin.auth import require_admin
@@ -23,7 +24,7 @@ from src.db import (
     SourceChannel,
     get_session,
 )
-from src.db.models import DailyMetrics, Lead, SiteListing
+from src.db.models import DailyMetrics, Lead, SiteListing, utcnow
 from src.post import render_post
 
 logger = logging.getLogger(__name__)
@@ -51,35 +52,78 @@ async def queue_view(request: Request, _: str = Depends(require_admin)) -> HTMLR
     )
 
 
+# Retention: a listing live on the public site this long should come down (warn-first, no auto-delete).
+SITE_RETENTION_DAYS = 21
+# Time windows for the «Опубликованные» list — «за неделю» for the one-time catch-up, «все» for everything.
+_PUBLISHED_WINDOWS = {"week": 7, "3weeks": 21, "all": None}
+
+
 @router.get("/published", response_class=HTMLResponse)
-async def published_view(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+async def published_view(
+    request: Request,
+    window: str = Query("3weeks"),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    """Delivered candidates + per-flat site controls — Дарья's real curation surface.
+
+    /queue only holds PENDING matches, but delivery flips every match to PUBLISHED, so the
+    candidates live here. Each row exposes the SiteListing toggles («На сайт» / «Квартира недели» /
+    flags / note), whether it's live on the site, whether the source is «снято» (is_active=0), and
+    a «пора убрать» flag once it has been on the site ≥ SITE_RETENTION_DAYS.
+    """
+    window = window if window in _PUBLISHED_WINDOWS else "3weeks"
+    days = _PUBLISHED_WINDOWS[window]
+    # SQLite returns naive datetimes; use naive-UTC `now` so age subtraction doesn't mix awareness.
+    now = utcnow().replace(tzinfo=None)
     async with get_session() as s:
-        rows = (
-            await s.execute(
-                select(PublishedPost)
-                .options(
-                    selectinload(PublishedPost.match)
-                    .selectinload(Match.listing)
-                )
-                .order_by(PublishedPost.published_at.desc())
-                .limit(200)
-            )
-        ).scalars().all()
+        stmt = (
+            select(PublishedPost)
+            .options(selectinload(PublishedPost.match).selectinload(Match.listing))
+            .order_by(PublishedPost.published_at.desc())
+            .limit(300)
+        )
+        if days is not None:
+            stmt = stmt.where(PublishedPost.published_at >= now - timedelta(days=days))
+        rows = (await s.execute(stmt)).scalars().all()
+        match_ids = [p.match_id for p in rows if p.match_id]
+        site_by_match: dict[int, SiteListing] = {}
+        if match_ids:
+            sl_rows = (
+                await s.execute(select(SiteListing).where(SiteListing.match_id.in_(match_ids)))
+            ).scalars().all()
+            site_by_match = {sl.match_id: sl for sl in sl_rows}
         items = []
         for p in rows:
             listing = p.match.listing if p.match else None
+            site = site_by_match.get(p.match_id)
+            live = bool(site and site.is_public)
+            # Age counts from when it was put on the site (created_at), only while it IS live.
+            age_days = (now - site.created_at).days if (site is not None and live) else None
             items.append({
-                "id": p.id,
+                "match_id": p.match_id,
                 "tg_message_id": p.tg_message_id,
                 "published_at": p.published_at,
-                "post_text": p.post_text,
                 "platform": listing.platform.value if listing else "—",
                 "listing_url": listing.url if listing else None,
                 "price_eur": listing.price_eur if listing else None,
                 "area_m2": listing.area_m2 if listing else None,
+                "district": listing.district if listing else None,
+                "is_rented": bool(listing and not listing.is_active),
+                "site": site,
+                "live": live,
+                "age_days": age_days,
+                "overdue": age_days is not None and age_days >= SITE_RETENTION_DAYS,
             })
     return templates.TemplateResponse(
-        request, "published.html", {"items": items, "active_nav": "published"}
+        request,
+        "published.html",
+        {
+            "items": items,
+            "active_nav": "published",
+            "window": window,
+            "windows": list(_PUBLISHED_WINDOWS.keys()),
+            "retention_days": SITE_RETENTION_DAYS,
+        },
     )
 
 
@@ -254,13 +298,24 @@ async def site_toggle_featured(
     _: str = Depends(require_admin),
     __: None = Depends(require_csrf),
 ) -> HTMLResponse:
-    """«Квартира недели» flag. Upserts the overlay and flips is_featured idempotently.
-    Creating via this toggle never runs the text-parse and leaves other fields at their
-    DB defaults (is_public True, flags False)."""
+    """«Квартира недели» flag — EXCLUSIVE: at most one featured listing at a time.
+
+    Turning a listing on first clears is_featured on every OTHER overlay (so the hero card is
+    deterministic), then sets this one. Turning off just clears this one. Upsert; creating via
+    this toggle never runs the text-parse and leaves other fields at their DB defaults."""
     async with get_session() as s:
         await _require_match(s, match_id)
         site, _created = await get_or_create_site_listing(s, match_id)
-        site.is_featured = not site.is_featured
+        if site.is_featured:
+            site.is_featured = False
+        else:
+            # Exclusivity: demote any other currently-featured listing before promoting this one.
+            await s.execute(
+                update(SiteListing)
+                .where(SiteListing.id != site.id, SiteListing.is_featured.is_(True))
+                .values(is_featured=False)
+            )
+            site.is_featured = True
     return _site_controls(request, match_id, site)
 
 

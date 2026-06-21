@@ -76,6 +76,27 @@
     .error-box { padding: 10px 14px; border-radius: 6px; background: #fde2e2; color: var(--red); font-size: 13px; }
     .ok-box { padding: 10px 14px; border-radius: 6px; background: #dff5e9; color: var(--green); font-size: 13px; }
     pre.raw-text { white-space: pre-wrap; background: #fafbfc; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; max-height: 140px; overflow: auto; }
+    .muted { color: var(--muted); }
+    .badge-grey { background: #eceef1; color: var(--muted); }
+    /* site-publish controls (shared by /queue and /published) — make the on-state obvious. */
+    .site-controls { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .site-controls-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+    .site-controls-label { color: var(--muted); font-size: 12px; }
+    .btn-toggle { padding: 5px 10px; font-size: 13px; }
+    .btn-toggle.is-on { background: var(--green); color: #fff; border-color: var(--green); }
+    .btn-toggle.is-on:hover { background: #158a55; }
+    .site-meta-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .site-meta-form input { padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font: inherit; min-width: 180px; }
+    /* /published curation list */
+    .window-filter { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
+    .chip { padding: 4px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--card); color: var(--muted); }
+    .chip.is-on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .chip:hover { text-decoration: none; }
+    .pub-list { display: grid; gap: 12px; }
+    .pub-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; box-shadow: var(--shadow); }
+    .pub-card.is-overdue { border-color: var(--red); }
+    .pub-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .pub-head .pub-date { margin-left: auto; }
   </style>
 </head>
 <!-- hx-headers is inherited by every htmx request on the page → CSRF on all hx-post -->

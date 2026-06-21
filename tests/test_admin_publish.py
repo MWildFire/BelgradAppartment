@@ -365,3 +365,63 @@ async def test_queue_card_shows_site_toggles(client, db):
     assert "/site/toggle-featured" in r.text
     assert "На сайт" in r.text
     assert "Квартира недели" in r.text
+
+
+# --------------------------------------------------------------------------- W2 follow-up: exclusivity + /published controls
+
+
+@pytest.mark.asyncio
+async def test_toggle_featured_is_exclusive(client, db):
+    """«Квартира недели» is exclusive: featuring one clears any other featured listing."""
+    async with db() as s:
+        ch = SourceChannel(tg_id=-1002, username="srcchan2", is_active=True)
+        s.add(ch)
+        await s.flush()
+        ids = []
+        for i in (1, 2):
+            lst = Listing(
+                platform=Platform.NEKRETNINE, external_id=f"feat{i}", url=f"https://x/{i}",
+                price_eur=800, photo_urls=["u"], photo_phashes=["00"],
+            )
+            ib = InboundPost(
+                source_channel_id=ch.id, tg_message_id=100 + i, raw_text="",
+                photo_paths=["/tmp/a.jpg"], photo_phashes=["00"], status=InboundStatus.MATCHED,
+            )
+            s.add_all([lst, ib])
+            await s.flush()
+            m = Match(
+                inbound_post_id=ib.id, listing_id=lst.id, confidence=0.7,
+                matched_photo_count=1, method="phash", status=MatchStatus.PUBLISHED,
+            )
+            s.add(m)
+            await s.flush()
+            ids.append(m.id)
+        await s.commit()
+    a, b = ids
+
+    client.post(f"/match/{a}/site/toggle-featured", headers={**AUTH, **CSRF})
+    assert (await _site_listing(db, a)).is_featured is True
+
+    # featuring B must demote A — at most one featured at a time
+    client.post(f"/match/{b}/site/toggle-featured", headers={**AUTH, **CSRF})
+    assert (await _site_listing(db, b)).is_featured is True
+    assert (await _site_listing(db, a)).is_featured is False
+
+
+@pytest.mark.asyncio
+async def test_published_page_shows_controls_and_status(client, db):
+    """/published renders the per-flat site controls, the live badge, and the window filter."""
+    from src.db.models import PublishedPost
+
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)
+    client.post(f"/match/{match_id}/site/toggle-public", headers={**AUTH, **CSRF})  # put it on the site
+    async with db() as s:
+        s.add(PublishedPost(match_id=match_id, tg_message_id=999, post_text="x"))
+        await s.commit()
+
+    r = client.get("/published", headers=AUTH)
+    assert r.status_code == 200
+    html = r.text
+    assert "На сайт" in html and "Квартира недели" in html       # controls present
+    assert "за неделю" in html and "за 3 недели" in html         # window filter
+    assert "на сайте" in html                                    # live badge (we toggled public)

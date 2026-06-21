@@ -1,33 +1,43 @@
 {% extends "base.html" %}
-{% block title %}Доставлено — otz-rent-finder{% endblock %}
+{% block title %}Опубликованные — otz-rent-finder{% endblock %}
 {% block content %}
-<h1>Доставлено в Saved Messages</h1>
+<h1>Опубликованные квартиры</h1>
+<p class="muted">Доставленные кандидаты. «На сайт» выводит квартиру в публичный каталог rentbelgrad.com,
+«Квартира недели» — в карточку на главной (одновременно может быть только одна). Квартиры на сайте
+дольше {{ retention_days }} дней помечаются «пора убрать» — снимайте их кнопкой «На сайт».</p>
+
+<div class="window-filter">
+  <span class="muted">Период:</span>
+  {% set labels = {'week': 'за неделю', '3weeks': 'за 3 недели', 'all': 'все'} %}
+  {% for w in windows %}
+    <a class="chip{{ ' is-on' if w == window else '' }}" href="/published?window={{ w }}">{{ labels[w] }}</a>
+  {% endfor %}
+</div>
+
 {% if not items %}
-  <div class="empty">Кандидаты ещё не доставлялись. При новом посте в @OtzRentBelgrad готовый шаблон автоматически прилетит вам в Saved Messages.</div>
+  <div class="empty">За выбранный период доставленных кандидатов нет.</div>
 {% else %}
-<table>
-  <thead>
-    <tr>
-      <th>Когда</th>
-      <th>Платформа</th>
-      <th>Цена</th>
-      <th>Площадь</th>
-      <th>Saved msg</th>
-      <th>Listing</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for it in items %}
-    <tr>
-      <td>{{ it.published_at.strftime('%Y-%m-%d %H:%M') }}</td>
-      <td><span class="badge badge-yellow">{{ it.platform }}</span></td>
-      <td>{{ it.price_eur or '—' }} EUR</td>
-      <td>{{ '%g' % it.area_m2 if it.area_m2 else '—' }} м²</td>
-      <td>#{{ it.tg_message_id }}</td>
-      <td>{% if it.listing_url %}<a href="{{ it.listing_url }}" target="_blank">↗</a>{% else %}—{% endif %}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<div class="pub-list">
+  {% for it in items %}
+  <div class="pub-card{{ ' is-overdue' if it.overdue else '' }}">
+    <div class="pub-head">
+      <span class="badge badge-yellow">{{ it.platform }}</span>
+      <strong>{{ it.price_eur or '—' }} €</strong>
+      <span class="muted">{{ '%g м²' % it.area_m2 if it.area_m2 else '' }}{% if it.district %} · {{ it.district }}{% endif %}</span>
+      {% if it.live %}<span class="badge badge-green">на сайте</span>{% endif %}
+      {% if it.is_rented %}<span class="badge badge-grey">снято</span>{% endif %}
+      {% if it.overdue %}
+        <span class="badge badge-red">пора убрать · {{ it.age_days }} дн.</span>
+      {% elif it.live and it.age_days is not none %}
+        <span class="muted">{{ it.age_days }} дн. на сайте</span>
+      {% endif %}
+      <span class="muted pub-date">{{ it.published_at.strftime('%Y-%m-%d %H:%M') }}{% if it.listing_url %} · <a href="{{ it.listing_url }}" target="_blank" rel="noopener">источник ↗</a>{% endif %}</span>
+    </div>
+    {% if it.match_id %}
+      {% with match_id = it.match_id, site = it.site %}{% include "_site_controls.html" %}{% endwith %}
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
 {% endif %}
 {% endblock %}

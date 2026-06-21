@@ -1158,6 +1158,18 @@ def weekly_refresh_alias(
     asyncio.run(_nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape))
 
 
+@cli.command("site-retention-notice")
+def site_retention_notice() -> None:
+    """Send the «пора убрать» notice for site listings older than the retention window.
+
+    The same step the nightly job runs; exposed for manual/ad-hoc runs and testing. No-op when
+    nothing is overdue. Reuses the bot recipients (Дарья + оператор)."""
+    from src.site.retention import send_overdue_notice
+
+    n = asyncio.run(send_overdue_notice())
+    click.echo(f"retention: {n} overdue listing(s)" + (" — notice sent" if n else " — nothing to send"))
+
+
 async def _nightly_refresh(
     max_pages: int, inactive_after_days: int, skip_sweep: bool, skip_scrape: bool
 ) -> None:
@@ -1238,6 +1250,16 @@ async def _nightly_refresh(
     except Exception:
         logging.getLogger(__name__).exception("nightly step failed: price-drop")
         price_line = "🚨 price-drop шаг упал — см. логи"
+
+    # Stage W2 retention (warn-first): notify Дарью + оператора of flats live on the public site
+    # >= 3 weeks so they can take them down in the admin. Fault-isolated — never kills nightly.
+    try:
+        from src.site.retention import send_overdue_notice
+        n_overdue = await send_overdue_notice()
+        if n_overdue:
+            click.echo(f"  retention: {n_overdue} listing(s) overdue — notice sent")
+    except Exception:
+        logging.getLogger(__name__).exception("nightly step failed: site-retention")
 
     elapsed = _time.monotonic() - started
     total_new = sum(r.inserted for r in results)
