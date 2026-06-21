@@ -10,6 +10,28 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.-3 Post-launch + admin/curation (21.06.2026) — 🚀 ВСЁ В ПРОДЕ
+
+> **Самый свежий handoff.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-21.md`](docs/web/SESSION_HANDOFF_2026-06-21.md).
+> `main` @ `dd1f534`, запушено в `origin`.
+
+После запуска Stage W2 (см. §0.-2) — серия фиксов и недостающая инфраструктура админки/курирования:
+- **Фиксы сайта:** район-combobox (был обрезан `overflow:hidden`), карта рендерит пустой Белград, нав-доводка,
+  **fingerprint `/static?v=`** (иначе immutable-кэш Caddy не пускал деплои в браузеры), адаптив 320–1920px без
+  горизонтального оверфлоу, и фикс карточки **«Квартира недели»** (`<a>` collapse → `.hero-photo{display:block}`).
+- **Админка задеплоена** (`otz-admin.service` + `admin.rentbelgrad.com`, Caddy/HTTPS + Basic-auth, fail-closed;
+  DNS A добавлена, cert выпущен). Это была причина «Дарья опубликовала — на сайте пусто»: админка (единственный
+  путь публикации на сайт) раньше не была развёрнута. `SITE_CACHE_TTL` 300→**60с**.
+- **Курирование на `/published`** (`/queue` пуст by design — delivery сразу метит PUBLISHED): кнопки «На сайт»/
+  «Квартира недели»/флаги/заметка + бейджи «на сайте»/«снято»/возраст + фильтр неделя/3 недели/все.
+  «Квартира недели» **эксклюзивна** (одна за раз). **Ретеншн 3 недели, warn-first** (без авто-удаления):
+  бейдж «пора убрать» ≥21д + ночной Telegram-нотис Дарье+оператору (`src/site/retention.py`,
+  hook в `nightly-refresh`; вручную: `cli site-retention-notice`).
+- **Состояние прода:** `otz-monitor`/`otz-site`/`otz-admin` active, alembic 0007, **45 публичных листингов**
+  (Дарья активно публикует). Лид-почта через **Resend**.
+- ⚠️ **Ротировать:** Resend-ключ (`SITE_SMTP_PASSWORD`) и `ADMIN_PASSWORD` — оба светились в чате; живут только в
+  `/opt/otz/.env`. Открытое: featured-карточка может быть «снято» (оба ранних листинга rented) — курирование Дарьи.
+
 ### 0.-2 Этап W2 «Conversion & Polish» (21.06.2026) — 🚀 ЗАПУЩЕН на https://rentbelgrad.com
 
 > Самый свежий handoff. План: `docs/superpowers/plans/2026-06-21-web-conversion-polish.md`;
