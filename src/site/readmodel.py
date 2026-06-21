@@ -122,6 +122,7 @@ async def _load_rows(database_url: str | None) -> list[_Row]:
 
 
 def _rooms_matches(rooms_raw: float | None, wanted: list[str]) -> bool:
+    wanted = [w for w in wanted if w.strip()]  # blank entries = no filter (defensive)
     if not wanted:
         return True
     r = rooms_raw

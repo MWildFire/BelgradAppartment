@@ -114,8 +114,12 @@ async def _seed(url: str) -> None:
         s.add(PublishedPost(id=1, match_id=1, tg_message_id=999, post_text="x",
                             published_at=_dt(10)))
 
+        # id=1 is also is_featured → drives the «квартира недели» hero side-card (W3-2).
+        # It's public + active + has coords + a €600 price, so the featured card renders a
+        # concrete apartment (price + /apt/1 link), not the «скоро здесь» placeholder.
         s.add(SiteListing(id=1, match_id=1, is_public=True, is_for_vnj=True,
-                          is_for_white_card=False, created_at=_dt(5), updated_at=_dt(5)))
+                          is_for_white_card=False, is_featured=True,
+                          created_at=_dt(5), updated_at=_dt(5)))
         s.add(SiteListing(id=2, match_id=2, is_public=True, is_for_vnj=False,
                           is_for_white_card=True, created_at=_dt(6), updated_at=_dt(6)))
         s.add(SiteListing(id=3, match_id=3, is_public=True, is_for_vnj=False,

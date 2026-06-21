@@ -55,10 +55,12 @@ def _parse_filters(request: Request) -> tuple[Filters, str, int]:
     filters = Filters(
         vnj=qp.get("vnj") == "1",
         wc=qp.get("wc") == "1",
-        district=qp.getlist("district"),
+        # The hero/filters forms submit empty district=/rooms= for unfilled fields; an empty
+        # string is "no filter", not a value that matches nothing — strip blanks here.
+        district=[d for d in qp.getlist("district") if d.strip()],
         price_min=price_min,
         price_max=price_max,
-        rooms=qp.getlist("rooms"),
+        rooms=[r for r in qp.getlist("rooms") if r.strip()],
         show_rented=qp.get("show_rented") == "1",
     )
     return filters, sort, max(page, 1)

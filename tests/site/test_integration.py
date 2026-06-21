@@ -185,6 +185,19 @@ def test_catalog_vnj_narrows_to_vnj_only(client):
     _no_listing_url_leaks(html)
 
 
+def test_catalog_empty_filter_params_are_ignored_not_zero(client):
+    # W5-1 bug: the hero/filter forms submit empty district=/rooms=/price_max= for unfilled
+    # fields. Those must mean "no filter", not "match nothing" — else a district-only search
+    # returned 0. Врачар has two public listings (id1 €600, id3 €500 rented-but-shown).
+    r = client.get("/catalog", params=[("district", "Врачар"), ("rooms", ""), ("price_max", "")])
+    assert r.status_code == 200
+    html = r.text
+    assert "€600" in html and "€500" in html  # both Врачар public listings, not 0
+    assert "€800" not in html  # Нови Београд excluded by the district filter
+    assert re.search(r'class="mono">2</span>\s*квартир', html)  # 2, not 0
+    _no_listing_url_leaks(html)
+
+
 def test_catalog_hx_request_returns_results_partial_only(client):
     r = client.get("/catalog", headers={"HX-Request": "true"})
     assert r.status_code == 200
