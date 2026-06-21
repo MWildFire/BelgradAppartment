@@ -12,6 +12,7 @@ price with €, ВНЖ badge, channel link, «снято» badge, lead-form hone
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,6 +88,20 @@ def test_base_has_no_external_font_link() -> None:
 
 
 # -------------------------------------------------------------------------- index
+def test_index_hero_headline_is_klyuchi_ot_belgrada() -> None:
+    """F1 (DECISIONS-W2): hero <h1> reads «Ключи от Белграда»; the old
+    «по-человечески» headline (and its manual <br> hack) is gone. Subheading kept."""
+    html = _render(
+        "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF
+    )
+    # «Белграда» carries the oxblood .ox accent span, so the headline is split by
+    # inline markup — assert on the visible text (tags stripped), not raw HTML.
+    visible = re.sub(r"<[^>]+>", "", html).lower()
+    assert "ключи от белграда" in visible
+    assert "по-человеческ" not in visible
+    assert "Помогаем релокантам" in html  # hero-lede subheading unchanged
+
+
 def test_index_renders_featured_and_stats() -> None:
     html = _render(
         "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF
