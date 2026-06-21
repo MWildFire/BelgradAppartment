@@ -1,0 +1,35 @@
+# otz-admin.service — внутренняя FastAPI-админка (очередь, публикация на сайт «На сайт»/«Mark-posted»).
+# Положить в /etc/systemd/system/otz-admin.service на VPS, затем:
+#   systemctl daemon-reload && systemctl enable --now otz-admin.service
+# Слушает только localhost:8000 — наружу выставляет Caddy (admin.rentbelgrad.com) с HTTPS.
+# Доступ защищён HTTP Basic-auth (ADMIN_USERNAME / ADMIN_PASSWORD из .env; fail-closed на default).
+
+[Unit]
+Description=otz-rent-finder admin UI (FastAPI/uvicorn)
+After=network-online.target
+Wants=network-online.target
+# Один алерт в бот при падении (паттерн этапа H1, без крэш-лупа):
+OnFailure=otz-notify-failure@%n.service
+
+[Service]
+Type=simple
+User=otz
+Group=otz
+WorkingDirectory=/opt/otz
+EnvironmentFile=/opt/otz/.env
+# --workers 1: CSRF-токен админки per-process (src/admin/csrf.py); несколько воркеров → случайные 403.
+# --proxy-headers + --forwarded-allow-ips 127.0.0.1: доверяем только петлевому Caddy (реальный IP клиента).
+ExecStart=/opt/otz/.venv/bin/uvicorn src.admin.app:app --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=5
+# Не уходить в бесконечный рестарт-луп на фатальной ошибке конфигурации:
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Лёгкий sandbox (админка читает БД + пишет site_listings/leads/match-status):
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

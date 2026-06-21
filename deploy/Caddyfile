@@ -1,10 +1,27 @@
 # Caddyfile — публичный сайт rentbelgrad.com (Stage W). ЭТО БОЕВОЙ КОНФИГ (развёрнут 20.06.2026).
 # Лежит в /etc/caddy/Caddyfile на VPS. Caddy сам выпускает/продлевает TLS (Let's Encrypt):
 # нужны DNS A-записи rentbelgrad.com + www.rentbelgrad.com -> 90.156.254.159 и открытые 80/443 (ufw).
-# Админка (:8000) здесь НЕ проксируется — остаётся localhost-only. После правок: systemctl reload caddy.
+# admin.rentbelgrad.com -> внутренняя админка (:8000) за HTTP Basic-auth (ADMIN_USERNAME/ADMIN_PASSWORD);
+# требует DNS A-записи admin.rentbelgrad.com -> 90.156.254.159 (иначе Caddy не выпустит TLS). После правок: systemctl reload caddy.
 
 www.rentbelgrad.com {
     redir https://rentbelgrad.com{uri} permanent
+}
+
+# Внутренняя админка Дарьи: публикация квартир на сайт («На сайт»/«Mark-posted»), очередь, метрики.
+# Аутентификация — на стороне приложения (HTTP Basic, fail-closed на дефолтном пароле). Caddy лишь
+# проксирует всё на otz-admin.service (:8000) и добавляет HTTPS + anti-clickjacking-заголовки.
+# CSP не ставим: админка тянет HTMX с unpkg и Chart.js с jsdelivr, а доступ и так за логином.
+admin.rentbelgrad.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:8000
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
 }
 
 rentbelgrad.com {
