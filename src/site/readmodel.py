@@ -190,6 +190,49 @@ async def get_public(
     return None
 
 
+async def featured_one(*, database_url: str | None = None) -> SiteListingView | None:
+    """The «квартира недели»: newest public+featured; else newest public; else None.
+
+    Reuses the same hydration as the catalog (_load_rows builds full SiteListingViews),
+    then picks within Python — the public set is small and we need the is_featured flag,
+    which _Row doesn't carry, so we re-derive it from the source rows here.
+    """
+    stmt = (
+        select(SiteListing.id, SiteListing.is_featured)
+        .where(SiteListing.is_public.is_(True))
+    )
+    async with sitedb.read_session(database_url=database_url) as s:
+        featured_ids = {
+            sl_id for sl_id, is_featured in (await s.execute(stmt)).all() if is_featured
+        }
+
+    rows = await _load_rows(database_url)
+    if not rows:
+        return None
+    # Newest first; a featured row outranks any non-featured one regardless of recency.
+    rows.sort(key=lambda r: (r.view.id in featured_ids, r.posted_dt), reverse=True)
+    return rows[0].view
+
+
+async def apartment_summary(
+    site_listing_id: int, *, database_url: str | None = None
+) -> dict[str, object] | None:
+    """Compact apartment summary for the lead e-mail/notice — None if missing or not public.
+
+    Privacy: _load_rows is already scoped to is_public, so a private/missing id yields None.
+    """
+    view = await get_public(site_listing_id, database_url=database_url)
+    if view is None:
+        return None
+    return {
+        "id": view.id,
+        "price_eur": view.price_eur,
+        "district": view.district,
+        "area_m2": view.area_m2,
+        "url": f"/apt/{view.id}",
+    }
+
+
 async def facets(*, database_url: str | None = None) -> Facets:
     rows = await _load_rows(database_url)
     district_counts: dict[str, int] = {}
