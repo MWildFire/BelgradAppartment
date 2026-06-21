@@ -16,6 +16,7 @@ from sqlalchemy.exc import OperationalError
 
 from src.db.models import Lead
 from src.site.db import writer_session
+from src.site.email import send_lead_email
 from src.telegram.delivery import send_text_to_recipients
 
 logger = logging.getLogger(__name__)
@@ -116,6 +117,14 @@ async def create_lead(payload: LeadPayload, *, database_url: str | None = None) 
 
     _validate(payload)
     lead = await _insert_lead(payload, database_url)
+
+    # Deliver to both channels, e-mail FIRST then the bot notice. The lead is already committed,
+    # so each channel is best-effort: a failure is logged (no secrets) and never propagates —
+    # the visitor always gets success, and one channel failing never blocks the other.
+    try:
+        await send_lead_email(payload)
+    except Exception:  # e-mail is non-fatal: lead is already persisted
+        logger.exception("lead e-mail failed to send — lead %s still saved", lead.id)
 
     try:
         await send_text_to_recipients(None, _format_notice(payload))
