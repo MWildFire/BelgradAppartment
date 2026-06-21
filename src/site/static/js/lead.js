@@ -53,8 +53,21 @@
     return firstBad === null;
   }
 
+  // Pre-fill the hidden site_listing_id from the apartment context, if any. The server-rendered
+  // value (apt.html sets it from item.id) wins; this only fills a still-empty field, e.g. when
+  // the form is reused without that context. Empty stays empty → a general (homepage) lead.
+  function applyApartmentContext(form) {
+    var hidden = form.querySelector('[name="site_listing_id"]');
+    if (!hidden || hidden.value) return; // already carries an id (server-rendered) — leave it
+    // nearest ancestor that declares the apartment id (the <section data-site-listing-id>)
+    var holder = form.closest("[data-site-listing-id]");
+    var id = holder ? holder.getAttribute("data-site-listing-id") : "";
+    if (id) hidden.value = id;
+  }
+
   function wire(form) {
     form.setAttribute("novalidate", "novalidate"); // own the messaging; no native bubbles
+    applyApartmentContext(form);
 
     // htmx fires this before the request; cancel it if client validation fails.
     form.addEventListener("htmx:configRequest", function (e) {
@@ -88,4 +101,18 @@
   }
 
   document.querySelectorAll("form.lead").forEach(wire);
+
+  // «Оставить заявку на эту квартиру» on the detail page: native #lead jump scrolls to the
+  // form; we additionally focus the first field and (re)assert the apartment id on the form.
+  document.querySelectorAll("[data-lead-cta]").forEach(function (cta) {
+    cta.addEventListener("click", function () {
+      var form = document.querySelector("form.lead");
+      if (!form) return;
+      var id = cta.getAttribute("data-site-listing-id");
+      var hidden = form.querySelector('[name="site_listing_id"]');
+      if (hidden && id) hidden.value = id;
+      var name = form.querySelector('[name="name"]');
+      if (name) name.focus();
+    });
+  });
 })();

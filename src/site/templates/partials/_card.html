@@ -31,4 +31,7 @@
       </div>
     </div>
   </a>
+  {# CTA for THIS apartment — sibling of the card link (not nested, keeps HTML valid).
+     Goes to the detail page anchored at the lead form, which carries item.id. #}
+  <a class="card-cta" href="/apt/{{ item.id }}#lead">Оставить заявку на эту квартиру</a>
 </article>

@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy.exc import OperationalError
 
 from src.db.models import Lead
 from src.site.db import writer_session
 from src.site.email import send_lead_email
+from src.site.readmodel import apartment_summary
 from src.telegram.delivery import send_text_to_recipients
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,10 @@ class LeadPayload:
     rooms: str | None = None
     message: str | None = None
     company: str | None = None  # honeypot: real users never see/fill it
+    # Optional id of the apartment this lead is about. Public-only: a private/missing id is
+    # validated away in create_lead (apartment_summary returns None) and never persisted.
+    site_listing_id: int | None = None
+    kind: str = "general"  # general | listing — set to 'listing' once the apartment resolves
 
 
 def _validate(payload: LeadPayload) -> None:
@@ -64,13 +69,22 @@ def _validate(payload: LeadPayload) -> None:
         raise LeadValidationError("message must be <= 2000 characters")
 
 
-def _format_notice(payload: LeadPayload) -> str:
+def _format_notice(payload: LeadPayload, apartment: dict[str, object] | None = None) -> str:
     budget = f"{payload.budget_eur}€" if payload.budget_eur is not None else "—"
     districts = (payload.districts or "").strip() or "—"
-    return (
+    text = (
         f"📩 Новая заявка с сайта: {payload.name.strip()}, "
         f"бюджет {budget}, районы {districts}, контакт {payload.contact.strip()}"
     )
+    # Public apartment summary (from W3 onward) — append a compact «Квартира» line. The url is
+    # the site's own /apt/{id}, never a площадка link, so the notice never leaks a source.
+    if apartment:
+        price = apartment.get("price_eur")
+        a_district = apartment.get("district") or "—"
+        url = apartment.get("url") or "—"
+        price_str = f"{price}€" if price is not None else "—"
+        text += f"\nКвартира: {price_str}, {a_district}, {url}"
+    return text
 
 
 async def _insert_lead(payload: LeadPayload, database_url: str | None) -> Lead:
@@ -86,6 +100,8 @@ async def _insert_lead(payload: LeadPayload, database_url: str | None) -> Lead:
                     districts=payload.districts,
                     rooms=payload.rooms,
                     message=payload.message,
+                    site_listing_id=payload.site_listing_id,
+                    kind=payload.kind,
                     source="site",
                     status="new",
                 )
@@ -116,18 +132,30 @@ async def create_lead(payload: LeadPayload, *, database_url: str | None = None) 
         return None
 
     _validate(payload)
+
+    # Resolve the apartment, if one was named. apartment_summary is public-only, so a private
+    # or missing id yields None → we DEGRADE to a general lead: drop the id and keep kind
+    # 'general'. A private/non-existent apartment is never persisted, e-mailed, or notified.
+    apartment: dict[str, object] | None = None
+    if payload.site_listing_id is not None:
+        apartment = await apartment_summary(payload.site_listing_id, database_url=database_url)
+    if apartment is not None:
+        payload = replace(payload, kind="listing")
+    else:
+        payload = replace(payload, site_listing_id=None, kind="general")
+
     lead = await _insert_lead(payload, database_url)
 
     # Deliver to both channels, e-mail FIRST then the bot notice. The lead is already committed,
     # so each channel is best-effort: a failure is logged (no secrets) and never propagates —
     # the visitor always gets success, and one channel failing never blocks the other.
     try:
-        await send_lead_email(payload)
+        await send_lead_email(payload, apartment=apartment)
     except Exception:  # e-mail is non-fatal: lead is already persisted
         logger.exception("lead e-mail failed to send — lead %s still saved", lead.id)
 
     try:
-        await send_text_to_recipients(None, _format_notice(payload))
+        await send_text_to_recipients(None, _format_notice(payload, apartment))
     except Exception:  # notice is non-fatal: lead is already persisted
         logger.exception("lead notice failed to send — lead %s still saved", lead.id)
 

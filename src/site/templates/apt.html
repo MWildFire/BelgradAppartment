@@ -74,7 +74,9 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path class="fill" d="M12 20.5 4.3 12.9a4.6 4.6 0 0 1 6.5-6.5l1.2 1.2 1.2-1.2a4.6 4.6 0 0 1 6.5 6.5z"/></svg>
         </button>
       </div>
-      <a class="btn ox" href="#lead">Записаться на просмотр</a>
+      {# CTA for THIS apartment — scrolls to the on-page lead form, which carries item.id
+         (hidden site_listing_id). lead.js also reads data-site-listing-id as a fallback. #}
+      <a class="btn ox" href="#lead" data-lead-cta data-site-listing-id="{{ item.id }}">Оставить заявку на эту квартиру</a>
       {# link to the channel post (a channel URL, never a площадка) #}
       <a class="btn ghost" href="{{ item.channel_url }}" rel="noopener">Открыть в Telegram</a>
       <div class="bullets">
@@ -98,7 +100,9 @@
 </section>
 
 <!-- LEAD FORM -->
-<section class="bay wrap">
-  {% include "partials/_lead_form.html" %}
+{# the form's hidden site_listing_id is pre-filled from item.id, so a lead from this page is
+   bound to THIS apartment (a private/missing id degrades to a general lead server-side). #}
+<section class="bay wrap" data-site-listing-id="{{ item.id }}">
+  {% with site_listing_id = item.id %}{% include "partials/_lead_form.html" %}{% endwith %}
 </section>
 {% endblock %}

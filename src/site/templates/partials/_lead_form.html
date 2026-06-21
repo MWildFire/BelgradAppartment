@@ -10,6 +10,11 @@
   {# CSRF — synchronizer token, same field name as admin #}
   <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">
 
+  {# Carries a specific apartment id when the form is opened from a card/detail (W3-1).
+     Empty on the general homepage form; lead.js also populates it from #lead?apt or the
+     page's data-site-listing-id when present. A private/missing id degrades server-side. #}
+  <input type="hidden" name="site_listing_id" value="{{ site_listing_id|default('') }}">
+
   {# honeypot: humans never see/fill it; bots that fill it are silently dropped #}
   <div class="hp" aria-hidden="true">
     <label for="company">Не заполняйте это поле</label>

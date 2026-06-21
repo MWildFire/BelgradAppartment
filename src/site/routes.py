@@ -257,10 +257,13 @@ async def lead(
     rooms: str = Form(""),
     message: str = Form(""),
     company: str = Form(""),  # honeypot — real users never see/fill it
+    site_listing_id: str = Form(""),  # set when the form is opened for a specific apartment
     _csrf: None = Depends(require_site_csrf),
     _rl: None = Depends(enforce_lead_ratelimit),
     db_url: str = Depends(catalog_db_url),
 ) -> Response:
+    # The id is just a hint here — public/existence validation (and degradation to a general
+    # lead for a private/missing id) happens in create_lead via apartment_summary.
     payload = LeadPayload(
         name=name,
         contact=contact,
@@ -269,6 +272,7 @@ async def lead(
         rooms=rooms or None,
         message=message or None,
         company=company or None,
+        site_listing_id=_as_int(site_listing_id),
     )
     try:
         await create_lead(payload, database_url=db_url)

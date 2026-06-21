@@ -79,6 +79,32 @@ def _csrf_form(**extra) -> dict[str, str]:
     return {CSRF_FORM_FIELD: SITE_CSRF_TOKEN, **extra}
 
 
+def _fetch_leads_sync(client) -> list[dict]:
+    """Read persisted leads from the DB behind the client's catalog_db_url override.
+
+    The route module is exercised synchronously via TestClient; this drives a short-lived
+    async read on the same seeded file DB to assert what create_lead actually wrote.
+    """
+    import asyncio
+
+    from sqlalchemy import select
+
+    from src.db.models import Lead
+    from src.site import db as sitedb
+
+    url = client.app.dependency_overrides[catalog_db_url]()
+
+    async def _go() -> list[dict]:
+        async with sitedb.read_session(database_url=url) as s:
+            rows = (await s.execute(select(Lead).order_by(Lead.id))).scalars().all()
+            return [
+                {"id": r.id, "kind": r.kind, "site_listing_id": r.site_listing_id, "name": r.name}
+                for r in rows
+            ]
+
+    return asyncio.run(_go())
+
+
 # ============================================================== unit: cache.py
 
 
@@ -373,6 +399,88 @@ def test_lead_valid_non_hx_redirects(client, monkeypatch):
     assert r.headers["location"] == "/?lead=ok"
 
 
+def test_lead_forwards_site_listing_id_to_create_lead(client, monkeypatch):
+    received = {}
+
+    async def fake_create(payload, *, database_url=None):
+        received["payload"] = payload
+        return object()
+
+    monkeypatch.setattr(routes, "create_lead", fake_create)
+    r = client.post(
+        "/lead",
+        data=_csrf_form(name="Пётр", contact="@petr", site_listing_id="1"),
+        headers={"HX-Request": "true"},
+    )
+    assert r.status_code == 200
+    assert received["payload"].site_listing_id == 1
+
+
+def test_lead_blank_site_listing_id_is_none(client, monkeypatch):
+    received = {}
+
+    async def fake_create(payload, *, database_url=None):
+        received["payload"] = payload
+        return object()
+
+    monkeypatch.setattr(routes, "create_lead", fake_create)
+    # general form (homepage) submits an empty hidden field — must not break, id stays None.
+    client.post("/lead", data=_csrf_form(name="A", contact="t", site_listing_id=""))
+    assert received["payload"].site_listing_id is None
+
+
+def test_lead_non_int_site_listing_id_is_none(client, monkeypatch):
+    received = {}
+
+    async def fake_create(payload, *, database_url=None):
+        received["payload"] = payload
+        return object()
+
+    monkeypatch.setattr(routes, "create_lead", fake_create)
+    client.post("/lead", data=_csrf_form(name="A", contact="t", site_listing_id="abc"))
+    assert received["payload"].site_listing_id is None
+
+
+def test_lead_public_listing_persists_as_listing_kind(client):
+    # End-to-end against the seeded DB: a public id -> kind='listing' + id stored.
+    from unittest.mock import AsyncMock, patch
+
+    with (
+        patch("src.site.email.aiosmtplib.send", new=AsyncMock()),
+        patch("src.site.leads.send_text_to_recipients", new=AsyncMock()),
+    ):
+        r = client.post(
+            "/lead",
+            data=_csrf_form(name="Пётр", contact="@petr", site_listing_id="1"),
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    leads = _fetch_leads_sync(client)
+    assert len(leads) == 1
+    assert leads[0]["kind"] == "listing"
+    assert leads[0]["site_listing_id"] == 1
+
+
+def test_lead_private_listing_persists_as_general(client):
+    # site_listing 4 is private -> degrade to a general lead, id NOT stored (never leaked).
+    from unittest.mock import AsyncMock, patch
+
+    with (
+        patch("src.site.email.aiosmtplib.send", new=AsyncMock()),
+        patch("src.site.leads.send_text_to_recipients", new=AsyncMock()),
+    ):
+        r = client.post(
+            "/lead",
+            data=_csrf_form(name="Bot", contact="@b", site_listing_id="4"),
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    leads = _fetch_leads_sync(client)
+    assert len(leads) == 1
+    assert leads[0]["kind"] == "general"
+    assert leads[0]["site_listing_id"] is None
+
+
 def test_lead_validation_error_is_400(client, monkeypatch):
     async def fake_create(payload, *, database_url=None):
         from src.site.leads import LeadValidationError
@@ -409,3 +517,71 @@ def test_lead_rate_limit_blocks_after_max(client, monkeypatch):
 def test_map_json_is_serializable(client):
     r = client.get("/api/map.json")
     json.loads(r.text)  # raises if not valid JSON
+
+
+# ============================================================== templates: lead CTA + hidden id (real markup)
+
+
+class _FakeItem:
+    """Minimal stand-in for SiteListingView for direct template rendering."""
+
+    id = 42
+    price_eur = 600
+    area_m2 = 45.0
+    rooms = "2 комнаты"
+    floor = None
+    district = "Врачар"
+    address = None
+    lat = 44.8
+    lon = 20.47
+    for_vnj = True
+    for_white_card = False
+    is_rented = False
+    photos: list[str] = []
+    note = None
+    channel_url = "https://t.me/OtzRentBelgrad/1"
+    posted_at = "2026-06-10T12:00:00+00:00"
+
+
+def _real_env():
+    from pathlib import Path
+
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    tpl_dir = Path(__file__).resolve().parents[2] / "src" / "site" / "templates"
+    env = Environment(
+        loader=FileSystemLoader(str(tpl_dir)),
+        autoescape=select_autoescape(["html"]),
+    )
+    env.globals["csrf_token"] = "tkn"
+    env.globals["site_base_url"] = "https://rent.example.com"
+    env.filters.setdefault("urlencode", lambda s: str(s))
+    return env
+
+
+def test_lead_form_has_hidden_site_listing_id():
+    html = _real_env().get_template("partials/_lead_form.html").render(site_listing_id=42)
+    assert 'name="site_listing_id"' in html
+    assert 'value="42"' in html
+
+
+def test_lead_form_hidden_id_empty_by_default():
+    # the general homepage form carries no id -> empty value, still POSTs fine.
+    html = _real_env().get_template("partials/_lead_form.html").render()
+    assert 'name="site_listing_id"' in html
+    assert 'name="site_listing_id" value=""' in html
+
+
+def test_card_has_listing_lead_cta_with_id():
+    html = _real_env().get_template("partials/_card.html").render(item=_FakeItem())
+    assert "Оставить заявку на эту квартиру" in html
+    assert "/apt/42#lead" in html
+
+
+def test_apt_page_has_listing_lead_cta_and_prefilled_form():
+    html = _real_env().get_template("apt.html").render(item=_FakeItem(), similar=[])
+    assert "Оставить заявку на эту квартиру" in html
+    # the CTA carries the apartment id for lead.js
+    assert 'data-site-listing-id="42"' in html
+    # the included lead form's hidden field is pre-filled from item.id
+    assert 'name="site_listing_id" value="42"' in html

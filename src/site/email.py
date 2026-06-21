@@ -43,11 +43,15 @@ def _build_message(payload: LeadPayload, apartment: dict[str, Any] | None) -> Em
         f"Комнаты: {rooms}",
         f"Сообщение: {message}",
     ]
-    # apartment is a dict summary (used from W3 onward) — append a compact listing block.
+    # apartment is a readmodel.apartment_summary dict (W3 onward): keys id/price_eur/district/
+    # area_m2/url. The url is the site's own /apt/{id}, made absolute via site_public_base_url
+    # when configured — never a площадка/CDN URL.
     if apartment:
-        price = apartment.get("price")
+        price = apartment.get("price_eur")
         a_district = apartment.get("district") or "—"
-        url = apartment.get("url") or "—"
+        rel_url = str(apartment.get("url") or "")
+        base = (settings.site_public_base_url or "").rstrip("/")
+        url = f"{base}{rel_url}" if base and rel_url.startswith("/") else (rel_url or "—")
         price_str = f"{price}€" if price is not None else "—"
         lines += ["", f"Квартира: {price_str}, {a_district}, {url}"]
 

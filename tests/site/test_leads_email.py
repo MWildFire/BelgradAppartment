@@ -74,6 +74,109 @@ async def test_valid_lead_emails_and_notifies(site_db: str, smtp_configured: Non
 
 
 @pytest.mark.asyncio
+async def test_listing_lead_email_carries_apartment_block(
+    site_db: str, smtp_configured: None
+) -> None:
+    # site_listing 1 is public (Vracar -> Врачар, 600€). A lead about it must e-mail the
+    # «Квартира» block and persist kind='listing' + the site_listing_id.
+    payload = LeadPayload(name="Пётр", contact="@petr", site_listing_id=1)
+    smtp_send = AsyncMock()
+    with (
+        patch("src.site.email.aiosmtplib.send", new=smtp_send),
+        patch("src.site.leads.send_text_to_recipients", new=AsyncMock()) as mock_bot,
+    ):
+        lead = await create_lead(payload, database_url=site_db)
+
+    assert lead is not None
+    smtp_send.assert_awaited_once()
+    msg = smtp_send.await_args.args[0]
+    body = msg.get_content() if not msg.is_multipart() else msg.get_body(("plain",)).get_content()
+    assert "Квартира" in body
+    assert "600" in body
+    assert "Врачар" in body
+    assert "/apt/1" in body
+    # never a площадка / remote URL
+    assert "http://x/1" not in body
+    assert "cdn" not in body
+
+    # bot notice mentions the apartment too
+    notice = mock_bot.await_args.args[1]
+    assert "Квартира" in notice
+    assert "600" in notice
+
+    rows = await _fetch_leads(site_db)
+    assert len(rows) == 1
+    assert rows[0].kind == "listing"
+    assert rows[0].site_listing_id == 1
+
+
+@pytest.mark.asyncio
+async def test_general_lead_email_has_no_apartment_block(
+    site_db: str, smtp_configured: None
+) -> None:
+    payload = LeadPayload(name="Иван", contact="@ivan", budget_eur=700)
+    smtp_send = AsyncMock()
+    with (
+        patch("src.site.email.aiosmtplib.send", new=smtp_send),
+        patch("src.site.leads.send_text_to_recipients", new=AsyncMock()) as mock_bot,
+    ):
+        lead = await create_lead(payload, database_url=site_db)
+
+    assert lead is not None
+    msg = smtp_send.await_args.args[0]
+    body = msg.get_content() if not msg.is_multipart() else msg.get_body(("plain",)).get_content()
+    assert "Квартира" not in body
+    notice = mock_bot.await_args.args[1]
+    assert "Квартира" not in notice
+    rows = await _fetch_leads(site_db)
+    assert rows[0].kind == "general"
+    assert rows[0].site_listing_id is None
+
+
+@pytest.mark.asyncio
+async def test_private_listing_id_degrades_to_general_lead(
+    site_db: str, smtp_configured: None
+) -> None:
+    # site_listing 4 is is_public=False -> apartment_summary returns None -> general lead,
+    # the private apartment is NEVER attached or leaked into the e-mail/notice.
+    payload = LeadPayload(name="Bot", contact="@b", site_listing_id=4)
+    smtp_send = AsyncMock()
+    with (
+        patch("src.site.email.aiosmtplib.send", new=smtp_send),
+        patch("src.site.leads.send_text_to_recipients", new=AsyncMock()) as mock_bot,
+    ):
+        lead = await create_lead(payload, database_url=site_db)
+
+    assert lead is not None
+    msg = smtp_send.await_args.args[0]
+    body = msg.get_content() if not msg.is_multipart() else msg.get_body(("plain",)).get_content()
+    assert "Квартира" not in body
+    notice = mock_bot.await_args.args[1]
+    assert "Квартира" not in notice
+    rows = await _fetch_leads(site_db)
+    assert rows[0].kind == "general"
+    assert rows[0].site_listing_id is None
+
+
+@pytest.mark.asyncio
+async def test_missing_listing_id_degrades_to_general_lead(
+    site_db: str, smtp_configured: None
+) -> None:
+    payload = LeadPayload(name="Х", contact="@x", site_listing_id=9999)
+    smtp_send = AsyncMock()
+    with (
+        patch("src.site.email.aiosmtplib.send", new=smtp_send),
+        patch("src.site.leads.send_text_to_recipients", new=AsyncMock()),
+    ):
+        lead = await create_lead(payload, database_url=site_db)
+
+    assert lead is not None
+    rows = await _fetch_leads(site_db)
+    assert rows[0].kind == "general"
+    assert rows[0].site_listing_id is None
+
+
+@pytest.mark.asyncio
 async def test_smtp_failure_does_not_propagate_lead_still_saved(
     site_db: str, smtp_configured: None
 ) -> None:
