@@ -8,6 +8,7 @@ no network involved. Fixtures are captured from the post-migration Next.js site 
 from __future__ import annotations
 
 import json
+import re
 
 import httpx
 import pytest
@@ -28,6 +29,26 @@ def test_parse_list_returns_unique_listings(nekretnine_list_html: str) -> None:
         assert p.platform is Platform.NEKRETNINE
         assert "/oglasi/" in p.url
         assert p.external_id and p.external_id.isdigit()  # new IDs are numeric
+
+
+def test_parse_list_uses_canonical_numeric_url(nekretnine_list_html: str) -> None:
+    previews = NekretnineScraper.parse_list(nekretnine_list_html)
+    assert previews, "list page should yield previews"
+    for p in previews:
+        # URL must be slug-independent: /oglasi/<digits>/ with NOTHING after the id. The
+        # platform periodically rewrites slugs, so a stored slug-URL 404s while the listing
+        # is still live; the canonical numeric form is immune.
+        assert re.fullmatch(r"https://www\.nekretnine\.rs/oglasi/\d+/", p.url), p.url
+
+
+def test_parse_list_drops_slug_url_in_favour_of_canonical() -> None:
+    # seo.url is a SLUG form — the parser must ignore it and emit the canonical numeric URL,
+    # keeping the slug anchor only as the title.
+    html = _list_html_slug([468187])
+    previews = NekretnineScraper.parse_list(html)
+    assert len(previews) == 1
+    assert previews[0].url == "https://www.nekretnine.rs/oglasi/468187/"
+    assert previews[0].external_id == "468187"
 
 
 def test_parse_list_handles_missing_payload() -> None:
@@ -119,6 +140,29 @@ def _list_html(ids: list[int], max_pages: int = 99, total_ads: int | None = None
                 "dehydratedState": {
                     "queries": [{"state": {"data": payload}}]
                 }
+            }
+        }
+    }
+    blob = json.dumps(data)
+    return f'<html><body><script id="__NEXT_DATA__" type="application/json">{blob}</script></body></html>'
+
+
+def _list_html_slug(ids: list[int]) -> str:
+    """Like _list_html but seo.url is the SLUG form the platform actually serves."""
+    results = [
+        {
+            "realEstate": {"id": i, "title": f"Stan {i}"},
+            "seo": {
+                "url": f"https://www.nekretnine.rs/oglasi/{i}/dvosobni-stan-obrenovac/",
+                "anchor": f"Stan {i}",
+            },
+        }
+        for i in ids
+    ]
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {"queries": [{"state": {"data": {"results": results}}}]}
             }
         }
     }

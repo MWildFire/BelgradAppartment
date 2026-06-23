@@ -183,6 +183,12 @@ async def _process_one(
             stmt = select(Listing).where(Listing.id == existing.id)
             row = (await session.execute(stmt)).scalar_one()
             row.last_seen_at = datetime.now(timezone.utc)
+            # Self-heal stale URLs: the platform can rewrite a listing's slug/URL while the
+            # listing stays in the search results (matched by external_id). The preview URL is
+            # the source of truth (now canonical numeric form) — adopt it so the stored link
+            # never goes 404 on the site / in match cards.
+            if url and row.url != url:
+                row.url = url
             # Reactivate: a listing we just saw on the platform is live again. Without this, a
             # listing wrongly swept inactive (e.g. after a transient scrape outage) would stay
             # is_active=False forever even though it's back — and the matcher only considers
@@ -377,6 +383,7 @@ class DetailRefetchStats:
     updated: int = 0
     photos: int = 0
     errors: int = 0
+    deactivated: int = 0  # rows flipped is_active=False on a 404/410 (listing removed)
     skipped: int = 0  # rows left unprocessed when the wall-clock budget (deadline) ran out
     price_changes: list[PriceChange] = field(default_factory=list)  # see PriceChange
 
@@ -465,7 +472,19 @@ async def refetch_listing_details(
                             "[refetch %s] #%s (%s) failed: %s: %s",
                             plat.value, row.id, row.url, type(e).__name__, e,
                         )
-                        if touch_on_error:
+                        status = getattr(getattr(e, "response", None), "status_code", None)
+                        if status in (404, 410):
+                            # Listing removed from the platform — deactivate so we never serve a
+                            # broken link (instead of merely bumping the refresh timer).
+                            async with get_session() as s:
+                                await s.execute(
+                                    update(Listing)
+                                    .where(Listing.id == row.id)
+                                    .values(is_active=False)
+                                )
+                            stats.deactivated += 1
+                            logger.info("[refetch %s] #%s → %s, deactivated", plat.value, row.id, status)
+                        elif touch_on_error:
                             async with get_session() as s:
                                 await s.execute(
                                     update(Listing)

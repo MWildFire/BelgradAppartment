@@ -2414,6 +2414,67 @@ async def _notify_failure(service: str, reason: str | None) -> None:
             await client.disconnect()
 
 
+@cli.command("heal-urls")
+@click.option("--platform", default="nekretnine", show_default=True,
+              help="Platform whose stored URLs to canonicalise.")
+@click.option("--dry-run/--no-dry-run", default=True, show_default=True,
+              help="Dry-run prints the diff without writing. --no-dry-run applies the rewrite.")
+def heal_urls(platform: str, dry_run: bool) -> None:
+    """Rewrite stored nekretnine slug-URLs to the canonical numeric /oglasi/<id>/ form.
+
+    The platform periodically rewrites a listing's slug while the listing stays live, so a
+    stored slug-URL 404s. The numeric form is slug-independent. One-off prod heal; the nightly
+    walk also self-heals on re-seen rows.
+    """
+    healed = asyncio.run(_heal_urls(platform=platform, dry_run=dry_run))
+    verb = "would heal" if dry_run else "healed"
+    click.echo(f"=== {verb} {healed} {platform} URL(s) ===")
+
+
+def _canonical_url(platform: Platform, external_id: str) -> str | None:
+    """Canonical slug-independent URL for a listing, or None if the platform has no rule."""
+    if platform is Platform.NEKRETNINE:
+        from src.scrapers.nekretnine import BASE_URL
+
+        return f"{BASE_URL}/oglasi/{external_id}/"
+    return None
+
+
+async def _heal_urls(*, platform: str, dry_run: bool) -> int:
+    """Rewrite non-canonical stored URLs for `platform`; return the number of rows healed.
+
+    In dry-run nothing is written (only the diff is printed). Returns the count either way.
+    """
+    from sqlalchemy import update
+
+    from src.db.session import get_session
+
+    plat = PLATFORM_NAMES[platform.lower()]
+
+    async with get_session() as s:
+        rows = (
+            await s.execute(
+                select(Listing.id, Listing.external_id, Listing.url).where(
+                    Listing.platform == plat
+                )
+            )
+        ).all()
+
+    healed = 0
+    for lid, external_id, url in rows:
+        canonical = _canonical_url(plat, external_id)
+        if canonical is None or url == canonical:
+            continue
+        healed += 1
+        if dry_run:
+            click.echo(f"  {url}  →  {canonical}")
+            continue
+        async with get_session() as s:
+            await s.execute(update(Listing).where(Listing.id == lid).values(url=canonical))
+
+    return healed
+
+
 def main() -> None:
     try:
         cli()

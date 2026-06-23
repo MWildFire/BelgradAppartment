@@ -367,9 +367,11 @@ class NekretnineScraper(Scraper):
             if not external_id or external_id in seen:
                 continue
             seo = result.get("seo") if isinstance(result.get("seo"), dict) else {}
-            url = seo.get("url")
-            if not isinstance(url, str) or not url:
-                url = f"{BASE_URL}/oglasi/{external_id}/"
+            # Canonical numeric URL — slug-independent. The platform periodically rewrites the
+            # slug part of seo.url (/oglasi/<id>/<slug>/), so a stored slug-URL 404s while the
+            # listing is still live. The numeric form /oglasi/<id>/ is immune. Keep the slug
+            # anchor/title only as the human-readable title.
+            url = f"{BASE_URL}/oglasi/{external_id}/"
             title = real_estate.get("title") or seo.get("anchor")
             seen.add(external_id)
             previews.append(
