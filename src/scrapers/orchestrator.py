@@ -27,7 +27,7 @@ from sqlalchemy import func, select, update
 
 from src.config import get_settings
 from src.db import Listing, get_session
-from src.db.models import DailyMetrics, Match, MatchStatus, Platform
+from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, Scraper
 
@@ -416,6 +416,8 @@ class LinkVerifyStats:
     deactivated: int = 0
     errors: int = 0
     skipped: int = 0
+    # X2: public cards auto-hidden because their listing 404/410'd (is_public was True).
+    site_listings_hidden: int = 0
 
 
 # A HEAD that comes back 404/410 means the listing is definitively gone — deactivate it. Every
@@ -423,6 +425,37 @@ class LinkVerifyStats:
 # 5xx server hiccups) is inconclusive: we must never deactivate a live listing on a transient
 # or anti-bot response.
 _DEAD_LINK_STATUSES = frozenset({404, 410})
+
+
+async def hide_site_listings_for_listing(session: Any, listing_id: int) -> int:
+    """X2 auto-remove: hide every public card for a listing the platform removed.
+
+    `UPDATE site_listings SET is_public=False, is_featured=False WHERE is_public=True AND
+    match_id IN (SELECT id FROM matches WHERE listing_id=:lid)`. Returns the rowcount.
+    Idempotent via `WHERE is_public=True` (an already-hidden card yields 0, no churn) and
+    clears is_featured so a hidden card is never left as the «квартира недели» hero.
+
+    Runs in the CALLER's session so it commits atomically with the is_active=False flip —
+    the listing and its public card never diverge.
+    """
+    result = await session.execute(
+        update(SiteListing)
+        .where(
+            SiteListing.is_public.is_(True),
+            SiteListing.match_id.in_(
+                select(Match.id).where(Match.listing_id == listing_id)
+            ),
+        )
+        .values(is_public=False, is_featured=False)
+    )
+    hidden = result.rowcount or 0
+    if hidden:
+        # is_public changed → bust the in-process read-model cache so the card disappears at
+        # once (cross-process: a running site relies on site_cache_ttl — see cache docstring).
+        from src.site.cache import invalidate_catalog_cache
+
+        invalidate_catalog_cache()
+    return hidden
 
 
 async def verify_active_links(
@@ -502,6 +535,12 @@ async def verify_active_links(
                 await s.execute(
                     update(Listing).where(Listing.id == row.id).values(is_active=False)
                 )
+                # X2 auto-remove: hide the public card(s) in the SAME transaction so the
+                # listing and its card flip atomically (gated by the kill switch).
+                if get_settings().nightly_auto_hide_site_listings:
+                    hidden = await hide_site_listings_for_listing(s, row.id)
+                    if hidden:
+                        stats.site_listings_hidden += hidden
             stats.deactivated += 1
             logger.info("[verify-links] #%s → %s, deactivated", row.id, resp.status_code)
         elif resp.status_code >= 400:
@@ -542,6 +581,57 @@ async def verify_active_links(
         platform.value if platform else "all",
     )
     return stats
+
+
+# ------------------------------------------------------------------ auto-publish backfill (X1)
+
+
+async def auto_publish_new_listings(
+    *, since_hours: int = 24, limit: int | None = None
+) -> int:
+    """X1 backfill: expose recently-delivered matches that lack a public card.
+
+    Selects PUBLISHED matches created within `since_hours` that HAVE a PublishedPost (i.e.
+    actually sent to the channel) AND no SiteListing overlay yet, then runs the shared
+    auto_publish_site_listing helper for each (creating a public card with parsed flags).
+    Returns the number of cards created. A safety net for the delivery-path hook: anything
+    the hot-path hook missed (kill switch was on, a helper exception, an older deploy) gets
+    swept up here. Already-exposed matches are skipped (idempotent).
+    """
+    from src.admin.publish import auto_publish_site_listing
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+    async with get_session() as s:
+        stmt = (
+            select(Match.id)
+            .where(
+                Match.status == MatchStatus.PUBLISHED,
+                Match.created_at >= cutoff,
+                select(PublishedPost.id)
+                .where(PublishedPost.match_id == Match.id)
+                .exists(),
+                ~select(SiteListing.id)
+                .where(SiteListing.match_id == Match.id)
+                .exists(),
+            )
+            .order_by(Match.id)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        match_ids = [row[0] for row in (await s.execute(stmt)).all()]
+
+        created_count = 0
+        for match_id in match_ids:
+            _row, created = await auto_publish_site_listing(s, match_id)
+            if created:
+                created_count += 1
+        await s.commit()
+
+    logger.info(
+        "[auto-publish] exposed %d new public card(s) (since_hours=%d)",
+        created_count, since_hours,
+    )
+    return created_count
 
 
 # ------------------------------------------------------------------ nightly maintenance steps

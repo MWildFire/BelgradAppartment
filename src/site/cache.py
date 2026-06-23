@@ -108,3 +108,18 @@ def normalize_catalog_key(params: dict[str, Any]) -> tuple[tuple[str, Any], ...]
 catalog_cache = TTLCache()
 facets_cache = TTLCache()
 map_cache = TTLCache()
+
+
+def invalidate_catalog_cache() -> None:
+    """Clear all three read-model caches in THIS process.
+
+    Called whenever a SiteListing's visibility changes (auto-publish / auto-hide) so the
+    flip shows up immediately for same-process callers. NOTE the cross-process limitation:
+    the site runs as a separate long-lived process from the nightly orchestrator / Telegram
+    delivery CLI, so this in-process clear does NOT reach a running site — there, staleness
+    is bounded only by site_cache_ttl (default 300s = 5 min, i.e. ≤ a few minutes). That TTL
+    is the cross-process freshness guarantee; this call is the same-process fast path.
+    """
+    catalog_cache.clear()
+    facets_cache.clear()
+    map_cache.clear()

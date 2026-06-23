@@ -14,11 +14,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from telethon import TelegramClient
 
+from src.admin.publish import auto_publish_site_listing
 from src.config import get_settings
 from src.db import (
     InboundPost,
     Listing,
     Match,
+    MatchStatus,
     PublishedPost,
     get_session,
     resolve_post_send_status,
@@ -202,6 +204,14 @@ async def _send_match_via_userbot(
             s.add(published)
         # PENDING→PUBLISHED only: never resurrect a REJECTED set by a human mid-send.
         m.status = resolve_post_send_status(m.status)
+        # X1 auto-publish (userbot path): mirror the bot path — expose on the site in THIS
+        # session, only when the match actually became PUBLISHED and the kill switch is on,
+        # fully fault-isolated so auto-publish can NEVER break a delivery.
+        if m.status == MatchStatus.PUBLISHED and get_settings().auto_publish_on_send:
+            try:
+                await auto_publish_site_listing(s, match_id)
+            except Exception:
+                logger.exception("[auto-publish] match=%d: auto-publish failed (delivery kept)", match_id)
         await s.flush()
         await s.refresh(published)
         recipient_label = getattr(recipient, "username", None) or "me/SavedMessages"

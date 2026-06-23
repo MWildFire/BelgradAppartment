@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     nightly_verify_links: bool = True  # NIGHTLY_VERIFY_LINKS=0 → skip the liveness sweep
     nightly_verify_links_limit: int = 1000  # cap listings HEAD-checked per night
     nightly_metrics: bool = True  # NIGHTLY_METRICS=0 → skip daily_metrics snapshot + drop alert
+    # X1 auto-publish: when a match is delivered (PENDING→PUBLISHED), auto-expose its card on
+    # the site. auto_publish_on_send is the runtime kill switch on the delivery hot path (set
+    # AUTO_PUBLISH_ON_SEND=0 to revert to manual curation); nightly_auto_publish backfills any
+    # delivered-but-not-yet-exposed matches in the nightly run.
+    auto_publish_on_send: bool = True  # AUTO_PUBLISH_ON_SEND=0 → never auto-expose on send
+    nightly_auto_publish: bool = True  # NIGHTLY_AUTO_PUBLISH=0 → skip the auto-publish backfill
+    # X2 auto-remove: when verify-links deactivates a listing the platform removed (404/410),
+    # auto-hide its public card in the SAME transaction (NIGHTLY_AUTO_HIDE_SITE_LISTINGS=0 → skip).
+    nightly_auto_hide_site_listings: bool = True
     # Wall-clock budget SHARED by heal+rolling: once exhausted both stop and report skipped rows,
     # so a night of slow Cloudflare-challenged refetches can't overrun (the 2026-06-16 SIGTERM).
     nightly_refetch_budget_sec: int = 7200  # 2h

@@ -20,11 +20,13 @@ from aiogram.types import FSInputFile, InputMediaPhoto
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from src.admin.publish import auto_publish_site_listing
 from src.config import get_settings
 from src.db import (
     InboundPost,
     Listing,
     Match,
+    MatchStatus,
     PublishedPost,
     get_session,
     resolve_post_send_status,
@@ -206,6 +208,14 @@ async def send_match_via_bot(
             s.add(published)
         # PENDING→PUBLISHED only: never resurrect a REJECTED set by a human mid-send.
         m.status = resolve_post_send_status(m.status)
+        # X1 auto-publish: expose the card on the site in THIS session — but only when the
+        # match actually became PUBLISHED (a REJECTED-mid-send must never surface), and only
+        # if the kill switch is on. Fully fault-isolated: auto-publish must NEVER break a send.
+        if m.status == MatchStatus.PUBLISHED and get_settings().auto_publish_on_send:
+            try:
+                await auto_publish_site_listing(s, match_id)
+            except Exception:
+                logger.exception("[auto-publish] match=%d: auto-publish failed (delivery kept)", match_id)
         await s.flush()
         await s.refresh(published)
         return published

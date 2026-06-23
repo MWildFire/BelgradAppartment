@@ -13,7 +13,7 @@ import unicodedata
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.db.models import SiteListing
+from src.db.models import InboundPost, Match, SiteListing
 
 # Raw keyword lists exactly as DECISIONS.md #2. Both the text and these keywords go
 # through _normalise before substring-matching, so diacritics/case/script line up
@@ -94,3 +94,32 @@ async def get_or_create_site_listing(
     session.add(row)
     await session.flush()
     return row, True
+
+
+async def auto_publish_site_listing(
+    session: AsyncSession, match_id: int
+) -> tuple[SiteListing, bool]:
+    """Single source of truth for create-time defaulting (X1 auto-publish).
+
+    Idempotent upsert via get_or_create_site_listing. ON CREATE ONLY, loads the match's
+    InboundPost and derives is_for_vnj / is_for_white_card from its raw text — exactly the
+    mark-posted default (DECISIONS #3): is_public stays the DB default True. An EXISTING
+    overlay is returned untouched (created=False) so Дарья's manual curation is never
+    clobbered. Caller commits.
+    """
+    row, created = await get_or_create_site_listing(session, match_id)
+    if created:
+        match = await session.get(Match, match_id)
+        inbound = (
+            await session.get(InboundPost, match.inbound_post_id)
+            if match is not None
+            else None
+        )
+        raw = inbound.raw_text if inbound is not None else None
+        row.is_for_vnj, row.is_for_white_card = parse_relocation_flags(raw)
+        # New public card → bust the in-process read-model cache so it shows up at once
+        # (cross-process: the site relies on site_cache_ttl, see cache.invalidate docstring).
+        from src.site.cache import invalidate_catalog_cache
+
+        invalidate_catalog_cache()
+    return row, created

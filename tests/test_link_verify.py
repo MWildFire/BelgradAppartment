@@ -26,9 +26,10 @@ from src.db.models import (
     Match,
     MatchStatus,
     Platform,
+    SiteListing,
     SourceChannel,
 )
-from src.scrapers.orchestrator import verify_active_links
+from src.scrapers.orchestrator import hide_site_listings_for_listing, verify_active_links
 
 import itertools
 
@@ -64,8 +65,15 @@ async def _seed_listing(
     is_active: bool = True,
     with_match: bool = True,
     match_status: MatchStatus = MatchStatus.PENDING,
+    site_listing: bool = False,
+    site_public: bool = True,
+    site_featured: bool = False,
 ) -> int:
-    """Insert a listing (and optionally a match referencing it); return the listing id."""
+    """Insert a listing (and optionally a match + SiteListing overlay); return the listing id.
+
+    `site_listing=True` attaches a SiteListing to the created match (requires with_match),
+    so X2 tests can assert the public card is hidden when the listing is deactivated.
+    """
     async with factory() as s:
         listing = Listing(
             platform=platform,
@@ -92,18 +100,39 @@ async def _seed_listing(
             )
             s.add(ib)
             await s.flush()
-            s.add(
-                Match(
-                    inbound_post_id=ib.id,
-                    listing_id=listing_id,
-                    confidence=0.9,
-                    matched_photo_count=1,
-                    method="phash",
-                    status=match_status,
-                )
+            match = Match(
+                inbound_post_id=ib.id,
+                listing_id=listing_id,
+                confidence=0.9,
+                matched_photo_count=1,
+                method="phash",
+                status=match_status,
             )
+            s.add(match)
+            await s.flush()
+            if site_listing:
+                s.add(
+                    SiteListing(
+                        match_id=match.id,
+                        is_public=site_public,
+                        is_featured=site_featured,
+                    )
+                )
         await s.commit()
     return listing_id
+
+
+async def _site_state(factory, listing_id: int) -> tuple[bool, bool] | None:
+    """Return (is_public, is_featured) for the SiteListing on `listing_id`'s match, or None."""
+    async with factory() as s:
+        row = (
+            await s.execute(
+                select(SiteListing)
+                .join(Match, Match.id == SiteListing.match_id)
+                .where(Match.listing_id == listing_id)
+            )
+        ).scalar_one_or_none()
+        return None if row is None else (row.is_public, row.is_featured)
 
 
 def _client(handler) -> httpx.AsyncClient:
@@ -346,3 +375,190 @@ async def test_published_match_is_selected(factory):
 
     assert stats.checked == 1
     assert await _is_active(factory, lid) is False
+
+
+# --------------------------------------------------------------------------- X2: auto-hide
+
+
+@pytest.mark.asyncio
+async def test_hide_helper_hides_public_card(factory):
+    """The pure hide helper flips is_public/is_featured False for a listing's public cards."""
+    import src.db.session as db_session
+
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/x/", site_listing=True,
+        site_public=True, site_featured=True,
+    )
+    async with db_session.get_session() as s:
+        n = await hide_site_listings_for_listing(s, lid)
+    assert n == 1
+    assert await _site_state(factory, lid) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_hide_helper_invalidates_cache_when_it_hides(factory):
+    """Hiding a card must bust the in-process read-model cache so it disappears at once."""
+    import src.db.session as db_session
+    from src.site import cache
+
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/x/", site_listing=True, site_public=True,
+    )
+    cache.catalog_cache.set(("k",), "v")
+    async with db_session.get_session() as s:
+        await hide_site_listings_for_listing(s, lid)
+    assert cache.catalog_cache.get(("k",)) is cache.MISS
+
+
+@pytest.mark.asyncio
+async def test_hide_helper_no_hide_keeps_cache(factory):
+    """No rows hidden (already hidden) → leave the cache intact."""
+    import src.db.session as db_session
+    from src.site import cache
+
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/x/", site_listing=True, site_public=False,
+    )
+    cache.catalog_cache.set(("k",), "v")
+    async with db_session.get_session() as s:
+        await hide_site_listings_for_listing(s, lid)
+    assert cache.catalog_cache.get(("k",)) == "v"
+
+
+@pytest.mark.asyncio
+async def test_hide_helper_idempotent_on_already_hidden(factory):
+    """A card already hidden (is_public False) yields rowcount 0 — no churn."""
+    import src.db.session as db_session
+
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/x/", site_listing=True, site_public=False,
+    )
+    async with db_session.get_session() as s:
+        n = await hide_site_listings_for_listing(s, lid)
+    assert n == 0
+
+
+@pytest.mark.asyncio
+async def test_404_hides_public_card(factory):
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.deactivated == 1
+    assert stats.site_listings_hidden == 1
+    assert await _is_active(factory, lid) is False
+    assert await _site_state(factory, lid) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_410_hides_public_card(factory):
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(410)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.deactivated == 1
+    assert stats.site_listings_hidden == 1
+    assert await _site_state(factory, lid) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_does_not_hide(factory):
+    """5xx/timeout/403 keep the listing active AND the public card live; hidden==0."""
+    lid500 = await _seed_listing(
+        factory, url="https://x/500/", external_id="a", site_listing=True, site_public=True,
+    )
+    lid403 = await _seed_listing(
+        factory, url="https://x/403/", external_id="b", site_listing=True, site_public=True,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503 if request.url.path == "/500/" else 403)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.deactivated == 0
+    assert stats.site_listings_hidden == 0
+    assert await _is_active(factory, lid500) is True
+    assert await _site_state(factory, lid500) == (True, False)
+    assert await _site_state(factory, lid403) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_404_without_site_listing_no_error(factory):
+    """A deactivated listing with no SiteListing hides nothing and raises nothing."""
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=False,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.deactivated == 1
+    assert stats.site_listings_hidden == 0
+    assert await _is_active(factory, lid) is False
+
+
+@pytest.mark.asyncio
+async def test_404_already_hidden_card_hidden_count_zero(factory):
+    """Re-checking a 404 whose card is already hidden deactivates again but hides nothing."""
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=False,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.deactivated == 1
+    assert stats.site_listings_hidden == 0
+    assert await _site_state(factory, lid) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_404_clears_featured_flag(factory):
+    """A hidden card must never remain the hero — is_featured is cleared too."""
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True,
+        site_public=True, site_featured=True,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    await verify_active_links(client=_client(handler))
+
+    assert await _site_state(factory, lid) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_404_kill_switch_off_leaves_card_public(factory, monkeypatch):
+    """NIGHTLY_AUTO_HIDE_SITE_LISTINGS=0 → 404 deactivates the listing but keeps the card public."""
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "nightly_auto_hide_site_listings", False)
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.deactivated == 1
+    assert stats.site_listings_hidden == 0
+    assert await _is_active(factory, lid) is False
+    assert await _site_state(factory, lid) == (True, False)  # card untouched
