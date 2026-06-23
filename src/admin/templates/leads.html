@@ -11,6 +11,61 @@
   {% endfor %}
 </div>
 
+{# F1 — demand analytics over the WHOLE leads table (independent of the status filter). #}
+{% set f = report.funnel %}
+<div class="card" style="margin-bottom:16px;">
+  <h2 style="font-size:15px; margin:0 0 12px;">Воронка лидов</h2>
+  <table>
+    <thead>
+      <tr><th>Этап</th><th>Кол-во</th><th>Конверсия</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>new (всего)</td><td>{{ f.total }}</td><td>—</td></tr>
+      <tr>
+        <td>дошли до contacted</td>
+        <td>{{ f.contacted + f.closed }}</td>
+        <td>{{ (f.rate_contacted * 100) | round(1) }}%</td>
+      </tr>
+      <tr>
+        <td>closed</td>
+        <td>{{ f.closed }}</td>
+        <td>{{ (f.rate_closed_of_contacted * 100) | round(1) }}% от contacted ·
+            {{ (f.rate_closed * 100) | round(1) }}% от всех</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div style="display:flex; gap:16px; flex-wrap:wrap; margin-bottom:16px;">
+  <div class="card" style="flex:1; min-width:240px;">
+    <h2 style="font-size:15px; margin:0 0 12px;">Спрос по районам</h2>
+    {% if not report.districts %}
+      <div class="empty" style="margin:0;">Районы пока не указывались.</div>
+    {% else %}
+    <table>
+      <thead><tr><th>Район</th><th>Запросов</th></tr></thead>
+      <tbody>
+        {% for name, count in report.districts %}
+        <tr><td>{{ name }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+  <div class="card" style="flex:1; min-width:240px;">
+    <h2 style="font-size:15px; margin:0 0 12px;">Спрос по бюджету (€/мес)</h2>
+    <table>
+      <thead><tr><th>Вилка</th><th>Лидов</th></tr></thead>
+      <tbody>
+        {% for label, count in report.budgets %}
+        <tr><td>{{ label }}</td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 {% if not leads %}
   <div class="empty">Заявок пока нет.</div>
 {% else %}

@@ -1988,6 +1988,43 @@ async def _districts_report(top: int, min_count: int) -> None:
         click.echo(line)
 
 
+@cli.command("leads-report")
+@click.option(
+    "--days", default=None, type=int,
+    help="Only count leads created in the last N days (by created_at). Default: all time.",
+)
+@click.option(
+    "--top", default=30, show_default=True, type=int, help="Show top N requested districts.",
+)
+def leads_report(days: int | None, top: int) -> None:
+    """F1: lead funnel (new→contacted→closed) + district/budget demand for Дарья.
+
+    Read-only aggregation over the `leads` table. The supply/demand mismatch surfaced here
+    (which districts & budgets are most requested) is what to hunt for.
+    """
+    asyncio.run(_leads_report(days, top))
+
+
+async def _leads_report(days: int | None, top: int) -> None:
+    from datetime import timedelta
+
+    from src.admin.leads_report import build_leads_report, format_leads_report
+    from src.db.models import Lead
+    from src.db.session import get_session
+
+    async with get_session() as s:
+        stmt = select(Lead)
+        if days is not None:
+            # SQLite stores naive datetimes; compare against naive-UTC like the admin routes do.
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+            stmt = stmt.where(Lead.created_at >= cutoff)
+        leads = (await s.execute(stmt)).scalars().all()
+
+    window = f"last {days}d" if days is not None else "all time"
+    click.echo(f"# Leads report — {window} — {len(leads)} leads\n")
+    click.echo(format_leads_report(build_leads_report(leads, top_districts=top)))
+
+
 @cli.command("mark-stale")
 @click.option("--days", default=10, show_default=True, help="Inactive threshold in days.")
 @click.option(

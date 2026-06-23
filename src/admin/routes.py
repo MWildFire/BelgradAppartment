@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 
 from src.admin.auth import require_admin
 from src.admin.csrf import CSRF_TOKEN, require_csrf
+from src.admin.leads_report import build_leads_report
 from src.admin.publish import get_or_create_site_listing, parse_relocation_flags
 from src.db import (
     InboundPost,
@@ -389,6 +390,13 @@ async def leads_view(
         if active_filter:
             stmt = stmt.where(Lead.status == active_filter)
         rows = (await s.execute(stmt)).scalars().all()
+        # Demand analytics (F1) always reflect the WHOLE table, not the status-filtered view —
+        # the funnel/district/budget report is about overall demand, not the current sub-list.
+        all_leads = (
+            rows if not active_filter
+            else (await s.execute(select(Lead))).scalars().all()
+        )
+    report = build_leads_report(all_leads)
     return templates.TemplateResponse(
         request,
         "leads.html",
@@ -397,6 +405,7 @@ async def leads_view(
             "active_nav": "leads",
             "active_filter": active_filter,
             "statuses": LEAD_STATUSES,
+            "report": report,
         },
     )
 
