@@ -79,6 +79,19 @@ def _render(name: str, **ctx: object) -> str:
 
 
 # ----------------------------------------------------------------- F5 telegram CTA
+def test_app_registers_whatsapp_and_viber_globals() -> None:
+    """C4: importing src.site.app registers Jinja globals `whatsapp_url` / `viber_url`
+    (= settings.site_whatsapp_url / site_viber_url) on the shared templates env, so the apt
+    page can gate the CTAs on them. Both default to '' (hidden) until a number is configured."""
+    import src.site.app  # noqa: F401 — import side-effect registers the globals
+    from src.config import get_settings
+    from src.site.routes import templates
+
+    settings = get_settings()
+    assert templates.env.globals.get("whatsapp_url") == settings.site_whatsapp_url
+    assert templates.env.globals.get("viber_url") == settings.site_viber_url
+
+
 def test_app_registers_telegram_url_global() -> None:
     """F5: importing src.site.app must register a Jinja global `telegram_url`
     (= settings.site_telegram_url) on the shared `templates` env, so every page
@@ -327,6 +340,41 @@ def test_filters_partial_prominent_toggles() -> None:
     assert "Врачар" in html  # district facet
 
 
+# --- C1: «показать снятые» toggle + photo fallback ---
+
+
+def test_filters_partial_has_show_rented_toggle() -> None:
+    """C1: the filter rail carries a «показать снятые» toggle bound to show_rented; unchecked
+    by default (rented hidden), checked when applied.show_rented is True (deep-link round-trip)."""
+    off = _render("partials/_filters.html", facets=_FACETS, applied=_APPLIED)
+    assert 'name="show_rented"' in off
+    assert "снятые" in off  # «показать снятые» label
+    # default applied.show_rented is False -> the checkbox is not pre-checked
+    assert "checked" not in off.split('name="show_rented"')[0].rsplit("<", 1)[-1]
+
+    applied_on = {**_APPLIED, "show_rented": True}
+    on = _render("partials/_filters.html", facets=_FACETS, applied=applied_on)
+    # round-trips the active state so a deep-link with show_rented=1 keeps the toggle on
+    assert re.search(r'name="show_rented"[^>]*\bchecked', on) or re.search(
+        r'\bchecked[^>]*name="show_rented"', on
+    )
+
+
+def test_card_photo_has_onerror_fallback_to_placeholder() -> None:
+    """C1: a 404'ing photo must not break the grid — <img onerror> swaps to the committed
+    placeholder asset (and clears its own onerror so it can't loop)."""
+    html = _render("partials/_card.html", item=FakeView())
+    assert "onerror=" in html
+    assert "/static/img/placeholder.svg" in html
+
+
+def test_apt_photo_has_onerror_fallback_to_placeholder() -> None:
+    """C1: same broken-photo guard on the detail-page gallery images."""
+    html = _render("apt.html", item=FakeView(), similar=[], csrf_token=_CSRF)
+    assert "onerror=" in html
+    assert "/static/img/placeholder.svg" in html
+
+
 def test_lead_ok_partial() -> None:
     html = _render("partials/_lead_ok.html")
     assert html.strip()  # non-empty success state
@@ -348,6 +396,54 @@ def test_apt_renders_detail_channel_link_and_note() -> None:
 def test_apt_rented_badge() -> None:
     html = _render("apt.html", item=FakeView(is_rented=True), similar=[], csrf_token=_CSRF)
     assert "снято" in html
+
+
+# --- C4: WhatsApp/Viber CTA + share button on the apt page ---
+
+
+def test_apt_whatsapp_cta_renders_when_url_set() -> None:
+    """C4: a WhatsApp CTA (wa.me deep-link) renders on /apt only when whatsapp_url is non-empty."""
+    html = _render(
+        "apt.html",
+        item=FakeView(),
+        similar=[],
+        csrf_token=_CSRF,
+        whatsapp_url="https://wa.me/381600000000",
+    )
+    assert "https://wa.me/381600000000" in html
+    assert "WhatsApp" in html
+
+
+def test_apt_viber_cta_renders_when_url_set() -> None:
+    """C4: a Viber deep-link CTA renders on /apt only when viber_url is non-empty."""
+    html = _render(
+        "apt.html",
+        item=FakeView(),
+        similar=[],
+        csrf_token=_CSRF,
+        viber_url="viber://chat?number=%2B381600000000",
+    )
+    assert "viber://chat?number=%2B381600000000" in html
+    assert "Viber" in html
+
+
+def test_apt_whatsapp_viber_hidden_when_url_empty() -> None:
+    """C4: empty URLs (the operator hasn't provided a number) render NO button — no broken link.
+    The plain render env carries no whatsapp_url/viber_url global, so the template must default
+    them to empty and omit both CTAs entirely (no `wa.me`, no `viber://`, no empty href)."""
+    html = _render("apt.html", item=FakeView(), similar=[], csrf_token=_CSRF)
+    assert "wa.me" not in html
+    assert "viber://" not in html
+    assert "WhatsApp" not in html
+    assert ">Viber" not in html
+
+
+def test_apt_share_button_always_renders() -> None:
+    """C4: the share button (Web Share API + copy-link fallback) renders regardless of the
+    WhatsApp/Viber config — it shares the current page URL, no operator number needed."""
+    html = _render("apt.html", item=FakeView(), similar=[], csrf_token=_CSRF)
+    assert "data-share" in html  # the share control hook lead.js / share.js wires
+    assert "Поделиться" in html
 
 
 def test_apt_agent_copy_no_longer_contradicts_50pct_commission() -> None:

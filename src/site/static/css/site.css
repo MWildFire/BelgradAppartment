@@ -235,6 +235,10 @@ section.bay{padding-block:var(--bay)}
 .toggle input{accent-color:var(--sage);width:17px;height:17px}
 .toggle.on{background:var(--sage);color:#fff;border-color:var(--sage)}
 .toggle.wc.on{background:var(--navy);border-color:var(--navy)}
+/* C1: «показать снятые» — neutral ink on-state, matching the «снято» badge (not a feature
+   highlight like ВНЖ/картон). Distinct accent so the rented toggle reads as a view switch. */
+.toggle.rented input{accent-color:var(--ink)}
+.toggle.rented.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}
 .opt{display:flex;align-items:center;gap:8px;padding:5px 0;font-size:var(--step--1);color:var(--ink-2);cursor:pointer}
 .opt input{accent-color:var(--oxblood)}
 .opt .cnt{margin-left:auto;font-family:var(--mono);font-size:.7rem;color:var(--ink-2)}

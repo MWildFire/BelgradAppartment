@@ -88,7 +88,9 @@ def small_page(monkeypatch):
 
 
 def test_catalog_page1_has_next_not_prev(client, small_page, _stub_pager_templates):
-    r = client.get("/catalog", params={"page": "1"})
+    # show_rented=1 keeps all 3 public listings in play so the seed spans 2 pages (C1 hides
+    # the rented row by default, which would otherwise leave a single page of 2).
+    r = client.get("/catalog", params={"page": "1", "show_rented": "1"})
     assert r.status_code == 200
     # 3 public listings, page_size 2 → page 1 has 2 items, total_pages 2.
     assert "items=2" in r.text
@@ -100,7 +102,7 @@ def test_catalog_page1_has_next_not_prev(client, small_page, _stub_pager_templat
 
 
 def test_catalog_page2_returns_remaining_slice(client, small_page, _stub_pager_templates):
-    r = client.get("/catalog", params={"page": "2"})
+    r = client.get("/catalog", params={"page": "2", "show_rented": "1"})
     assert r.status_code == 200
     # page 2 holds the 1 remaining listing; has_prev, no has_next.
     assert "items=1" in r.text

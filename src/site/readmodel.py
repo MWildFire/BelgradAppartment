@@ -50,7 +50,7 @@ class Filters:
     price_min: int | None = None
     price_max: int | None = None
     rooms: list[str] = field(default_factory=list)
-    show_rented: bool = False  # rented are always INCLUDED; flag reserved for future hiding
+    show_rented: bool = False  # C1: default view HIDES rented; «показать снятые» includes them
 
 
 @dataclass
@@ -145,6 +145,9 @@ def _rooms_matches(rooms_raw: float | None, wanted: list[str]) -> bool:
 
 def _passes(row: _Row, f: Filters) -> bool:
     v = row.view
+    # C1: rented listings are hidden by default; «показать снятые» (show_rented) reveals them.
+    if v.is_rented and not f.show_rented:
+        return False
     if f.vnj and not v.for_vnj:
         return False
     if f.wc and not v.for_white_card:
@@ -159,12 +162,19 @@ def _passes(row: _Row, f: Filters) -> bool:
 
 
 def _sort_key(sort: str):  # type: ignore[no-untyped-def]
+    """Composite sort key: rented ALWAYS sinks below active (C1), then the chosen order.
+
+    Returned as a single ascending key (no `reverse` flag) so the rented-to-bottom rule can't
+    be flipped by a descending price sort: rented rows (is_rented True -> 1) trail active ones
+    (0), and within each group the secondary key applies. Descending orders negate the numeric
+    value; "new" negates the posix timestamp so the newest sorts first.
+    """
     if sort == "price_asc":
-        return (lambda r: r.view.price_eur, False)
+        return lambda r: (r.view.is_rented, r.view.price_eur)
     if sort == "price_desc":
-        return (lambda r: r.view.price_eur, True)
-    # default "new": newest posted first
-    return (lambda r: r.posted_dt, True)
+        return lambda r: (r.view.is_rented, -r.view.price_eur)
+    # default "new": newest posted first (negate timestamp for descending within ascending sort).
+    return lambda r: (r.view.is_rented, -r.posted_dt.timestamp())
 
 
 async def list_public(
@@ -177,8 +187,7 @@ async def list_public(
 ) -> tuple[list[SiteListingView], int]:
     page_size = page_size or get_settings().site_page_size
     rows = [r for r in await _load_rows(database_url) if _passes(r, filters)]
-    key, reverse = _sort_key(sort)
-    rows.sort(key=key, reverse=reverse)
+    rows.sort(key=_sort_key(sort))
     total = len(rows)
     start = max(page - 1, 0) * page_size
     page_rows = rows[start:start + page_size]

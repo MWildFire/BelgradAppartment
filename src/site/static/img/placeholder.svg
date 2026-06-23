@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" role="img" aria-label="Фото скоро">
+  <!-- C1 photo fallback: shown via <img onerror> when a listing photo 404s, so a broken
+       image never breaks the catalog grid. Palette inlined as literals (SVG can't read CSS
+       vars): paper-3 ground, ink-2 line art — a muted apartment glyph + «фото скоро». -->
+  <rect width="600" height="400" fill="#EAE3D6"/>
+  <g fill="none" stroke="#6F695C" stroke-width="6" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M210 250 V150 L300 95 L390 150 V250 Z"/>
+    <path d="M300 95 V70"/>
+    <rect x="245" y="185" width="50" height="65"/>
+    <rect x="315" y="170" width="40" height="40"/>
+  </g>
+  <text x="300" y="320" text-anchor="middle" font-family="ui-monospace, 'JetBrains Mono', monospace"
+        font-size="22" letter-spacing="2" fill="#6F695C">ФОТО СКОРО</text>
+</svg>

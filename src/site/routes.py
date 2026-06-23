@@ -10,6 +10,7 @@ the selected template + context without depending on agent D's real markup.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from urllib.parse import urlencode
@@ -82,6 +83,45 @@ def _as_int(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _static_page(request: Request, template: str) -> Response:
+    """C3: render a genuinely-static content page WITH an ETag + conditional 304 short-circuit.
+
+    Only the static content pages (/vnj, /how, /calculator) route through here — their bodies
+    don't depend on DB state or query params, so a content-derived ETag is safe. The ETag is a
+    weak validator over the rendered bytes (changes iff the rendered HTML changes — a template
+    edit or an asset-version bump that alters /static URLs both move it). When the client sends
+    a matching If-None-Match we return 304 with no body; otherwise the full 200 carries the ETag.
+
+    Dynamic routes (/, /catalog, /lead, …) deliberately do NOT use this — a static ETag there
+    would let a client cache one filter/DB state and miss later changes.
+    """
+    rendered = templates.TemplateResponse(request, template, {})
+    etag = 'W/"' + hashlib.sha1(rendered.body).hexdigest()[:16] + '"'
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        # 304 carries no body; echo the validator so the client keeps caching.
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+    rendered.headers["ETag"] = etag
+    return rendered
+
+
+def _etag_matches(if_none_match: str | None, etag: str) -> bool:
+    """True when an If-None-Match header matches our ETag (RFC 7232 weak comparison).
+
+    Honors a comma-separated list and the "*" wildcard; ignores the weak "W/" prefix on each
+    candidate so a weak/strong mismatch on the same opaque tag still counts as a match.
+    """
+    if not if_none_match:
+        return False
+    target = etag[2:] if etag.startswith("W/") else etag
+    for candidate in if_none_match.split(","):
+        c = candidate.strip()
+        if c == "*":
+            return True
+        if (c[2:] if c.startswith("W/") else c) == target:
+            return True
+    return False
 
 
 def _catalog_key(request: Request) -> tuple:  # type: ignore[type-arg]
@@ -256,8 +296,9 @@ async def map_json(db_url: str = Depends(catalog_db_url)) -> JSONResponse:
 
 
 @router.get("/calculator", response_class=HTMLResponse)
-async def calculator(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "calculator.html", {})
+async def calculator(request: Request) -> Response:
+    # C3: static content page — served with an ETag + conditional 304.
+    return _static_page(request, "calculator.html")
 
 
 # Static pages that always belong in the sitemap (absolute via site_public_base_url).
@@ -296,16 +337,18 @@ async def robots() -> Response:
 
 
 @router.get("/vnj", response_class=HTMLResponse)
-async def vnj(request: Request) -> HTMLResponse:
+async def vnj(request: Request) -> Response:
     # Static content page «ВНЖ и договор» — no DB; base.html globals (telegram_url,
     # district_options, csrf_token) are supplied via the shared Jinja env.
-    return templates.TemplateResponse(request, "vnj.html", {})
+    # C3: served with an ETag + conditional 304 (content-static page).
+    return _static_page(request, "vnj.html")
 
 
 @router.get("/how", response_class=HTMLResponse)
-async def how(request: Request) -> HTMLResponse:
+async def how(request: Request) -> Response:
     # Static content page «Как работаем» (incl. the 50% commission breakdown) — no DB.
-    return templates.TemplateResponse(request, "how.html", {})
+    # C3: served with an ETag + conditional 304.
+    return _static_page(request, "how.html")
 
 
 @router.post("/lead")

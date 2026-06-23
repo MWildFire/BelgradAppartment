@@ -191,7 +191,10 @@ def test_index_renders_index_with_featured_and_stats(client):
     r = client.get("/")
     assert r.status_code == 200
     assert "TPL:index" in r.text
-    assert "featured=3" in r.text  # 3 public listings seeded
+    # C1: the homepage featured strip uses the default view, which hides rented — so 2 of the
+    # 3 public listings surface (id3 is rented). The «active» stat counts the whole public
+    # set (facets ignore the rented toggle), so it stays 3.
+    assert "featured=2" in r.text
     assert "active=3" in r.text
 
 
@@ -232,7 +235,17 @@ def test_index_week_comes_from_featured_one(client, monkeypatch):
 
 
 def test_catalog_renders_catalog_full_page(client):
+    # C1: default view hides the rented row (id3), so 2 of the 3 public listings show.
     r = client.get("/catalog")
+    assert r.status_code == 200
+    assert "TPL:catalog" in r.text
+    assert "items=2" in r.text
+    assert "total=2" in r.text
+
+
+def test_catalog_show_rented_includes_rented(client):
+    # C1: «показать снятые» (show_rented=1) brings the rented public listing back into the view.
+    r = client.get("/catalog", params={"show_rented": "1"})
     assert r.status_code == 200
     assert "TPL:catalog" in r.text
     assert "items=3" in r.text

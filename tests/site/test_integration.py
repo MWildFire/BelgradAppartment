@@ -158,7 +158,9 @@ def test_index_renders_featured_cards_with_price_euro_mono(client):
 
 
 def test_catalog_lists_public_excludes_private(client):
-    r = client.get("/catalog")
+    # show_rented=1 so the rented public listing (id3 €500) is part of this private-exclusion
+    # check (C1 hides rented by default; that behavior is covered by the readmodel tests).
+    r = client.get("/catalog", params={"show_rented": "1"})
     assert r.status_code == 200
     html = r.text
     assert "<!DOCTYPE html>" in html  # full shell, not the partial
@@ -189,7 +191,10 @@ def test_catalog_empty_filter_params_are_ignored_not_zero(client):
     # W5-1 bug: the hero/filter forms submit empty district=/rooms=/price_max= for unfilled
     # fields. Those must mean "no filter", not "match nothing" — else a district-only search
     # returned 0. Врачар has two public listings (id1 €600, id3 €500 rented-but-shown).
-    r = client.get("/catalog", params=[("district", "Врачар"), ("rooms", ""), ("price_max", "")])
+    r = client.get(
+        "/catalog",
+        params=[("district", "Врачар"), ("rooms", ""), ("price_max", ""), ("show_rented", "1")],
+    )
     assert r.status_code == 200
     html = r.text
     assert "€600" in html and "€500" in html  # both Врачар public listings, not 0

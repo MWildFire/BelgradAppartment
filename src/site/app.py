@@ -24,6 +24,7 @@ from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Scope
 
 from src.config import get_settings
 from src.post.hashtags import DISTRICTS_PATH  # reuse the canonical districts.yaml path
@@ -33,6 +34,28 @@ from src.site.routes import router, templates
 STATIC_DIR = Path(__file__).parent / "static"
 
 _CYRILLIC_RE = re.compile(r"[а-яё]", re.IGNORECASE)
+
+# C3: how long browsers may cache a /static asset before revalidating. The asset-version token
+# (?v=<hash>) on css/js URLs busts this on every deploy that changes those bundles, so a 1-day
+# window is safe for the dev mount (in prod Caddy serves /static immutable,max-age=1y instead).
+_STATIC_MAX_AGE = 86_400
+
+
+class _CachedStaticFiles(StaticFiles):
+    """StaticFiles that stamps a Cache-Control on every served asset (C3).
+
+    Starlette's StaticFiles already emits ETag + Last-Modified per file; this only adds the
+    missing Cache-Control max-age so browsers can revalidate instead of re-downloading. Cache
+    busting still relies on the asset-version token appended to css/js URLs in templates.
+    """
+
+    async def get_response(self, path: str, scope: Scope):  # type: ignore[override]
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            response.headers.setdefault(
+                "Cache-Control", f"public, max-age={_STATIC_MAX_AGE}"
+            )
+        return response
 
 
 @lru_cache(maxsize=1)
@@ -59,6 +82,12 @@ templates.env.globals["telegram_url"] = get_settings().site_telegram_url
 # F2: район dropdowns (hero combobox + filter rail) read this curated Cyrillic superset.
 # Registered as a global so templates need no per-route context for the static option list.
 templates.env.globals["district_options"] = district_options()
+
+# C4: optional WhatsApp/Viber deep-link CTAs on /apt. Registered as globals next to telegram_url;
+# each is '' until a number is configured, and the apt template renders a button ONLY when its
+# URL is non-empty (empty = hidden, never a broken link).
+templates.env.globals["whatsapp_url"] = get_settings().site_whatsapp_url
+templates.env.globals["viber_url"] = get_settings().site_viber_url
 
 
 def _asset_version() -> str:
@@ -108,7 +137,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     if STATIC_DIR.exists():
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        # C3: cache-aware static mount (adds Cache-Control; ETag/Last-Modified come from base).
+        app.mount("/static", _CachedStaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(router)
     # Custom 404 (unknown path AND a route raising HTTPException(404), e.g. /apt/{missing}).
     app.add_exception_handler(StarletteHTTPException, _not_found_handler)

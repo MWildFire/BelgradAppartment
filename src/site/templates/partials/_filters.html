@@ -16,6 +16,12 @@
       Белый картон
       <span class="cnt mono">{{ facets.counts.white_card }}</span>
     </label>
+    {# C1: «показать снятые» — rented are hidden by default; this toggle reveals them
+       (they always sort to the bottom server-side). Deep-link round-trips via show_rented=1. #}
+    <label class="toggle rented{% if applied.show_rented %} on{% endif %}">
+      <input type="checkbox" name="show_rented" value="1"{% if applied.show_rented %} checked{% endif %}>
+      Показать снятые
+    </label>
   </div>
 
   {# — district (multi) —

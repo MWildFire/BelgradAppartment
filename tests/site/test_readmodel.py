@@ -21,7 +21,9 @@ async def _list(site_db: str, **kw):  # type: ignore[no-untyped-def]
 
 @pytest.mark.asyncio
 async def test_list_public_excludes_private(site_db: str) -> None:
-    items, total = await _list(site_db)
+    # show_rented=True so the rented row is counted too (C1 hides it by default; this test
+    # is about the private-row exclusion, not rented visibility).
+    items, total = await _list(site_db, show_rented=True)
     ids = {v.id for v in items}
     # site_listing 4 is is_public=False -> excluded.
     assert 4 not in ids
@@ -31,17 +33,18 @@ async def test_list_public_excludes_private(site_db: str) -> None:
 
 @pytest.mark.asyncio
 async def test_list_public_default_sort_new(site_db: str) -> None:
-    items, _ = await _list(site_db)
-    # newest posted_at first. id=1 has published_at 2026-06-10; ids 2,3 use created_at (06,07).
-    # So order by posted_at desc: id1(06-10), id3(06-07), id2(06-06).
-    assert [v.id for v in items] == [1, 3, 2]
+    # show_rented=True to keep all 3 rows; id=3 is rented so it sinks below the active rows.
+    items, _ = await _list(site_db, show_rented=True)
+    # active newest-first by posted_at: id=1 (06-10), id=2 (06-06); rented id=3 trails.
+    assert [v.id for v in items] == [1, 2, 3]
 
 
 @pytest.mark.asyncio
 async def test_list_public_sort_price(site_db: str) -> None:
-    asc, _ = await _list(site_db, sort="price_asc")
-    assert [v.price_eur for v in asc] == [500, 600, 800]
-    desc, _ = await _list(site_db, sort="price_desc")
+    # show_rented=True; the rented €500 (id=3) sinks to the bottom despite being cheapest.
+    asc, _ = await _list(site_db, show_rented=True, sort="price_asc")
+    assert [v.price_eur for v in asc] == [600, 800, 500]
+    desc, _ = await _list(site_db, show_rented=True, sort="price_desc")
     assert [v.price_eur for v in desc] == [800, 600, 500]
 
 
@@ -62,7 +65,8 @@ async def test_filter_white_card(site_db: str) -> None:
 
 @pytest.mark.asyncio
 async def test_filter_district_cyrillic(site_db: str) -> None:
-    items, _ = await _list(site_db, district=["Врачар"])
+    # show_rented=True so the rented Vracar listing (id=3) is included alongside id=1.
+    items, _ = await _list(site_db, district=["Врачар"], show_rented=True)
     # listings 1 and 3 are Vracar (display Врачар).
     assert {v.id for v in items} == {1, 3}
 
@@ -75,7 +79,8 @@ async def test_filter_price_range(site_db: str) -> None:
 
 @pytest.mark.asyncio
 async def test_filter_rooms_multi(site_db: str) -> None:
-    items, _ = await _list(site_db, rooms=["studio", "1"])
+    # show_rented=True so the rented studio (id=3) is included alongside the 1-room id=2.
+    items, _ = await _list(site_db, rooms=["studio", "1"], show_rented=True)
     # studio = rooms 0 (listing 3), "1" = rooms 1 (listing 2).
     assert {v.id for v in items} == {2, 3}
 
@@ -89,23 +94,54 @@ async def test_filter_rooms_3plus(site_db: str) -> None:
 
 @pytest.mark.asyncio
 async def test_pagination(site_db: str) -> None:
-    page1, total = await _list(site_db, page=1, page_size=2)
-    page2, _ = await _list(site_db, page=2, page_size=2)
+    # show_rented=True to keep all 3 rows so pagination splits 2 + 1 as designed.
+    page1, total = await _list(site_db, page=1, page_size=2, show_rented=True)
+    page2, _ = await _list(site_db, page=2, page_size=2, show_rented=True)
     assert total == 3
     assert len(page1) == 2
     assert len(page2) == 1
     assert {v.id for v in page1}.isdisjoint({v.id for v in page2})
 
 
+# --- C1: rented hide-by-default + sort-to-bottom + show_rented toggle ---
+
+
 @pytest.mark.asyncio
-async def test_rented_included_and_flagged(site_db: str) -> None:
-    items, _ = await _list(site_db)
-    by_id = {v.id for v in items}
-    assert 3 in by_id  # rented but NOT hidden
+async def test_rented_hidden_by_default(site_db: str) -> None:
+    # C1 decision: default catalog HIDES rented (show_rented=False is the seeded default).
+    # listing 3 is rented (is_active=False) -> excluded from the default view.
+    items, total = await _list(site_db)
+    ids = {v.id for v in items}
+    assert 3 not in ids  # rented, hidden by default
+    assert ids == {1, 2}
+    assert total == 2
+    # the surviving rows expose is_rented for the badge; none of them is rented.
+    assert all(v.is_rented is False for v in items)
+
+
+@pytest.mark.asyncio
+async def test_rented_shown_when_toggle_on(site_db: str) -> None:
+    # «показать снятые» -> show_rented=True includes the rented listing, flagged.
+    items, total = await _list(site_db, show_rented=True)
+    ids = {v.id for v in items}
+    assert 3 in ids
+    assert total == 3
     rented = next(v for v in items if v.id == 3)
     assert rented.is_rented is True
     active = next(v for v in items if v.id == 1)
     assert active.is_rented is False
+
+
+@pytest.mark.asyncio
+async def test_rented_sorts_to_bottom_when_shown(site_db: str) -> None:
+    # With rented shown, a rented listing always sinks below active ones regardless of the
+    # chosen sort. price_asc would otherwise put the €500 rented (id=3) first; it must trail.
+    asc, _ = await _list(site_db, show_rented=True, sort="price_asc")
+    assert asc[-1].id == 3  # rented at the very bottom
+    assert asc[-1].is_rented is True
+    # the active rows keep their own order among themselves (cheapest active first = id=1 €600).
+    active_ids = [v.id for v in asc if not v.is_rented]
+    assert active_ids == [1, 2]
 
 
 @pytest.mark.asyncio
@@ -127,7 +163,8 @@ async def test_view_field_mapping(site_db: str) -> None:
 
 @pytest.mark.asyncio
 async def test_note_override(site_db: str) -> None:
-    items, _ = await _list(site_db)
+    # id=3 is rented, so reveal it via show_rented to assert its note override.
+    items, _ = await _list(site_db, show_rented=True)
     v = next(x for x in items if x.id == 3)
     assert v.note == "Дарья: торг"
 

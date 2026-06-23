@@ -11,6 +11,7 @@
       {% if applied.price_min is not none %}<input type="hidden" name="price_min" value="{{ applied.price_min }}">{% endif %}
       {% if applied.price_max is not none %}<input type="hidden" name="price_max" value="{{ applied.price_max }}">{% endif %}
       {% for r in applied.rooms %}<input type="hidden" name="rooms" value="{{ r }}">{% endfor %}
+      {% if applied.show_rented %}<input type="hidden" name="show_rented" value="1">{% endif %}
       <label for="sort" class="mono" style="color:var(--ink-2);font-size:.7rem;text-transform:uppercase;letter-spacing:.12em;margin-right:8px">сортировка</label>
       <select id="sort" name="sort" onchange="this.form.requestSubmit()">
         <option value="new"{% if applied.sort == 'new' %} selected{% endif %}>сначала свежие</option>

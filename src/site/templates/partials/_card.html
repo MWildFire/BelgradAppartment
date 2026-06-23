@@ -12,7 +12,9 @@
   <a href="/apt/{{ item.id }}">
     <div class="ph">
       {% if item.photos %}
-        <img src="{{ item.photos[0] }}" alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" width="600" height="400">
+        {# C1 photo fallback: a 404'ing photo swaps to the committed placeholder; onerror clears
+           itself first so a missing placeholder can't loop. lazy + explicit w/h for CLS (C3). #}
+        <img src="{{ item.photos[0] }}" alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" width="600" height="400" onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
       {% endif %}
       <div class="flag">
         {% if item.for_vnj %}<span class="badge vnj">✓ ВНЖ</span>{% endif %}

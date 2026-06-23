@@ -30,7 +30,9 @@
         <div class="gallery{% if item.photos|length < 2 %} gallery-empty{% endif %}">
           {% for photo in item.photos[:5] %}
             <div class="g{% if loop.first %} main{% endif %}{% if loop.last and item.photos|length > 5 %} more{% endif %}">
-              <img src="{{ photo }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" loading="{{ 'eager' if loop.first else 'lazy' }}">
+              {# C1 photo fallback: a 404'ing gallery photo swaps to the placeholder; onerror
+                 clears itself first so a missing placeholder can't loop. #}
+              <img src="{{ photo }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" loading="{{ 'eager' if loop.first else 'lazy' }}" onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
               {% if loop.last and item.photos|length > 5 %}<span class="mono">+{{ item.photos|length - 5 }} фото</span>{% endif %}
             </div>
           {% endfor %}
@@ -87,6 +89,19 @@
       <a class="btn ox" href="#lead" data-lead-cta data-site-listing-id="{{ item.id }}">Оставить заявку на эту квартиру</a>
       {# link to the channel post (a channel URL, never a площадка) #}
       <a class="btn ghost" href="{{ item.channel_url }}" rel="noopener">Открыть в Telegram</a>
+      {# C4: WhatsApp / Viber CTAs render ONLY when their URL is configured (whatsapp_url /
+         viber_url globals; empty by default = hidden, no broken link). Pre-filled message
+         references this apartment so the operator gets context. New tab + noopener. #}
+      {% if whatsapp_url|default('') %}
+        <a class="btn ghost wa" href="{{ whatsapp_url }}?text={{ ('Здравствуйте! Интересует квартира /apt/' ~ item.id)|urlencode }}" target="_blank" rel="noopener">Написать в WhatsApp</a>
+      {% endif %}
+      {% if viber_url|default('') %}
+        <a class="btn ghost vb" href="{{ viber_url }}" target="_blank" rel="noopener">Написать в Viber</a>
+      {% endif %}
+      {# C4: share button — Web Share API where available, copy-link fallback otherwise (wired
+         by share.js). Always renders: it shares THIS page's URL, no operator number needed.
+         data-share-url is the canonical absolute /apt/{id} so a copied link is shareable. #}
+      <button type="button" class="btn ghost share" data-share data-share-url="{{ site_base_url }}/apt/{{ item.id }}" data-share-title="{{ item.rooms }} в районе {{ item.district }} — €{{ item.price_eur }}/мес">Поделиться</button>
       <div class="bullets">
         <div class="bullet"><span class="num">✓</span><span>Сопровождение на сербском и русском</span></div>
         <div class="bullet"><span class="num">✓</span><span>Сопровождение на подписании</span></div>
@@ -113,4 +128,9 @@
 <section class="bay wrap" data-site-listing-id="{{ item.id }}">
   {% with site_listing_id = item.id %}{% include "partials/_lead_form.html" %}{% endwith %}
 </section>
+{% endblock %}
+
+{% block scripts %}
+{# C4: wires the [data-share] button (Web Share API + copy-link fallback). defer + DOM-ready safe. #}
+<script src="/static/js/share.js?v={{ asset_v }}" defer></script>
 {% endblock %}
