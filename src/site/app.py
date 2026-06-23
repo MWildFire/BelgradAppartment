@@ -83,12 +83,6 @@ templates.env.globals["telegram_url"] = get_settings().site_telegram_url
 # Registered as a global so templates need no per-route context for the static option list.
 templates.env.globals["district_options"] = district_options()
 
-# C4: optional WhatsApp/Viber deep-link CTAs on /apt. Registered as globals next to telegram_url;
-# each is '' until a number is configured, and the apt template renders a button ONLY when its
-# URL is non-empty (empty = hidden, never a broken link).
-templates.env.globals["whatsapp_url"] = get_settings().site_whatsapp_url
-templates.env.globals["viber_url"] = get_settings().site_viber_url
-
 # C2: subscription form reads this to (a) offer the Telegram channel option and (b) build the
 # /start deep-link. Empty → only the e-mail channel is shown (no dead Telegram link).
 templates.env.globals["site_telegram_bot_username"] = get_settings().site_telegram_bot_username

@@ -87,17 +87,9 @@
       {# CTA for THIS apartment — scrolls to the on-page lead form, which carries item.id
          (hidden site_listing_id). lead.js also reads data-site-listing-id as a fallback. #}
       <a class="btn ox" href="#lead" data-lead-cta data-site-listing-id="{{ item.id }}">Оставить заявку на эту квартиру</a>
-      {# link to the channel post (a channel URL, never a площадка) #}
+      {# link to the channel post (a channel URL, never a площадка). Telegram is the only
+         messaging CTA — WhatsApp/Viber were dropped by request. #}
       <a class="btn ghost" href="{{ item.channel_url }}" rel="noopener">Открыть в Telegram</a>
-      {# C4: WhatsApp / Viber CTAs render ONLY when their URL is configured (whatsapp_url /
-         viber_url globals; empty by default = hidden, no broken link). Pre-filled message
-         references this apartment so the operator gets context. New tab + noopener. #}
-      {% if whatsapp_url|default('') %}
-        <a class="btn ghost wa" href="{{ whatsapp_url }}?text={{ ('Здравствуйте! Интересует квартира /apt/' ~ item.id)|urlencode }}" target="_blank" rel="noopener">Написать в WhatsApp</a>
-      {% endif %}
-      {% if viber_url|default('') %}
-        <a class="btn ghost vb" href="{{ viber_url }}" target="_blank" rel="noopener">Написать в Viber</a>
-      {% endif %}
       {# C4: share button — Web Share API where available, copy-link fallback otherwise (wired
          by share.js). Always renders: it shares THIS page's URL, no operator number needed.
          data-share-url is the canonical absolute /apt/{id} so a copied link is shareable. #}

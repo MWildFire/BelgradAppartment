@@ -162,12 +162,7 @@ class Settings(BaseSettings):
     # --- Conversion & polish (Stage W2) ---
     # F5: permanent "Написать в Telegram" CTA points at Дарья's DM (not the channel).
     site_telegram_url: str = "https://t.me/Darya_kralj"
-    # C4: optional WhatsApp (wa.me/<number>) and Viber (viber://chat?number=%2B<number>) deep
-    # links for the /apt CTA row. EMPTY by default — the button only renders when its URL is
-    # set, so an unconfigured number shows no broken link. Fill these in the server .env once
-    # the operator provides a WhatsApp/Viber number.
-    site_whatsapp_url: str = ""
-    site_viber_url: str = ""
+    # (C4 WhatsApp/Viber CTAs were dropped by request — Telegram is the only messaging channel.)
     # --- C2: saved-search subscriptions (e-mail + Telegram digest) ---
     # Bot username (without leading @) used to build the Telegram linking deep-link
     # https://t.me/<username>?start=sub_<token>. EMPTY → the Telegram channel is unavailable in
