@@ -27,7 +27,7 @@ from sqlalchemy import func, select, update
 
 from src.config import get_settings
 from src.db import Listing, get_session
-from src.db.models import DailyMetrics, Platform
+from src.db.models import DailyMetrics, Match, MatchStatus, Platform
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, Scraper
 
@@ -398,6 +398,150 @@ async def mark_stale_inactive(
         marked, cutoff.date(), platform.value if platform else "all",
     )
     return StaleSweepResult(platform=platform, marked_inactive=marked)
+
+
+# ------------------------------------------------------------------ liveness sweep (A3)
+
+
+@dataclass
+class LinkVerifyStats:
+    """Outcome of a liveness sweep (`check-links` CLI / nightly verify-links step).
+
+    `checked` rows we issued a HEAD for; `deactivated` flipped is_active=False on a definitive
+    gone-status (404/410); `errors` inconclusive responses (timeouts, 5xx, anti-bot 403/405,
+    network) that did NOT deactivate; `skipped` rows left unchecked when the deadline ran out.
+    """
+
+    checked: int = 0
+    deactivated: int = 0
+    errors: int = 0
+    skipped: int = 0
+
+
+# A HEAD that comes back 404/410 means the listing is definitively gone — deactivate it. Every
+# other status (incl. anti-bot 403/405 from Cloudflare-fronted platforms like halooglasi, and
+# 5xx server hiccups) is inconclusive: we must never deactivate a live listing on a transient
+# or anti-bot response.
+_DEAD_LINK_STATUSES = frozenset({404, 410})
+
+
+async def verify_active_links(
+    *,
+    limit: int | None = None,
+    deadline: float | None = None,
+    platform: Platform | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> LinkVerifyStats:
+    """A3: HEAD-check ACTIVE listings that have a PENDING/PUBLISHED match (i.e. potentially
+    shown on the site) and deactivate the ones that 404/410 — so a public card never links to
+    a page removed between the nightly walk and the render.
+
+    Selection: ACTIVE listings whose id is referenced by some PENDING or PUBLISHED `Match`.
+    Optionally filtered by `platform`; capped by `limit`.
+
+    Each URL is HEAD-checked with `follow_redirects=True` and a ~10s per-request timeout, at a
+    concurrency of 4. A 301/302 to a canonical URL that lands on 200 is fine. Only 404/410
+    deactivate; any other outcome (timeout, 5xx, network error, or an anti-bot 403/405) is
+    counted in `errors` and leaves the listing active.
+
+    `deadline` is a `time.monotonic()` target shared with the heal/rolling refetch steps: once
+    it passes, all still-unchecked rows are counted in `skipped` and the sweep stops cleanly.
+
+    `client` is injectable for tests (pass a MockTransport-backed AsyncClient); in production it
+    defaults to a fresh client built with the scraper User-Agent.
+    """
+    async with get_session() as s:
+        stmt = (
+            select(Listing.id, Listing.platform, Listing.url)
+            .where(
+                Listing.is_active.is_(True),
+                select(Match.id)
+                .where(
+                    Match.listing_id == Listing.id,
+                    Match.status.in_((MatchStatus.PENDING, MatchStatus.PUBLISHED)),
+                )
+                .exists(),
+            )
+            .order_by(Listing.id)
+        )
+        if platform is not None:
+            stmt = stmt.where(Listing.platform == platform)
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        rows = (await s.execute(stmt)).all()
+
+    stats = LinkVerifyStats()
+    if not rows:
+        logger.info("[verify-links] no active matched listings to check (platform=%s)",
+                    platform.value if platform else "all")
+        return stats
+
+    owns_client = client is None
+    if owns_client:
+        from src.scrapers.base import DEFAULT_USER_AGENT
+
+        ua = get_settings().scraper_user_agent or DEFAULT_USER_AGENT
+        client = httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=10.0,
+            headers={"User-Agent": ua},
+        )
+
+    async def _check_one(row: Any) -> None:
+        try:
+            resp = await client.head(row.url, timeout=10.0)
+        except Exception as e:
+            stats.errors += 1
+            logger.warning(
+                "[verify-links] #%s (%s) inconclusive: %s: %s",
+                row.id, row.url, type(e).__name__, e,
+            )
+            return
+        if resp.status_code in _DEAD_LINK_STATUSES:
+            async with get_session() as s:
+                await s.execute(
+                    update(Listing).where(Listing.id == row.id).values(is_active=False)
+                )
+            stats.deactivated += 1
+            logger.info("[verify-links] #%s → %s, deactivated", row.id, resp.status_code)
+        elif resp.status_code >= 400:
+            # 5xx hiccups + anti-bot 403/405: inconclusive, never deactivate.
+            stats.errors += 1
+            logger.info(
+                "[verify-links] #%s → %s, inconclusive (kept active)", row.id, resp.status_code
+            )
+
+    # 4 workers pull from a shared cursor, each re-checking the deadline BEFORE taking a row, so
+    # the budget (shared with heal/rolling) actually caps wall-clock mid-sweep — not just at
+    # task-creation time. The cursor read+advance has no await between, so it's race-free on the
+    # single-threaded event loop; anything left when the deadline trips is counted as skipped.
+    cursor = 0
+
+    async def _worker() -> None:
+        nonlocal cursor
+        while True:
+            if deadline is not None and time.monotonic() > deadline:
+                return
+            if cursor >= len(rows):
+                return
+            row = rows[cursor]
+            cursor += 1
+            stats.checked += 1
+            await _check_one(row)
+
+    try:
+        await asyncio.gather(*(_worker() for _ in range(min(4, len(rows)))))
+        stats.skipped = len(rows) - stats.checked
+    finally:
+        if owns_client:
+            await client.aclose()
+
+    logger.info(
+        "[verify-links] checked=%d deactivated=%d errors=%d skipped=%d (platform=%s)",
+        stats.checked, stats.deactivated, stats.errors, stats.skipped,
+        platform.value if platform else "all",
+    )
+    return stats
 
 
 # ------------------------------------------------------------------ nightly maintenance steps

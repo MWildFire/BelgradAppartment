@@ -1411,6 +1411,7 @@ async def _run_nightly_steps() -> NightlyStepsResult:
         prune_inactive_embeddings,
         rolling_detail_refresh,
         snapshot_daily_metrics,
+        verify_active_links,
     )
 
     import time as _time
@@ -1460,6 +1461,29 @@ async def _run_nightly_steps() -> NightlyStepsResult:
             lines.append("🚨 detail-refresh шаг упал — см. логи")
     else:
         click.echo("→ Rolling detail refresh disabled (NIGHTLY_DETAIL_REFRESH=0)")
+
+    if settings.nightly_verify_links:
+        click.echo(
+            f"→ Verify active links (limit={settings.nightly_verify_links_limit})…"
+        )
+        try:
+            # Shares the heal+rolling wall-clock budget so the three refetch/HEAD steps
+            # jointly cannot overrun the night.
+            vl = await verify_active_links(
+                limit=settings.nightly_verify_links_limit, deadline=refetch_deadline
+            )
+            line = (
+                f"ссылки: проверено {vl.checked}, "
+                f"деактивировано {vl.deactivated}, ошибок {vl.errors}"
+            )
+            if vl.skipped:
+                line += f", пропущено по бюджету: {vl.skipped}"
+            lines.append(line)
+        except Exception:
+            log.exception("nightly step failed: verify-links")
+            lines.append("🚨 verify-links шаг упал — см. логи")
+    else:
+        click.echo("→ Verify links disabled (NIGHTLY_VERIFY_LINKS=0)")
 
     if settings.nightly_metrics:
         click.echo("→ Daily metrics snapshot…")
@@ -2451,6 +2475,30 @@ async def _notify_failure(service: str, reason: str | None) -> None:
     finally:
         if client is not None:
             await client.disconnect()
+
+
+@cli.command("check-links")
+@click.option(
+    "--platform",
+    type=click.Choice(list(PLATFORM_NAMES.keys()), case_sensitive=False),
+    default=None,
+    help="Restrict the sweep to one platform (default: all).",
+)
+@click.option("--limit", type=int, default=None, help="Cap the number of listings checked.")
+def check_links(platform: str | None, limit: int | None) -> None:
+    """A3: HEAD-check ACTIVE listings with a PENDING/PUBLISHED match (potentially on the site)
+    and deactivate the ones that 404/410, so a public card never links to a removed page.
+
+    Transient failures (timeouts, 5xx) and anti-bot 403/405 responses do NOT deactivate.
+    """
+    from src.scrapers.orchestrator import verify_active_links
+
+    plat = PLATFORM_NAMES[platform.lower()] if platform else None
+    stats = asyncio.run(verify_active_links(limit=limit, platform=plat))
+    click.echo(
+        f"=== ссылки: проверено {stats.checked}, деактивировано {stats.deactivated}, "
+        f"ошибок {stats.errors}, пропущено {stats.skipped} ==="
+    )
 
 
 @cli.command("heal-urls")

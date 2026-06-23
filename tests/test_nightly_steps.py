@@ -468,10 +468,17 @@ def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False, deadlines: lis
         calls.append("prune")
         return 7
 
+    async def fake_verify_links(*, limit=None, deadline=None, platform=None, client=None):
+        # Intentionally records nothing: the call-order (`calls`) and shared-deadline
+        # (`deadlines`) assertions track only the two refetch-budget steps. This stub exists so
+        # A3's liveness sweep never hits the network/DB in these unit tests.
+        return orchestrator.LinkVerifyStats(checked=0, deactivated=0, errors=0)
+
     monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
     monkeypatch.setattr(orchestrator, "snapshot_daily_metrics", fake_metrics)
     monkeypatch.setattr(orchestrator, "prune_inactive_embeddings", fake_prune)
+    monkeypatch.setattr(orchestrator, "verify_active_links", fake_verify_links)
     return calls
 
 
@@ -580,6 +587,7 @@ async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
     monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
     monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
     monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", False)
     calls = _canned_step_stubs(monkeypatch)
 
     lines, price_changes, alerts = await _run_nightly_steps()

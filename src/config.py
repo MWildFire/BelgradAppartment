@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     nightly_heal_limit: int = 500
     nightly_detail_refresh: int = 200  # active rows for rolling detail re-fetch per night; 0 = skip
     nightly_prune_embeddings: bool = True  # NIGHTLY_PRUNE_EMBEDDINGS=0 → skip embeddings prune
+    # A3 liveness sweep: HEAD-check active matched listings (potentially on the site) and
+    # deactivate ones that 404/410, so a public card never links to a removed page.
+    nightly_verify_links: bool = True  # NIGHTLY_VERIFY_LINKS=0 → skip the liveness sweep
+    nightly_verify_links_limit: int = 1000  # cap listings HEAD-checked per night
     nightly_metrics: bool = True  # NIGHTLY_METRICS=0 → skip daily_metrics snapshot + drop alert
     # Wall-clock budget SHARED by heal+rolling: once exhausted both stop and report skipped rows,
     # so a night of slow Cloudflare-challenged refetches can't overrun (the 2026-06-16 SIGTERM).
