@@ -1,398 +1,641 @@
-# otz-rent-finder — FEATURE PLAN
+# otz-rent-finder — FEATURE PLAN (Stage R — «Resilience & Reach»)
+
+> **Дата плана:** 2026-06-23 · **Автор:** Claude Code (Opus 4.8), по итогам сквозного аудита кодовой базы.
+> **Для исполнителя:** план разбит на самодостаточные фичи-карточки. Каждую можно отдать отдельному
+> агенту/сессии. Для пошагового исполнения используйте `superpowers:subagent-driven-development`
+> (по фиче-агенту) или `superpowers:executing-plans` (батч с чекпойнтами). Шаги критичных фич
+> (A1, A2) даны в TDD-формате с точными путями.
+>
+> **История предыдущих этапов** (H1, H1.1, W, W2) — в `HANDOFF.md` и git-истории. Этот файл
+> перезаписывает прежний H1-план (тот этап закрыт и зафиксирован в HANDOFF §0.1).
+
+**Цель этапа:** превратить «работает, пока площадки не меняют разметку» в «ломается громко и
+самолечится». Закрыть прод-баг с битыми ссылками nekretnine, построить систему раннего оповещения
+о поломке парсеров, и добавить набор продуктовых/надёжностных улучшений по убыванию ценности.
 
 ---
 
-## ✅ СТАТУС ВЫПОЛНЕНИЯ (обновлено 19.06.2026)
+## 0. Контекст и текущее состояние (что уже есть — чтобы не дублировать)
 
-**Этап H1 — ВЫПОЛНЕН** (12.06.2026). Все волны W0-W5 отработаны мультиагентно с spec+quality ревью
-и gate `pytest` после каждой; ветка `stage-h1` → `main`, задеплоено на VPS. Тесты **105 → 207**.
-Коммиты: `30c67e8`(plan) · `47d2d9a`(W1) · `21d2bb3`(W2) · `55a7034`(W3) · `0cc149c`(W4) · `8d957c8`(W5).
-Итоги в `HANDOFF.md` §0.1. Единственное незакрытое — **W0-5 `rematch-all`** (требует согласования с
-Дарьей, генерит доставки пачкой; бэкфилл обложек 4zida при этом выполнен).
+Архитектура (полностью): `docs/SPEC.md`, `docs/web/ARCHITECTURE.md`, `HANDOFF.md`.
 
-**Этап H1.1 «Incident Hardening» — ВЫПОЛНЕН** (19.06.2026, коммит `c31a80e`). Внеплановый: реакция на
-прод-инцидент 13.06 (отзыв Telethon-сессии → крэш-луп монитора 3 дня + спам OnFailure ×6). Мультиагентное
-ревью (workflow: 4 ревьюера → состязательная проверка, 14 находок → 7 фиксов) + реализация + quality-пасс.
-Тесты **207 → 220**. Детали — `HANDOFF.md` §0.0. Сводка задач — ниже, раздел **H1.1**.
+**Пайплайн:** Telethon-монитор читает @OtzRentBelgrad → `InboundPost` → matcher (pHash → CLIP → text
+cross-check → LLM) → `Match(PENDING)` → доставка в Saved Messages / бот → Дарья постит в @RentBelgrad.
+Скраперы (nekretnine.rs httpx+__NEXT_DATA__, 4zida.rs httpx+JSON-LD, halooglasi.com Playwright) наполняют
+`Listing`. Публичный сайт `src/site/` (read-only) + админка `src/admin/` (curation).
 
----
+**Что по надёжности УЖЕ сделано (H1/H1.1):**
+- systemd `OnFailure=otz-notify-failure@%n` на всех юнитах + де-дуп алертов (cooldown ~10 мин).
+- Ночной `otz nightly-refresh`: full-scrape · stale-sweep (3 дня) · heal битых строк · rolling
+  detail-refresh · prune embeddings · `DailyMetrics` snapshot + **алерт при просадке active >20%** ·
+  price-drop алерты · бюджет refetch (`NIGHTLY_REFETCH_BUDGET_SEC`).
+- Сводка ночного прогона в бот: per-platform previewed/new/coverage%, гард «мёртвая площадка» (0
+  previews → 🚨), гард низкого покрытия (<70% → 🚨).
+- `photo_downloads.jsonl` + `otz photo-stats`; `llm_decisions.jsonl` + `otz llm-report`.
+- Telethon session-revoked → exit 3 + один алерт, без крэш-лупа; QR-реавторизация.
+- Фикстур-тесты парсеров (`tests/test_scrapers_*.py`) против сохранённого HTML.
 
-## 🔥 Этап H1.1 · «Incident Hardening» (внеплановый, 19.06.2026) — ВЫПОЛНЕН
-
-**Триггер:** 13.06 владелец случайно «завершил все сеансы» Telegram → `SessionRevokedError` →
-монитор при рестарте звал интерактивный `start()` в сервисе → `EOFError`/`Aborted!` → крэш-луп 6× →
-`failed` на 3 дня; `OnFailure` сработал на каждый рестарт (спам). SMS-реавторизация невозможна
-(`SentCodeTypeApp`/`next_type=None` при живой app-сессии). Восстановлено **QR-входом**.
-
-| ID | Фикс | Файлы | Статус |
-|---|---|---|---|
-| H1.1-1 | `connect_authorized()` — нет интерактивного `start()` в сервисе; отзыв/нет сессии → один алерт через бот + `exit 3`; рантайм `UnauthorizedError`/`AuthKeyDuplicatedError` ловится так же | `monitor.py`, `cli.py` (`_monitor`, `_open_userbot_if_needed`) | ✅ |
-| H1.1-2 | `RestartPreventExitStatus=3` — потеря сессии = один `failed`/алерт, без лупа (exit 3 сквозь `xvfb-run` проверен на проде) | `scripts/vps_install.sh` | ✅ |
-| H1.1-3 | Де-дуп нотификатора (маркер `/var/log/otz/.last_alert_<unit>`, cooldown ~10 мин) — smoke ×2 → 1 отправка | `cli.py` (`_notify_failure`) | ✅ |
-| H1.1-4 | Исправлена ложная модель «OnFailure только при исчерпании рестартов» | `vps_install.sh`, `PHASE5_DEPLOY §5.4`, `HANDOFF §5.4` | ✅ |
-| H1.1-5 | `scripts/auth_qr.py` — QR-реавторизация (ASCII+PNG QR, `OTZ_2FA`, `OTZ_SESSION`, коды возврата); `qrcode` в `pyproject`; HANDOFF §5.4 переписан (QR — основной, описан режим отказа SMS) | `scripts/auth_qr.py`, `pyproject.toml`, доки | ✅ |
-| H1.1-6 | Бюджет ночного refetch: общий wall-clock `NIGHTLY_REFETCH_BUDGET_SEC=7200` на heal+rolling + per-fetch `asyncio.wait_for` cap `REFETCH_PER_FETCH_TIMEOUT_SEC=90` (страховка от SIGTERM 16.06) | `orchestrator.py`, `cli.py` (`_run_nightly_steps`), `config.py` | ✅ |
-
-**Проверено на проде:** монитор перезапущен на hardened-код (`active`, NRestarts=0), `RestartPreventExitStatus=3`
-на живом юните, `xvfb-run` сохраняет exit 3, де-дуп алертов работает (smoke ×2 → 1 сообщение), `qrcode` ставится.
-**Остаточные мелочи** (в бэклог HANDOFF §0.3): `--reason` из systemd для notify-failure пропущен; root cause
-SIGTERM 16.06 не найден (не воспроизводится, смягчён бюджетом).
+**Чего НЕТ (и закрывается этим планом):**
+1. ❌ Самолечения/обновления **stale URL** — re-seen listing не обновляет `url` (→ баг nekretnine 404).
+2. ❌ Активного оповещения об **изменении разметки** до того, как сломается весь скрейп. Сейчас узнаём
+   косвенно: через просадку active >20% (срабатывает с лагом в дни и только при массовой потере) или
+   случайно. Нет live-smoke, нет fingerprint структуры, нет per-run parse-success-rate.
+3. ❌ Проверки **живости ссылки** перед показом на сайте; межплощадочного дедупа; подписок на поиск
+   (хотя `leads.kind="subscription"` уже зарезервирован в схеме).
 
 ---
 
-## Этап H1 · «Hardening & Intelligence»
+## 1. Сводная таблица фич
 
-> **Дата плана:** 2026-06-12 · **База:** `HANDOFF.md` (handoff 12.06), коммиты `3169d92`, `32f5c67`
-> **Исполнение:** Claude Code, multi-agent (Task tool) · **Оркестратор:** главная сессия
-> **Память проекта:** `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/` — прочитать до старта
-
-**Цель этапа:** закрыть P1/P2 бэклог ревью (целостность данных + перфоманс), добавить наблюдаемость (алерты, метрики) и три продуктовые фичи (admin-actions, LLM-тюнинг, price-drop алерты), укрепить тестами непокрытые зоны.
-
-**Не входит в этап** (принято осознанно, см. HANDOFF §0.3 P3):
-- throttle-маркер и параллельные скрапы — известно, ок;
-- потеря ~200 объявлений halooglasi из-за ротации — самолечится 3-дневным grace;
-- детерминизация pHash-vs-CLIP выбора сигнала — отдельный PR со сменой семантики (см. W4-T3, optional);
-- любые публикации в @RentBelgrad из бота — никогда (правило проекта).
+| ID | Фича | Кат. | Приоритет | Сложн. | Оценка |
+|----|------|------|-----------|--------|--------|
+| **A1** | **Fix nekretnine 404 + самолечение stale-URL** | Надёжность | **P0** | M | 0.5–1 д |
+| **A2** | **Защита от смены разметки: live-smoke + fingerprint + алерты** | Надёжность | **P0** | L | 2–3 д |
+| A3 | Проверка живости ссылки перед публикацией + dead-link sweep | Надёжность | P1 | M | 1 д |
+| A4 | Межплощадочный дедуп listings по pHash | Надёжность | P1 | M | 1 д |
+| B1 | Per-parser parse-success-rate метрики + пороговые алерты | Наблюдаемость | P1 | S–M | 0.5 д |
+| B2 | Synthetic «golden inbound» сквозной зонд | Наблюдаемость | P2 | M | 1 д |
+| B3 | Страница `/health` в админке (статус площадок) | Наблюдаемость | P2 | S | 0.5 д |
+| C1 | Бейдж «Снято» + авто-скрытие протухших + fallback фото | UX сайта | P1 | S | 0.5 д |
+| C2 | Подписки на поиск (saved search → e-mail/Telegram) | UX сайта | P2 | M | 1–1.5 д |
+| C3 | HTTP-кэш/ETag статики + lazy-loading фото | Перф/UX | P2 | S | 0.5 д |
+| C4 | CTA «WhatsApp/Viber» + share-кнопки на карточке | UX сайта | P2 | S | 0.25 д |
+| D1 | pHash banding-индекс для масштабирования matcher | Перформанс | P2 | L | 2 д |
+| E1 | Новая площадка (sasomange.rs / cityexpert.rs) | Охват | P2 | L | 2 д/шт |
+| F1 | Воронка лидов + отчёт спроса по районам | Аналитика | P2 | M | 1 д |
+| G1 | Drill восстановления бэкапа + `PRAGMA integrity_check` | Эксплуатация | P1 | S | 0.5 д |
+| G2 | Хардненинг basic-auth админки (rate-limit, lockout) | Безопасность | P2 | S | 0.25 д |
 
 ---
 
-## 0. Правила оркестрации (читать оркестратору первым)
+## 2. Порядок внедрения (фазы)
 
-1. **Волны выполняются строго последовательно.** Внутри волны агенты запускаются **параллельно** через Task tool.
-2. **Файловое владение.** Каждый агент меняет ТОЛЬКО файлы из своего брифа (см. карту владения в каждой волне). Два параллельных агента никогда не владеют одним файлом. Единственное исключение помечено явно (W2-D ↔ `cli.py`, одна функция).
-3. **Alembic — single-owner.** Все изменения схемы делает один агент в Wave 1. В других волнах миграции запрещены.
-4. **Субагенты НЕ делают:** `git commit/push`, `ssh`, любые действия на VPS, правки `.env`, изменения вне своего scope.
-5. **Коммитит оркестратор** — один коммит на волну: `stage-h1: wave N — <summary>`.
-6. **Gate после каждой волны:** `.venv/bin/pytest tests/ -q` — весь сьют зелёный (105 + новые). Волна не закрыта, пока gate красный.
-7. **Любое действие на VPS** (Wave 0 и Wave 5) — только оркестратор и только после явного подтверждения пользователя. Перед миграцией БД на проде — обязательный backup.
-8. **Стиль проекта:** лаконичные комментарии только для нетривиального WHY; model id без date-суффиксов (`claude-haiku-4-5`); деплой = rsync (`scripts/deploy_sync.sh`), не git.
-9. Каждый агент в конце отдаёт **отчёт**: изменённые файлы · новые/обновлённые тесты · открытые риски · что проверить на проде.
+```
+Фаза 1 — «Стоп кровотечению» (P0, обязательное)
+   A1 → A2          # сначала чиним баг, затем не даём ему повториться незаметно
+   (A1 и A2 независимы по файлам — можно параллельно двумя агентами)
 
-### Карта волн
+Фаза 2 — «Надёжность вокруг данных» (P1)
+   A3, A4, B1, G1   # живость ссылок, дедуп, метрики качества парсинга, backup-drill
+   (параллелизуемо; A3 зависит от A1)
 
-```mermaid
-flowchart LR
-    W0["Wave 0<br/>Prod-проверки + debug"] --> W1["Wave 1<br/>Schema: миграция 0004"]
-    W1 --> W2["Wave 2 · 4 агента параллельно<br/>Integrity / Nightly / Matcher-perf / Alerts"]
-    W2 --> W3["Wave 3 · 2 агента параллельно<br/>Admin-actions / Product-intel"]
-    W3 --> W4["Wave 4 · 2 агента параллельно<br/>Test hardening"]
-    W4 --> W5["Wave 5<br/>Deploy + smoke + handoff"]
+Фаза 3 — «Продукт и охват» (P2)
+   C1 → C2 → C3 → C4   # UX сайта, конверсия
+   B2, B3, F1, G2      # наблюдаемость и аналитика
+   E1, D1              # охват/перф — по факту роста объёмов
+
 ```
 
-| Волна | Режим | Агенты | Содержание | Gate |
-|---|---|---|---|---|
-| W0 | sequential, оркестратор + ssh | — | Проверки прода из HANDOFF §0.2, запуск 7-часового бэкфилла | отчёт о состоянии |
-| W1 | sequential, 1 агент | `db-migrator` | Миграция 0004: индексы, partial unique, новые колонки/таблица | pytest + upgrade/downgrade на копии БД |
-| W2 | **parallel ×4** | `monitor-integrity`, `nightly-pipeline`, `matcher-perf`, `alerts-systemd` | Весь P1+P2 бэклог + алерты | pytest |
-| W3 | **parallel ×2** | `admin-actions`, `product-intel` | Admin editing+CSRF, llm-report, districts-report, price-drop | pytest |
-| W4 | **parallel ×2** | `tests-matcher`, `tests-monitor` | Покрытие stages 2-4 и event-handling | pytest |
-| W5 | sequential, оркестратор + ssh | — | Backup → deploy → migrate → restart → smoke → обновить HANDOFF | smoke-чеклист |
-
-**Метки:** сложность S / M / L · риск 🟢 низкий / 🟡 средний / 🔴 высокий (трогает прод-данные или live-pipeline).
+**Правила исполнения (как в H1):** миграции Alembic — single-owner, одна ревизия на фичу; субагенты
+не делают `git`/`ssh`/правки `.env`/действий на VPS; коммитит и деплоит оркестратор после
+подтверждения; gate `.venv/bin/pytest tests/ -q` зелёный после каждой фичи; перед миграцией на
+проде — backup БД (`scripts/deploy_sync.sh` + ручной dump).
 
 ---
 
-## 🔎 Wave 0 — Prod-проверки и отладка (HANDOFF §0.2)
+# КАТЕГОРИЯ A — Надёжность скрейпинга и целостность данных
 
-Без кода. Оркестратор, ssh с подтверждением пользователя. Результат — короткий статус-отчёт; находки конвертируются в задачи (если что-то сломано — чинится ДО Wave 1).
+## ⭐ A1 — Fix nekretnine 404 + самолечение stale-URL  **[P0 · M · 0.5–1 д]**
 
-- [x] **W0-1 · Ночная сводка за 13.06** (таймер 03:14 UTC). Ожидание: «Обновлено (active)» ~20-21k; у всех трёх площадок строка «покрытие N% из M» (halooglasi теперь шлёт TotalCount). Если 🚨 или «Sweep пропущен» → `/var/log/otz/nightly-refresh.log`, дебаг по §9.
-- [x] **W0-2 · Heal-юнит `otz-adhoc-20260612-075956`** (refetch-details, ~594 битые строки) — завершился? Остаток битых:
-  `ssh root@90.156.254.159 'sqlite3 /opt/otz/data/otz.db "SELECT platform, SUM(photo_phashes=''[]'') FROM listings WHERE is_active=1 GROUP BY platform"'`
-- [x] **W0-3 · Скорость матчера на проде**: в `/var/log/otz/monitor.log` новые inbound должны матчиться за секунды (было 40-75с). Если нет — стоп, дебаг до продолжения этапа.
-- [x] **W0-4 · Запустить бэкфилл обложек 4zida** (старые строки): `ssh root@90.156.254.159 'otz-bg refetch-details --platform cetiri_zida --all'` — ~7ч, **запускать утром**, чтобы не пересечься с ночным таймером 03:00 UTC. Идёт фоном параллельно волнам 1-4 (только чтение кода, конфликтов нет).
-- [ ] **W0-5 · После W0-4**: `otz-bg rematch-all` для перепроверки старых NO_MATCH inbound'ов (по согласованию — генерит доставки Дарье, предупредить её заранее).
+### Проблема (первопричина подтверждена аудитом)
+Квартира найдена на nekretnine.rs, но сохранённая ссылка отдаёт 404 («Stranica koju tražite ne
+postoji…»). Цепочка:
+
+1. `nekretnine._previews_from_payload` (`src/scrapers/nekretnine.py:369–372`) берёт URL из
+   **slug-формы** `seo.url` (`/oglasi/468187/dvosobni-stan-obrenovac/`); numeric-fallback
+   `/oglasi/{id}/` используется только если `seo.url` пуст.
+2. `orchestrator._process_one` для **уже существующего** listing
+   (`src/scrapers/orchestrator.py:181–192`) обновляет только `last_seen_at` (и реактивирует) —
+   **`url` НЕ обновляется никогда**.
+3. Площадка меняет slug объявления (или реструктуризирует URL). Объявление по-прежнему в выдаче,
+   матчится по `external_id` → `last_seen_at` тикает, `is_active=True`. Но в БД лежит **старый
+   slug-URL**, который теперь 404.
+4. 404 при refetch (`refetch_listing_details`) ловится, но лишь бампит `details_refreshed_at` —
+   `is_active` остаётся `True`. Битая ссылка уходит на сайт и в карточку матча.
+
+**Numeric-форма `/oglasi/{id}/` slug-независима и проверенно работает** — фикстура детали
+(`tests/test_scrapers_nekretnine.py`) использует именно `https://www.nekretnine.rs/oglasi/468187/`.
+
+### Решение (4 части)
+- **A1.1** — nekretnine: всегда хранить **канонический numeric-URL** `{BASE_URL}/oglasi/{id}/`
+  (slug в `title`, не в `url`). Иммунитет к дрейфу слага на будущее.
+- **A1.2** — orchestrator: в ветке re-seen **обновлять `row.url`**, если он изменился. Лечит
+  существующие протухшие строки на следующем walk (preview теперь отдаёт canonical URL).
+- **A1.3** — orchestrator: при HTTP **404/410** в `fetch_detail` (refetch/heal) — ставить
+  `is_active=False` (а не просто бампить таймер). Подстраховка для реально снятых объявлений.
+- **A1.4** — one-off CLI `otz heal-urls`: переписать уже сохранённые nekretnine slug-URL в
+  canonical numeric прямо в проде (без ожидания walk).
+
+### Файлы
+- Modify: `src/scrapers/nekretnine.py` (`_previews_from_payload`, ~369–382)
+- Modify: `src/scrapers/orchestrator.py` (`_process_one` re-seen ветка 181–192; `refetch_listing_details` 462–477)
+- Modify: `src/cli.py` (новая команда `heal-urls`)
+- Test: `tests/test_scrapers_nekretnine.py`, `tests/test_pipeline.py` (или новый `tests/test_orchestrator_reseen.py`)
+
+### Шаги (TDD)
+
+- [ ] **Шаг 1 — Падающий тест: canonical numeric URL в preview.**
+  В `tests/test_scrapers_nekretnine.py`:
+  ```python
+  def test_parse_list_uses_canonical_numeric_url(nekretnine_list_html: str) -> None:
+      previews = NekretnineScraper.parse_list(nekretnine_list_html)
+      for p in previews:
+          # URL должен быть slug-независимым: /oglasi/<digits>/ и НИЧЕГО после id
+          assert re.fullmatch(r"https://www\.nekretnine\.rs/oglasi/\d+/", p.url), p.url
+  ```
+- [ ] **Шаг 2 — Прогон: FAIL** (`pytest tests/test_scrapers_nekretnine.py -k canonical -v`) — сейчас URL слаговый.
+- [ ] **Шаг 3 — Реализация A1.1.** В `_previews_from_payload` заменить блок 369–372:
+  ```python
+  # Канонический numeric-URL — slug-независим (площадка периодически меняет slug,
+  # из-за чего сохранённые slug-URL отдают 404 при живом объявлении). seo.anchor/title
+  # держим отдельно как title.
+  url = f"{BASE_URL}/oglasi/{external_id}/"
+  title = real_estate.get("title") or seo.get("anchor")
+  ```
+  (Удалить чтение `seo.get("url")` для `url`; `seo` оставить только ради `anchor`.)
+- [ ] **Шаг 4 — Прогон: PASS.** Также прогнать существующие тесты файла — `detail.url` остаётся как передан (numeric), не ломается.
+- [ ] **Шаг 5 — Падающий тест: re-seen обновляет url.** Новый `tests/test_orchestrator_reseen.py`:
+  ```python
+  @pytest.mark.asyncio
+  async def test_reseen_listing_refreshes_stale_url(seeded_listing):
+      # seeded_listing: nekretnine #468187 со СТАРЫМ slug-url в БД
+      await _process_one(FakeScraper(), "https://www.nekretnine.rs/oglasi/468187/",
+                         "468187", download_photos=False)
+      row = await fetch_listing("468187")
+      assert row.url == "https://www.nekretnine.rs/oglasi/468187/"  # обновился
+  ```
+- [ ] **Шаг 6 — Прогон: FAIL.**
+- [ ] **Шаг 7 — Реализация A1.2.** В `orchestrator._process_one`, re-seen ветка (после 185):
+  ```python
+  row.last_seen_at = datetime.now(timezone.utc)
+  # Самолечение протухших ссылок: площадка могла сменить slug/URL. preview-URL — источник истины.
+  if url and row.url != url:
+      row.url = url
+  if not row.is_active:
+      row.is_active = True
+  ```
+- [ ] **Шаг 8 — Прогон: PASS.**
+- [ ] **Шаг 9 — Падающий тест: 404 на refetch → is_active=False.** В тестах refetch:
+  ```python
+  @pytest.mark.asyncio
+  async def test_refetch_404_marks_inactive(seeded_active_listing):
+      # scraper.fetch_detail кидает httpx.HTTPStatusError(404)
+      await refetch_listing_details(scraper_raising_404, limit=1)
+      row = await fetch_listing(seeded_active_listing.external_id)
+      assert row.is_active is False
+  ```
+- [ ] **Шаг 10 — Прогон: FAIL.**
+- [ ] **Шаг 11 — Реализация A1.3.** В `refetch_listing_details` except-блоке (462–477) добавить
+  до `touch_on_error`:
+  ```python
+  except Exception as e:
+      stats.errors += 1
+      status = getattr(getattr(e, "response", None), "status_code", None)
+      if status in (404, 410):
+          # Объявление снято с площадки — деактивируем, чтобы не показывать битую ссылку.
+          await s.execute(
+              update(Listing).where(Listing.id == row.id).values(is_active=False)
+          )
+          stats.deactivated = getattr(stats, "deactivated", 0) + 1
+          logger.info("[refetch] #%s → %s, deactivated", row.id, status)
+      elif touch_on_error:
+          ...  # существующая логика бампа details_refreshed_at
+  ```
+  (Добавить поле `deactivated` в dataclass статистики refetch.)
+- [ ] **Шаг 12 — Прогон: PASS.**
+- [ ] **Шаг 13 — Реализация A1.4: `otz heal-urls`.** В `src/cli.py`:
+  ```python
+  @app.command("heal-urls")
+  def heal_urls(platform: str = "nekretnine", dry_run: bool = True) -> None:
+      """Переписать сохранённые slug-URL nekretnine в канонический /oglasi/<id>/."""
+      # SELECT id, external_id, url WHERE platform=... AND url NOT LIKE '%/oglasi/<id>/'
+      # для nekretnine: new = f"https://www.nekretnine.rs/oglasi/{external_id}/"
+      # dry_run → печатать diff; иначе UPDATE. Логировать кол-во.
+  ```
+- [ ] **Шаг 14 — Тест `heal-urls`** на in-memory БД с парой slug-строк (dry-run печатает, `--no-dry-run` чинит).
+- [ ] **Шаг 15 — Полный прогон `pytest tests/ -q` зелёный. Commit:**
+  `fix(nekretnine): canonical numeric URLs + self-heal stale URL + 404→inactive`
+
+### Прод-чеклист (оркестратор, после деплоя)
+- backup БД → деплой → `otz-bg heal-urls --platform nekretnine --no-dry-run` → проверить
+  на 3–5 ранее-битых ссылках, что теперь 200. Следующий nightly walk дочистит остальное через A1.2.
 
 ---
 
-## 🧱 Wave 1 — Schema (агент `db-migrator`, sequential)
+## ⭐ A2 — Защита от смены разметки площадок  **[P0 · L · 2–3 д]**
 
-Один агент, потому что alembic revision chain не переживает параллельные правки.
+### Проблема
+Площадки периодически меняют HTML/JSON-структуру (nekretnine уже мигрировал на Next.js в мае 2026 —
+см. memory `nekretnine-nextjs-migration`). Когда парсер ломается, мы узнаём об этом **косвенно и с
+лагом**: либо ночной алерт «active просел >20%» (срабатывает только при массовой потере и спустя дни),
+либо случайно. Нужно: **узнавать о поломке в течение часов, до того как протухнет вся выдача**, и по
+возможности самодиагностировать что именно сломалось.
 
-**Владение:** `alembic/versions/0004_*.py` (новый), `src/db/models.py`, при необходимости `tests/test_models*.py`.
+### Решение — четыре слоя защиты
+1. **Live-smoke зонд (`otz scrape-smoke`)** — каждые 6 ч по таймеру: на каждой площадке тянет
+   list-страницу, проверяет `≥ MIN_PREVIEWS` превью, берёт **первое живое превью**, делает
+   `fetch_detail`, проверяет полный набор полей (price/area/photos/coords/title). Падение →
+   ненулевой exit → `OnFailure` алерт. Самовыбор живого объявления (не хардкод id) защищает от
+   ложных тревог из-за снятого канарейка-объявления.
+2. **Fingerprint структуры** — стабильный отпечаток формы данных (набор ключей в
+   `__NEXT_DATA__ results[0]`, ключи `serverListData`, наличие `@type` в JSON-LD 4zida). Храним
+   last-known-good в `data/state/parser_fingerprints.json`; **дрейф → WARN-алерт** «структура
+   изменилась» (мягче, чем hard-fail; ловит изменения, которые ещё парсятся, но скоро сломают).
+3. **Per-run parse-success-rate** (см. B1) — доля деталей, распарсенных с непустым payload. Резкое
+   падение rate → алерт «вероятно сменилась разметка». Агрегирует уже существующий сигнал
+   «empty detail payload» (`orchestrator.py:196–201`).
+4. **Fallback-стратегии** — для nekretnine: если `__NEXT_DATA__` отсутствует/изменился, пробовать
+   legacy-селекторы + явный алерт. Для всех: «all-None shell» уже не вставляется (есть guard) —
+   агрегируем частоту таких шеллов в метрику слоя 3.
 
-### W1-1 · Миграция 0004 — `M` · 🟡
+### Файлы
+- Create: `src/scrapers/smoke.py` — зонд + fingerprint
+- Modify: `src/scrapers/base.py` — добавить `MIN_PREVIEWS`, `fingerprint(payload) -> dict`, `required_detail_fields`
+- Modify: каждый из `nekretnine.py` / `cetiri_zida.py` / `halooglasi.py` — реализовать `fingerprint`
+- Modify: `src/cli.py` — команда `scrape-smoke`
+- Create: `deploy/otz-scrape-smoke.service` + `deploy/otz-scrape-smoke.timer`
+- Modify: `scripts/vps_install.sh` — установка таймера + `OnFailure=otz-notify-failure@`
+- Create: `tests/test_scrape_smoke.py` — fingerprint/drift логика против фикстур
+- Modify: `src/config.py` — `SCRAPE_SMOKE_MIN_PREVIEWS`, `SCRAPE_SMOKE_ENABLED`, путь fingerprint-стейта
+- Modify: `docs/PHASE5_DEPLOY.md` — описать таймер и интерпретацию алертов
 
-Содержимое (всё в одной ревизии):
+### Шаги (TDD-каркас)
 
-1. **Индексы под sweep и выборки** (P1): `ix_listings_last_seen_at` на `listings(last_seen_at)`; составной `ix_listings_platform_active` на `listings(platform, is_active)`. Сейчас sweep сканирует 30k+ строк.
-2. **Partial unique против гонки дедупа inbound** (P1, `src/db/models.py:92-96`): SQLite считает NULL различными в UNIQUE, поэтому тройной ключ `(source_channel_id, tg_message_id, digest_share_id)` не ловит дубли при `digest_share_id IS NULL`. Добавить:
-   ```python
-   op.create_index(
-       "uq_inbound_chan_msg_nodigest", "inbound_posts",
-       ["source_channel_id", "tg_message_id"],
-       unique=True, sqlite_where=sa.text("digest_share_id IS NULL"),
-   )
-   ```
-   **Перед созданием** — дедуп существующих NULL-дублей: оставить строку с min(id), у удаляемых каскадно убрать `matches` и `published_posts`, залогировать количество (ожидается 0-единицы).
-3. **`listings.details_refreshed_at`** (DATETIME, nullable) — под rolling re-fetch (W2-C2). NULL = «никогда не обновлялись», сортировка `ASC NULLS FIRST` (в SQLite NULL и так первые).
-4. **Таблица `daily_metrics`** — под drop-алерт (W2-C5) и дашборд (W3-F3):
-   `id PK · snapshot_date TEXT · platform TEXT · active_count INT · no_photo_count INT · UNIQUE(snapshot_date, platform)`.
+- [ ] **Шаг 1 — Контракт в `base.py`.** Добавить:
+  ```python
+  class Scraper(ABC):
+      MIN_PREVIEWS: int = 5
+      REQUIRED_DETAIL_FIELDS: tuple[str, ...] = ("price_eur", "area_m2", "photo_urls")
+      @classmethod
+      def fingerprint(cls, list_html_or_payload: str) -> dict[str, Any]:
+          """Стабильный отпечаток структуры выдачи (ключи/типы, не значения).
+          Default: пусто; каждый парсер переопределяет."""
+          return {}
+  ```
+- [ ] **Шаг 2 — Падающий тест fingerprint (nekretnine).** В `tests/test_scrape_smoke.py`:
+  ```python
+  def test_nekretnine_fingerprint_stable(nekretnine_list_html):
+      fp = NekretnineScraper.fingerprint(nekretnine_list_html)
+      assert fp["source"] == "__NEXT_DATA__"
+      assert "id" in fp["result_keys"] and "seo" in fp["result_keys"]
+  ```
+- [ ] **Шаг 3 — FAIL → реализовать `NekretnineScraper.fingerprint`** (вытащить `__NEXT_DATA__`,
+  вернуть `{"source": "__NEXT_DATA__", "result_keys": sorted(results[0].keys()), "n": len(results)}`).
+  Аналогично для 4zida (JSON-LD `@type`/item-keys) и halooglasi (`serverListData`/`Ads[0]`-keys).
+- [ ] **Шаг 4 — Тест drift-детектора.** `compute_drift(old_fp, new_fp) -> list[str]` (пропавшие/новые
+  ключи). Тест: удаление ключа `seo` из result_keys → drift непустой.
+- [ ] **Шаг 5 — Реализация `smoke.py`:**
+  ```python
+  @dataclass
+  class SmokeResult:
+      platform: str; ok: bool; n_previews: int
+      detail_ok: bool; missing_fields: list[str]; drift: list[str]; error: str | None
 
-**AC:**
-- `alembic upgrade head` и `downgrade -1` проходят на копии реальной схемы (создать throwaway-БД из моделей + сидировать пару NULL-дублей для проверки дедупа в п.2);
-- `models.py` синхронизирован (индексы/колонки/таблица объявлены и в моделях);
-- pytest зелёный; ни одна существующая миграция не тронута.
+  async def run_smoke(scraper: Scraper) -> SmokeResult:
+      # 1) list_recent(max_pages=1) → assert len >= scraper.MIN_PREVIEWS
+      # 2) fetch_detail(previews[0].url) → assert все REQUIRED_DETAIL_FIELDS не пусты
+      # 3) fingerprint(list_html) vs last-known-good из parser_fingerprints.json → drift
+      # ok = (n>=MIN) and detail_ok; drift НЕ роняет ok (только WARN)
+  ```
+  Загрузка/сохранение `data/state/parser_fingerprints.json` (обновлять good-fingerprint только при `ok`).
+- [ ] **Шаг 6 — CLI `scrape-smoke`:**
+  ```python
+  @app.command("scrape-smoke")
+  def scrape_smoke(platform: str | None = None) -> None:
+      results = [run_smoke(s) for s in selected_scrapers(platform)]
+      # печать таблицы; при любом not ok или drift → бот-нотис (через bot_delivery.send_text_via_bot)
+      # exit(1) если есть not ok → systemd OnFailure
+  ```
+- [ ] **Шаг 7 — systemd unit + timer.** `deploy/otz-scrape-smoke.service` (`ExecStart=… scrape-smoke`,
+  `OnFailure=otz-notify-failure@%n.service`), `.timer` `OnCalendar=*-*-* 00/6:30:00` (каждые 6 ч,
+  со сдвигом от ночного 03:00). Прописать в `vps_install.sh`.
+- [ ] **Шаг 8 — Тесты smoke против фикстур** (мокнутый scraper, отдающий fixture-HTML): ok-кейс,
+  too-few-previews-кейс, missing-detail-field-кейс, drift-кейс.
+- [ ] **Шаг 9 — Контракт-тест парсеров (CI-гард рефакторингов):** для каждой площадки —
+  `parse_detail(fixture)` отдаёт ВСЕ `REQUIRED_DETAIL_FIELDS` непустыми. Ловит регрессии парсера
+  на этапе CI, не дожидаясь прода.
+- [ ] **Шаг 10 — `pytest tests/ -q` зелёный. Commit:**
+  `feat(scrapers): live smoke probe + structure fingerprint + drift alerts`
 
-**Риск:** дедуп в п.2 удаляет данные → миграция обязана логировать, что удалила; на проде применяется только после backup (Wave 5, шаг 2).
+### Прод-чеклист
+- Установить таймер, дождаться первого прогона, убедиться что записался baseline-fingerprint и
+  пришёл (или НЕ пришёл — при ok тишина) корректный нотис. Симулировать поломку (временно
+  сломать селектор на копии) → проверить алерт.
 
----
-
-## ⚙️ Wave 2 — Integrity + Performance + Alerts (4 агента параллельно)
-
-### Карта владения W2
-
-| Агент | Владеет | Запрещено |
-|---|---|---|
-| **B · monitor-integrity** | `src/telegram/monitor.py`, `tests/test_monitor_dedup.py` (новый) | всё остальное |
-| **C · nightly-pipeline** | `src/cli.py` (кроме функции match-all), `src/scrapers/orchestrator.py`, тесты к своим шагам | `src/matching/*`, функция match-all в `cli.py` |
-| **D · matcher-perf** | `src/matching/matcher.py`, **только функция match-all внутри `cli.py`** (исключение из правила 2, зафиксировано здесь), тесты | остальной `cli.py`, `orchestrator.py` |
-| **E · alerts-systemd** | `scripts/vps_install.sh`, unit-шаблоны в `scripts/`, `docs/` | весь `src/` |
-
-### Агент B · `monitor-integrity`
-
-#### W2-B1 · Закрыть гонку дедупликации inbound — `M` · 🔴 (P1)
-
-Код-половина задачи (индекс уже в W1). В `src/telegram/monitor.py:354-382`:
-- pre-insert check существующего inbound по `(source_channel_id, tg_message_id)` с учётом `digest_share_id IS NULL`;
-- insert обёрнут в `try/except IntegrityError` → повторный select → использовать существующую строку, **не** запускать pipeline второй раз (иначе дубль-пост и двойная доставка Дарье).
-
-**AC:** тест с двумя конкурентными корутинами на in-memory БД с применённым partial-индексом — в БД ровно одна строка, pipeline вызван один раз. Поведение для не-NULL `digest_share_id` не изменилось.
-
-### Агент C · `nightly-pipeline`
-
-Общие требования ко всем новым ночным шагам: каждый шаг **отключаем через env** (`=0` → skip), логирует счётчики в сводку, обёрнут в try/except — падение шага даёт 🚨-строку в сводке, но не валит nightly (базовый скрап — исключение, он по-прежнему фатален).
-
-#### W2-C1 · Auto-heal битых строк — `S` · 🟢 (P1)
-
-После скрапа + sweep: `refetch-details` в режиме broken-only с лимитом `NIGHTLY_HEAL_LIMIT` (default 500). Сейчас heal только вручную. В сводку: «heal: исправлено X / осталось Y».
-
-#### W2-C2 · Rolling re-fetch деталей (протухшие цены) — `M` · 🟡 (P1)
-
-Детали существующих listings никогда не обновляются — цена на сайте меняется, у нас старая. Каждую ночь: выбрать `NIGHTLY_DETAIL_REFRESH` (default 200) активных listings с минимальным `details_refreshed_at` (NULLs first), поровну по платформам; re-fetch деталей; обновить поля + `details_refreshed_at = now()`. Собрать список `(listing_id, old_price, new_price)` и **вернуть из шага** — на него в W3-G3 повесится price-drop алерт. В сводку: «деталей обновлено: N, цен изменилось: M». 21.8k активных / 200 в ночь ≈ полный цикл ~3.5 месяца — ок для старта, лимит крутится через env.
-
-#### W2-C3 · Прунинг `photo_embeddings` неактивных — `S` · 🟡 (P2)
-
-~60% из 415МБ BLOB'ов — мёртвый вес, растёт бесконечно:
-```sql
-UPDATE listings SET photo_embeddings = NULL
-WHERE is_active = 0 AND last_seen_at < date('now','-30 day') AND photo_embeddings IS NOT NULL;
-```
-Шаг в nightly + счётчик в сводку. **Примечание в docs:** файл БД не уменьшится без `VACUUM`; VACUUM — только ручной, с backup и остановленным monitor (добавить сниппет в HANDOFF §15).
-
-#### W2-C4 · `embed-all` / `hash-listings` без полных ORM-строк — `S` · 🟢 (P2)
-
-`src/cli.py:~694-772` грузит полные строки с BLOB'ами только чтобы выбрать id. Перейти на выборку колонок (`select(Listing.id, ...)`), BLOB'ы не поднимать. AC: функциональная эквивалентность (тот же набор id), память на 21.8k строк не растёт на сотни МБ.
-
-#### W2-C5 · Snapshot метрик + алерт на просадку active — `M` · 🟢 (фича)
-
-После sweep писать в `daily_metrics` (W1-1 п.4) по каждой платформе: `active_count`, `no_photo_count`. Сравнить с предыдущим snapshot: падение `active_count` >20% за сутки по любой платформе → 🚨-строка в ночной сводке + отдельное сообщение через `send_text_to_recipients`. Это страховка от «скрапер тихо умер, sweep всех погасил».
-
-#### W2-C6 · Покрытие фотографиями в daily-summary — `S` · 🟢 (фича)
-
-В утреннюю сводку: активные listings без фото по платформам (из `daily_metrics.no_photo_count` или живым запросом).
-
-#### W2-C7 · Поправить докстринг `notify-failure` — `S` · 🟢 (P3)
-
-`cli.py:~1489` обещает `OnFailure=`-wiring. Wiring делает агент E (W2-E1) — докстринг привести в соответствие реальности.
-
-### Агент D · `matcher-perf`
-
-#### W2-D1 · Вынести CPU-скан матчера из event loop — `M` · 🟡 (P2)
-
-Остаточный ~1с CPU (pHash XOR/popcount + CLIP cosine) всё ещё блокирует loop. Вынести скан в `asyncio.to_thread`: все данные пре-фетчатся **до** входа в thread, внутри — чистый CPU, никаких session/ORM/await. AC: тест бит-в-бит эквивалентности результатов на фикстурах; в проде матч новых inbound идёт в фоне, monitor не «замирает».
-
-#### W2-D2 · Кэш кандидатов для `match_all_pending` — `M` · 🟡 (P2)
-
-Сейчас полный SELECT на каждый inbound. Сделать `load_candidate_cache(session)` в `src/matching/` — lightweight-строки (id, phash-ints, цена, площадь, платформа) один раз на батч; `match_inbound(..., cache=...)` опционально принимает кэш (default None → старое поведение, live-monitor не трогаем). В `cli.py` правится **только** функция match-all (см. карту владения). AC: `rematch-all` на фикстурах даёт идентичные матчи; один SELECT кандидатов на батч вместо N.
-
-### Агент E · `alerts-systemd`
-
-#### W2-E1 · `OnFailure=` алерты для всех юнитов — `M` · 🟢 (P3 + идея §18)
-
-- Новый шаблонный юнит `otz-notify-failure@.service` (oneshot, `User=otz`, `ExecStart=/opt/otz/.venv/bin/otz notify-failure %i`) — добавить в `scripts/vps_install.sh`;
-- `OnFailure=otz-notify-failure@%n.service` в `otz-monitor.service`, `otz-nightly-refresh.service`, `otz-daily-summary.service`;
-- проверить `Restart=`/`StartLimit*` у monitor: OnFailure должен срабатывать, когда рестарты исчерпаны, а не на каждый рестарт.
-
-Алерт уходит через бот (`send_text_to_recipients` внутри существующей CLI-команды). **AC:** `vps_install.sh` идемпотентен; код юнитов проходит `systemd-analyze verify` (если доступен локально — иначе ручная проверка синтаксиса); в Wave 5 — живой smoke: `systemctl start otz-notify-failure@smoke.service` → сообщение в боте. Тестов в pytest нет — это инфра, проверяется на проде.
+### Замечания по дизайну
+- **Не спамить:** позитивные прогоны молчат; алерт только на not-ok или drift, де-дуп через
+  существующий cooldown-механизм notify-failure.
+- **Канарейка = первое живое превью**, не хардкод id → нет ложных тревог при снятии конкретного
+  объявления.
+- halooglasi требует Playwright/`xvfb-run` — smoke для неё тяжелее; вынести в тот же `xvfb-run`
+  враппер, что и monitor (см. `PHASE5_DEPLOY §3`).
 
 ---
 
-## 🧩 Wave 3 — Продуктовые фичи (2 агента параллельно)
+## A3 — Проверка живости ссылки перед публикацией + dead-link sweep  **[P1 · M · 1 д]**
 
-W3 стартует после мержа W2 — поэтому `cli.py` и `orchestrator.py` снова свободны и переходят агенту G.
+### Проблема
+Даже с A1 объявление может быть снято между ночным walk и показом на сайте. Публичная карточка не
+должна вести на 404. Нужна лёгкая проверка живости + периодический sweep битых ссылок.
 
-### Карта владения W3
+### Решение
+- **A3.1** — `otz check-links [--platform X] [--limit N]`: HEAD-запрос по `url` активных listings,
+  у которых есть PENDING/PUBLISHED match (т.е. потенциально на сайте). 404/410 → `is_active=False`
+  + лог; включить в ночной прогон как отдельный шаг с бюджетом.
+- **A3.2** — На сайте: для «Квартиры недели» и featured-карточек — фоновая (не блокирующая рендер)
+  проверка не нужна; вместо этого опираемся на `is_active` + бейдж «Снято» (C1). Read-only сайт не
+  ходит наружу в visitor-path (ToS + латентность).
 
-| Агент | Владеет | Запрещено |
-|---|---|---|
-| **F · admin-actions** | `src/admin/*`, `tests/test_admin*.py` | всё остальное |
-| **G · product-intel** | `src/cli.py`, `src/matching/llm_validator.py`, `src/scrapers/orchestrator.py` (хук price-drop), тесты | `src/admin/*`, `src/telegram/monitor.py` |
+### Файлы
+- Modify: `src/scrapers/orchestrator.py` (новая `verify_active_links()`)
+- Modify: `src/cli.py` (`check-links` + шаг в `nightly-refresh`)
+- Test: `tests/test_link_verify.py`
 
-### Агент F · `admin-actions`
-
-#### W3-F1 · Действия над match в админке — `M` · 🟡 (расширение §18)
-
-Админка сейчас read-only. Добавить минимум: **Reject** (match → REJECTED, выпадает из очереди) и **Mark posted** (→ PUBLISHED, для случаев «Дарья запостила, бот не знает»). Кнопки на странице очереди + confirm. Бот в канал по-прежнему НЕ публикует — это только разметка статусов.
-
-#### W3-F2 · CSRF на POST-роутах — `S` · 🟢 (P3, `src/admin/routes.py:94-142`)
-
-Токен (cookie/session + hidden input) на все POST-формы, включая новые из F1. Fail-closed. Риск был низкий (localhost + basic auth), но с появлением write-действий — обязателен.
-
-#### W3-F3 · Страница `/metrics` — `M` · 🟢 (stretch, §18 «Метрики»)
-
-График `active_count` по платформам из `daily_metrics` (Chart.js с CDN — админка localhost, ок) + таблица последних snapshot'ов. Если время волны поджимает — выносится в следующий этап без последствий.
-
-**AC (F):** тесты: POST без CSRF-токена → 403; reject/mark-posted меняют статус и идемпотентны; read-only страницы не сломаны.
-
-### Агент G · `product-intel`
-
-#### W3-G1 · Лог LLM-вердиктов + `otz llm-report` — `M` · 🟢 (тюнинг §18)
-
-Порог 0.7 иногда режет легитимные матчи, но тюнить его вслепую нельзя. Сделать данные:
-- `llm_validator.py` пишет JSON-line в `data/logs/llm_decisions.jsonl`: inbound_id, listing_id, verdict, confidence, latency_ms, model;
-- команда `otz llm-report --days N`: распределение confidence, сколько матчей прошло бы при 0.6 / 0.65 / 0.7, список пограничных (0.55–0.75) с url'ами для ручной проверки.
-
-Решение о смене `LLM_VALIDATION_MIN_CONFIDENCE` — отдельно, руками, после 2-3 недель данных. В этом этапе порог НЕ меняем.
-
-#### W3-G2 · `otz districts-report` — `S` · 🟢
-
-Топ raw-значений district у активных listings, отсутствующих в `data/districts.yaml`, с частотами + готовые строки yaml для вставки. Закрывает ручную рутину «появился новый микрорайон». Напоминание в выводе: districts.yaml — единственный синкаемый data-файл (`deploy_sync.sh`).
-
-#### W3-G3 · Price-drop алерты — `M` · 🟡 (новая фича)
-
-На результат W2-C2 (список `(listing_id, old_price, new_price)` из rolling re-fetch): если цена упала ≥ `PRICE_DROP_MIN_PCT` (default 5%) И listing связан с match в статусе PENDING/PUBLISHED → сообщение в бот: «📉 Цена снизилась: {old}€ → {new}€» + url listing + ссылка на исходный inbound. Флаг `PRICE_DROP_ALERTS=true` (default true). Это прямой value для Дарьи: повод переопубликовать квартиру с новой ценой.
-
-**AC (G):** тесты на report-команды (фикстуры jsonl/БД) и на фильтр price-drop (порог, статусы, флаг off).
+### Шаги
+- [ ] Тест: `verify_active_links` помечает `is_active=False` при 404 HEAD, оставляет при 200.
+- [ ] Реализация с `httpx.AsyncClient(follow_redirects=True)`, семафор 4, таймаут 10с, только
+  listings с match. 301/302 на canonical — это ОК (200 после редиректа).
+- [ ] Шаг в `nightly-refresh` под флагом `NIGHTLY_VERIFY_LINKS` (общий бюджет с heal/rolling).
+- [ ] Commit: `feat(scrapers): verify active links, deactivate dead listings`
 
 ---
 
-## 🧪 Wave 4 — Test hardening (2 агента параллельно)
+## A4 — Межплощадочный дедуп listings по pHash  **[P1 · M · 1 д]**
 
-Только новые тестовые файлы — конфликтов нет по построению. Закрывает P3 «не покрыто».
+### Проблема (из `docs/SPEC.md §8`)
+Одна квартира публикуется на 3 площадках разными ценами/слагами. Matcher может «найти» её на менее
+удачной площадке (битый slug, худшее фото). Дедуп даёт выбор лучшего представителя.
 
-| Агент | Владеет |
-|---|---|
-| **T1 · tests-matcher** | `tests/test_matcher_stages.py` (новый), фикстуры |
-| **T2 · tests-monitor** | `tests/test_monitor_events.py` (новый), фикстуры |
+### Решение
+- `find_cross_platform_dupes()`: группирует **активные** listings по близости pHash-набора (Hamming
+  ≤ порога между ≥2 фото) — переиспользует CPU-скан из `matching/candidates.py`/`matcher.py`.
+- Не мёржит автоматически: помечает группу `dup_group_id` (новая nullable-колонка, миграция) +
+  выбирает «primary» (живая ссылка, больше фото, есть координаты). Matcher и сайт предпочитают primary.
+- Отчёт `otz dupes-report` для ручной проверки.
 
-#### W4-T1 · Stages 2-4 матчера — `M` · 🟢
+### Файлы
+- Migration: `alembic/versions/00XX_listing_dup_group.py` (`listings.dup_group_id`, `is_primary`)
+- Modify: `src/db/models.py`, `src/matching/` (предпочтение primary), `src/cli.py`
+- Test: `tests/test_dedup.py`
 
-Mock `clip_embed` (фиксированные векторы) и `llm_validator` (программируемые вердикты). Сценарии: CLIP-кандидат + text mismatch (цена/площадь) → reject; LLM fail-open при exception / 529 OverloadedError → остаётся CLIP-вердикт; LLM reject ниже порога; корректные `method`-метки (`phash` / `clip` / `clip+llm`); `min_matched_photos=2` соблюдается.
-
-#### W4-T2 · Event-handling монитора — `M` · 🟢
-
-Прямые вызовы handler'ов с фейковыми событиями: альбом группируется по `grouped_id` + flush по таймеру; watermark двигается только после успешной обработки; дубликат message id скипается (опирается на W2-B1); порядок backfill.
-
-#### W4-T3 · (optional, вне DoD) Детерминизация pHash-vs-CLIP
-
-Выбор сигнала зависит от порядка обхода listings (running `best_score`, `src/matching/matcher.py`) — сохранено сознательно при рефакторе. Если делать — отдельный PR с осознанной сменой семантики и прогоном `test-batch` до/после. В этап не входит, зафиксировано чтобы не потерялось.
-
----
-
-## 🚀 Wave 5 — Deploy + smoke + handoff (оркестратор, ssh с подтверждением)
-
-> Критичные правила HANDOFF §0.4 действуют дословно: деплой = rsync, не git; `.env` руками; `data/` rsync'ом не трогать; CLI на сервере как `otz`/`otz-bg`, не root.
-
-Runbook по шагам, **каждый ssh — после подтверждения пользователя**:
-
-1. Локально: `.venv/bin/pytest tests/ -q` — весь сьют зелёный.
-2. **Backup БД:** `ssh root@90.156.254.159 'cp /opt/otz/data/otz.db /opt/otz/data/backups/otz-$(date +%F-%H%M).db'`
-3. `ssh root@90.156.254.159 'systemctl stop otz-monitor.service'` — на время миграции (SQLite DDL + session lock §13.1).
-4. `bash scripts/deploy_sync.sh` (без `--restart`, monitor и так остановлен).
-5. Миграция: `ssh root@90.156.254.159 'sudo -u otz bash -c "cd /opt/otz && .venv/bin/alembic upgrade head"'` — в логе должен отчитаться дедуп NULL-дублей (W1-1 п.2).
-6. Юниты: применить изменения из W2-E (новый `otz-notify-failure@.service`, `OnFailure=` в трёх юнитах) → `systemctl daemon-reload`.
-7. `systemctl start otz-monitor.service` → `journalctl -u otz-monitor -n 30` — чистый старт.
-8. **Smoke:**
-   - `otz-bg stats` — счётчики на месте;
-   - `otz-bg test-batch 3` — pipeline end-to-end, матчи за секунды;
-   - `systemctl start otz-notify-failure@smoke.service` — алерт прилетел в бот;
-   - следующее утро: ночная сводка содержит новые строки (heal / details refreshed / prune / metrics / 🚨-блок).
-9. Обновить `HANDOFF.md` §0 (новый статус, новые env-ключи, новые команды) и `docs/SPEC.md` («Этапы разработки» — закрыть этап H1). Новые env-ключи задокументировать в `.env.example`: `NIGHTLY_HEAL_LIMIT`, `NIGHTLY_DETAIL_REFRESH`, `PRICE_DROP_ALERTS`, `PRICE_DROP_MIN_PCT`.
-10. Коммит + push в `github.com/MWildFire/BelgradAppartment`.
-
-**Rollback:** код — `git revert` + `deploy_sync.sh --restart`; схема — `alembic downgrade -1` (monitor остановить); данные — restore backup из шага 2 (monitor остановить!).
+### Шаги
+- [ ] Миграция (single-owner) + тест up/down на копии.
+- [ ] Тест: две listings с почти одинаковым pHash-набором → одна группа, выбран primary с большим кол-вом фото.
+- [ ] Реализация группировки (asyncio.to_thread, как в matcher).
+- [ ] Site/matcher: при равенстве предпочитать `is_primary`.
+- [ ] Commit: `feat(matching): cross-platform listing dedup by pHash`
 
 ---
 
-## 🐞 Debug-протокол (для всех агентов и оркестратора)
+# КАТЕГОРИЯ B — Наблюдаемость и алертинг
 
-**Локально:** воспроизведение через fixtures (`tests/fixtures/`) или `test-batch` на VPS; один найденный баг = один регрессионный тест в том же PR; `pytest -k <name> -x -q` для итераций.
+## B1 — Per-parser parse-success-rate метрики + пороговые алерты  **[P1 · S–M · 0.5 д]**
 
-**Прод — карта «симптом → куда смотреть»:**
+### Описание
+Расширить `DailyMetrics` (или новую `ScrapeRunMetrics`) полями `details_attempted`,
+`details_parsed_ok`, `empty_shells`. После каждого скрейпа считать `parse_rate = ok/attempted`;
+если `< PARSE_RATE_MIN` (напр. 0.7) при достаточной выборке → 🚨 «парсер деградирует / вероятно
+сменилась разметка». Это слой 3 защиты A2, но как часть штатного прогона (не только smoke).
 
-| Симптом | Первый шаг |
-|---|---|
-| Monitor молчит / не матчит | `journalctl -u otz-monitor -f`; «disk I/O error» → session lock §13.1 (кто-то трогает `otz_monitor.session`) |
-| Матч снова медленный (>10с) | тайминги в `/var/log/otz/monitor.log`; проверить, что W2-D1 задеплоен и monitor перезапущен (старый код живёт в памяти!) |
-| Ночной прогон с 🚨 / «Sweep пропущен» | `/var/log/otz/nightly-refresh.log`; покрытие <70% → смотреть сегментацию ценовых диапазонов конкретной площадки |
-| Дубль-доставка Дарье | `sqlite3 ... "SELECT inbound_post_id, COUNT(*) FROM matches GROUP BY 1 HAVING COUNT(*)>..."` + проверить partial-индекс W1-1 п.2 применён |
-| FloodWait / `tg_message_id=0` | §13.5 → `otz-bg deliver-all --force` |
-| Adhoc-команда «пропала» после disconnect | она жива: `journalctl -u otz-adhoc-<TS> -f`; tail сам прилетит в Saved Messages |
-| Ownership сломан после ручного rsync | `chown -R otz:otz /opt/otz`; больше никогда `rsync -a` (§13, история 14.5) |
+### Файлы
+- Modify: `src/scrapers/orchestrator.py` (счётчики в `ScrapeResult`), `src/cli.py` (порог-алерт в nightly),
+  опц. миграция для персиста метрик. Test: `tests/test_scrape_metrics.py`.
 
-**Квирки, которые НЕ баги** (не «чинить» случайно): LLM non-determinism (§13.4 — `test-batch` может дать другую раскладку), throttle race (§13.2), ротация halooglasi mid-walk.
+### Шаги
+- [ ] Тест: при 8 ok из 10 → rate 0.8 (нет алерта); 3 из 10 → алерт.
+- [ ] Прокинуть счётчики через `ScrapeResult` → строка в ночной сводке + standalone-алерт при просадке.
+- [ ] Commit: `feat(scrapers): parse-success-rate metric + degradation alert`
 
----
+## B2 — Synthetic «golden inbound» сквозной зонд  **[P2 · M · 1 д]**
 
-## 🤖 Шаблон промпта субагента (копировать оркестратору)
+### Описание
+Закрепить «золотой» inbound (известный пост с известным фото, которое ДОЛЖНО матчиться на реальный
+listing) и зонд `otz pipeline-probe`: прогоняет matcher на golden inbound, проверяет что матч найден
+и confidence ≥ X. Ловит регрессии всего пайплайна (pHash/CLIP/thresholds/БД), а не только парсера.
+Запуск по таймеру (раз в день) или вручную после деплоя.
 
-```text
-Ты — субагент Claude Code на проекте otz-rent-finder.
-Контекст: прочитай HANDOFF.md (минимум §0, §0.4, §16, §17 + секции, указанные в задаче)
-и свою задачу <ID> в docs/FEATURE_PLAN.md.
+### Файлы
+- Create: `tests/fixtures/golden/inbound/` (фото + ожидаемый external_id), `src/jobs/probe.py`, CLI `pipeline-probe`.
+- Шаги: зафиксировать golden-пару → зонд сверяет результат matcher → exit/alert. Commit:
+  `feat(jobs): synthetic golden-inbound pipeline probe`.
 
-Scope: разрешено менять ТОЛЬКО эти файлы: <список из карты владения волны>.
-Запрещено: git commit/push, ssh, действия на VPS, правки .env, файлы вне scope,
-изменения alembic (кроме агента db-migrator в Wave 1).
+## B3 — Страница `/health` в админке  **[P2 · S · 0.5 д]**
 
-Порядок: 1) прочитай связанный код и секции HANDOFF; 2) реализуй по AC задачи;
-3) добавь/обнови тесты; 4) прогони ВЕСЬ сьют: .venv/bin/pytest tests/ -q;
-5) верни отчёт: изменённые файлы · новые тесты · риски · что проверить на проде.
+### Описание
+В `src/admin/` роут `/health`: таблица по площадкам — last successful scrape, active_count (тренд 7
+дней из `DailyMetrics`), last smoke-result, parse-rate, кол-во deactivated за сутки; статус
+монитора (last inbound received_at). Один экран «всё ли живо» для Дарьи/оператора.
 
-Стиль: лаконичные комментарии только для нетривиального WHY; model id без
-date-суффиксов (claude-haiku-4-5); ничего не публиковать в @RentBelgrad.
-```
-
----
-
-## ✅ Definition of Done этапа H1
-
-- [~] W0: проверки + бэкфилл 4zida закрыты; **`rematch-all` НЕ прогнан** (по согласованию с Дарьей — см. HANDOFF §0.2)
-- [x] Весь P1 закрыт: auto-heal в nightly · гонка дедупа (индекс + код + тест) · индексы listings · rolling re-fetch деталей
-- [x] Весь P2 закрыт: column-select в embed-all/hash-listings · прунинг embeddings · кэш match-all · CPU-скан в to_thread
-- [x] P3 закрыт частично (план): CSRF · notify-failure wiring + докстринг · тесты stages 2-4 и monitor events
-- [x] Фичи: OnFailure-алерты · drop-алерт active>20% · photo coverage в сводке · admin reject/mark-posted · `/metrics` (или явно перенесён) · llm-report · districts-report · price-drop алерты
-- [x] `pytest -q` зелёный — **207** тестов после H1 (база 105), **220** после H1.1
-- [x] Прод: миграция применена после backup, monitor перезапущен, smoke из W5-8 пройден
-- [x] `HANDOFF.md` §0, `docs/SPEC.md`, `.env.example` обновлены; коммит запушен
+### Файлы
+- Modify: `src/admin/routes.py` (+ `templates/health.html`). Test: `tests/test_admin_health.py`.
+- Commit: `feat(admin): /health dashboard (scraper + monitor status)`.
 
 ---
 
-## Приложение А — сводная таблица задач
+# КАТЕГОРИЯ C — UX публичного сайта
 
-| ID | Задача | Агент | Волна | Слож. | Риск | Источник |
-|---|---|---|---|---|---|---|
-| W0-1..5 | Prod-проверки + бэкфилл 4zida | оркестратор | 0 | S | 🟡 | §0.2 |
-| W1-1 | Миграция 0004 (индексы, partial unique, колонка, daily_metrics) | db-migrator | 1 | M | 🟡 | P1 |
-| W2-B1 | Гонка дедупа inbound (код) | monitor-integrity | 2 | M | 🔴 | P1 |
-| W2-C1 | Auto-heal в nightly | nightly-pipeline | 2 | S | 🟢 | P1 |
-| W2-C2 | Rolling re-fetch деталей | nightly-pipeline | 2 | M | 🟡 | P1 |
-| W2-C3 | Прунинг photo_embeddings | nightly-pipeline | 2 | S | 🟡 | P2 |
-| W2-C4 | embed-all/hash-listings: колонки вместо ORM | nightly-pipeline | 2 | S | 🟢 | P2 |
-| W2-C5 | daily_metrics + алерт просадки active | nightly-pipeline | 2 | M | 🟢 | идея |
-| W2-C6 | Photo coverage в daily-summary | nightly-pipeline | 2 | S | 🟢 | идея |
-| W2-C7 | Докстринг notify-failure | nightly-pipeline | 2 | S | 🟢 | P3 |
-| W2-D1 | CPU-скан матчера → to_thread | matcher-perf | 2 | M | 🟡 | P2 |
-| W2-D2 | Кэш кандидатов match-all | matcher-perf | 2 | M | 🟡 | P2 |
-| W2-E1 | OnFailure-алерты (systemd) | alerts-systemd | 2 | M | 🟢 | P3+§18 |
-| W3-F1 | Admin: reject / mark-posted | admin-actions | 3 | M | 🟡 | §18 |
-| W3-F2 | CSRF на admin POST | admin-actions | 3 | S | 🟢 | P3 |
-| W3-F3 | Страница /metrics (stretch) | admin-actions | 3 | M | 🟢 | §18 |
-| W3-G1 | llm_decisions.jsonl + llm-report | product-intel | 3 | M | 🟢 | §18 |
-| W3-G2 | districts-report | product-intel | 3 | S | 🟢 | §18 |
-| W3-G3 | Price-drop алерты | product-intel | 3 | M | 🟡 | новая |
-| W4-T1 | Тесты matcher stages 2-4 | tests-matcher | 4 | M | 🟢 | P3 |
-| W4-T2 | Тесты monitor events | tests-monitor | 4 | M | 🟢 | P3 |
-| W4-T3 | Детерминизация сигнала (optional, вне DoD) | — | — | M | 🟡 | quirk |
-| W5 | Deploy runbook + handoff | оркестратор | 5 | M | 🔴 | — |
+## C1 — Бейдж «Снято» + авто-скрытие протухших + fallback фото  **[P1 · S · 0.5 д]**
+
+### Описание
+`src/site/format.py:is_rented()` уже определяет «снято» (is_active + текстовые маркеры). Сейчас
+rented всегда показываются (`readmodel`: `show_rented` зарезервирован). Сделать:
+- Видимый бейдж «Снято» на карточке (каталог + деталь) когда `is_rented`.
+- Default-фильтр каталога: rented опускаются вниз/скрываются (тогл «показать снятые»).
+- Fallback-изображение когда фото 404 (admin `/photo/...` уже перебирает расширения; на сайте —
+  `onerror` → placeholder, чтобы битое фото не ломало сетку).
+
+### Файлы
+- Modify: `src/site/readmodel.py` (сортировка/фильтр rented), `templates/*` (бейдж + `<img onerror>`),
+  `static/` (placeholder). Test: `tests/site/test_readmodel.py`.
+- Commit: `feat(site): rented badge, hide-stale default, photo fallback`.
+
+## C2 — Подписки на поиск (saved search → e-mail/Telegram)  **[P2 · M · 1–1.5 д]**
+
+### Описание
+Схема уже готова: `leads.kind="subscription"` зарезервирован. Клиент сохраняет фильтр (район/цена/
+комнаты/ВНЖ) → при появлении нового публичного listing под критерии — уведомление на e-mail (Resend,
+`src/site/email.py`) или Telegram. Растит удержание и конверсию.
+
+### Файлы
+- Migration: таблица `subscriptions` (criteria JSON, contact, channel, is_active) или переиспользовать
+  `leads` + новая `subscription_matches`. Modify: `src/site/` (форма подписки на /catalog), новый
+  `src/jobs/notify_subscriptions.py` (шаг в nightly: новые listings × активные подписки → нотисы,
+  идемпотентно через `subscription_matches`). Test: `tests/test_subscriptions.py`.
+- Шаги: миграция → форма+валидация (honeypot+ratelimit, как leads) → matcher подписок → нотисы →
+  unsubscribe-ссылка (токен). Commit: `feat(site): saved-search subscriptions with notifications`.
+
+## C3 — HTTP-кэш/ETag статики + lazy-loading фото  **[P2 · S · 0.5 д]**
+
+### Описание
+`/vnj`, `/how`, `/calculator` рендерятся заново на каждый запрос. Добавить `ETag`/`Last-Modified`
+(+ 304) на статические страницы; `loading="lazy"` + `width/height` на `<img>` в каталоге (CLS/скорость);
+`Cache-Control` на `/static` (asset-version уже есть в `app.py`). Низкий риск, заметный эффект.
+
+### Файлы
+- Modify: `src/site/routes.py` (ETag middleware/helper), `templates/*`. Test: `tests/site/test_caching.py`.
+- Commit: `perf(site): ETag/304 for static pages + lazy images`.
+
+## C4 — CTA «WhatsApp/Viber» + share на карточке  **[P2 · S · 0.25 д]**
+
+### Описание
+Кнопка «Написать в Telegram» уже есть (F5/W2). Добавить WhatsApp (`wa.me`) / Viber deep-link и
+кнопку «поделиться» (Web Share API + копировать ссылку) на `/apt/{id}`. Конфиг-URL в `config.py`
+(`SITE_WHATSAPP_URL`). Без бэкенда.
+
+### Файлы
+- Modify: `templates/apt.html`, `src/config.py`, `src/site/app.py` (Jinja global). Commit:
+  `feat(site): WhatsApp/Viber CTA + share button`.
+
+---
+
+# КАТЕГОРИЯ D — Производительность
+
+## D1 — pHash banding-индекс для масштабирования matcher  **[P2 · L · 2 д]**
+
+### Описание
+Сейчас matcher делает линейный CPU-скан всех active listings на каждый inbound (быстро для ~20–30k,
+но O(N) и растёт). При росте до 100k+ внедрить **banding/LSH-индекс** по pHash: разбить 64-битный
+хэш на полосы, хранить inverted-index полоса→listings, искать кандидатов по совпадению ≥1 полосы.
+Снижает скан до кандидатов-подмножества. Делать **только когда объёмы это оправдают** (YAGNI — сейчас
+не нужно; план фиксирует подход).
+
+### Файлы
+- Modify: `src/matching/candidates.py` (band-index), опц. таблица `phash_bands`. Test: `tests/test_phash_index.py`.
+- Commit: `perf(matching): pHash banding index`.
+
+---
+
+# КАТЕГОРИЯ E — Охват (новые площадки)
+
+## E1 — Новая площадка (sasomange.rs или cityexpert.rs)  **[P2 · L · 2 д/шт]**
+
+### Описание
+Больше источников listings → выше шанс матча. `base.Scraper` — чистый интерфейс
+(`list_recent`/`fetch_detail`); добавить новый класс + `Platform`-enum + фикстуры + парсер-тесты +
+fingerprint (A2) + smoke (A2). cityexpert.rs (агентство, JSON API) и sasomange.rs — кандидаты.
+Уточнить у Дарьи приоритет площадки.
+
+### Файлы
+- Migration: расширить `Platform` enum (sqlite — проверить хранение enum как string). Create:
+  `src/scrapers/<platform>.py`, `tests/fixtures/<platform>/`, `tests/test_scrapers_<platform>.py`.
+  Modify: orchestrator (регистрация), config (list-url). Commit: `feat(scrapers): add <platform>`.
+
+---
+
+# КАТЕГОРИЯ F — Аналитика
+
+## F1 — Воронка лидов + отчёт спроса по районам  **[P2 · M · 1 д]**
+
+### Описание
+`leads` уже копит заявки (`status`: new/contacted/closed, `kind`, `districts`, `budget_eur`). Дать
+Дарье аналитику: воронка new→contacted→closed (конверсия), топ запрашиваемых районов и бюджетных
+вилок (несовпадение спроса/предложения = что искать). CLI `otz leads-report` + блок на `/leads` или
+`/metrics` админки.
+
+### Файлы
+- Modify: `src/admin/routes.py` (агрегаты на `/leads`), `src/cli.py` (`leads-report`). Test:
+  `tests/test_leads_report.py`. Commit: `feat(analytics): leads funnel + district demand report`.
+
+---
+
+# КАТЕГОРИЯ G — Эксплуатация и безопасность
+
+## G1 — Drill восстановления бэкапа + integrity check  **[P1 · S · 0.5 д]**
+
+### Описание
+Бэкап в B2 есть (`PHASE5_DEPLOY §3`), но **восстановление никогда не проверялось**. Добавить
+`scripts/restore_check.sh`: скачать последний бэкап, развернуть в temp, `PRAGMA integrity_check`,
+прогнать smoke-запросы (counts). Запускать вручную ежемесячно (или nightly-шаг раз в неделю с
+алертом при сбое). Бэкап без проверенного restore = не бэкап.
+
+### Файлы
+- Create: `scripts/restore_check.sh`. Modify: `docs/PHASE5_DEPLOY.md`. Commit:
+  `chore(ops): backup restore drill + integrity check`.
+
+## G2 — Хардненинг basic-auth админки  **[P2 · S · 0.25 д]**
+
+### Описание
+`admin/auth.py` блокирует дефолтный пароль (хорошо), но нет rate-limit/lockout на перебор. Добавить
+per-IP счётчик неудачных попыток (как `lead_rate_limiter`) + временный lockout; убрать повторное
+логирование critical на каждый запрос (флаг `_default_password_warned` сейчас не гасит повтор).
+
+### Файлы
+- Modify: `src/admin/auth.py`. Test: `tests/test_admin_auth.py`. Commit:
+  `feat(admin): basic-auth rate-limit + one-time default-password warning`.
+
+---
+
+## 3. Само-ревью плана (по чеклисту writing-plans)
+
+- **Покрытие требований пользователя:** ОБЯЗАТЕЛЬНО-1 (nekretnine 404) → **A1** (первопричина
+  подтверждена кодом, 4 части + heal-команда). ОБЯЗАТЕЛЬНО-2 (защита от смены разметки) → **A2**
+  (live-smoke + fingerprint + parse-rate + fallback + таймер/алерт), усилено **B1/B2/B3**.
+  «Свои идеи» → A3, A4 (надёжность), C1–C4 (UX/конверсия), C2 использует уже зарезервированную
+  `leads.kind=subscription`, D1 (перф), E1 (охват), F1 (аналитика), G1/G2 (эксплуатация/безопасность).
+- **Без плейсхолдеров:** критичные A1/A2 даны кодом и точными путями/строками; P1/P2 — концепт +
+  файлы + тест-точки + commit-сообщение (детализуются агентом при исполнении фичи).
+- **Согласованность имён:** `is_active`, `details_refreshed_at`, `_process_one`,
+  `refetch_listing_details`, `DailyMetrics`, `leads.kind` — сверены с реальным кодом
+  (`orchestrator.py`, `models.py`, `config.py`).
+- **Открытый вопрос к Дарье (для E1/C2):** приоритет новой площадки и канал подписок (e-mail vs
+  Telegram) — уточнить перед Фазой 3.
+
+---
+
+**Готово к исполнению.** Рекомендуемый старт — Фаза 1 (**A1 → A2**), двумя параллельными агентами
+(файлы не пересекаются).
+
+---
+
+# ДОПОЛНЕНИЕ (2026-06-23) — Авто-синхронизация сайта (P0) + решения по Фазе 3
+
+Добавлено по требованию пользователя после старта исполнения. Реализуется поверх Фаз 1–2.
+
+## ⭐ X1 — Автопубликация на сайт при постинге в Telegram **[P0]**
+
+**Проблема:** сегодня квартира появляется на публичном сайте только после ручной курации в админке
+(`get_or_create_site_listing` через кнопки `/published`). Нужно: как только матч отправлен ботом в
+канал (`Match.status` PENDING→PUBLISHED + создан `PublishedPost`), карточка должна авто-появляться на
+сайте.
+
+**Дизайн (по итогам мультиагентного маппинга архитектуры):**
+- Общий хелпер `auto_publish_site_listing(session, match_id)` в `src/admin/publish.py` — оборачивает
+  идемпотентный `get_or_create_site_listing`, применяет `parse_relocation_flags` только при создании
+  (устраняет дублирование с `routes.py:mark_posted_action`). `mark_posted_action` рефакторится на него.
+- Хук в `send_match_via_bot` (`src/telegram/bot_delivery.py`, сразу после `m.status` → PUBLISHED) +
+  зеркально в userbot-пути (`src/telegram/delivery.py`). Обёрнут в `try/except` + kill-switch
+  `auto_publish_on_send` (default True) — **автопубликация не должна ронять доставку**.
+- Ночной backfill-шаг `auto_publish_new_listings(since_hours, limit)` (safety-net для матчей до релиза
+  или где inline-хук не сработал), за флагом `nightly_auto_publish`.
+- Идемпотентность: unique `site_listings.match_id` + `(row, created=False)` гарантируют, что ручные
+  правки Дарьи (выключенный `is_public`, флаги, featured, note) НИКОГДА не затираются.
+
+## ⭐ X2 — Автоудаление с сайта при деактивации на площадке **[P0]**
+
+**Проблема:** `readmodel._load_rows` фильтрует только по `is_public` и `is_primary` — НЕ по
+`is_active`. Деактивированное объявление (404 на площадке) сохраняет публичную карточку с битой ссылкой.
+
+**Дизайн:**
+- Хук в `verify_active_links` (`src/scrapers/orchestrator.py`) — в ТОЙ ЖЕ транзакции, что флипает
+  `is_active=False` на 404/410, ставить `is_public=False` (и `is_featured=False`) на `SiteListing`,
+  чей `Match.listing_id` == деактивированному. Атомарно, идемпотентно (`WHERE is_public=True`).
+- Поле `LinkVerifyStats.site_listings_hidden` + строка в ночной сводке. Алерт при аномально большом
+  числе скрытых.
+- За флагом `nightly_auto_hide_site_listings` (default True). **Скоуп строго 404/410** — НЕ
+  stale-sweep (10-дневная эвристика: сбой скрейпера мог бы массово ложно скрыть каталог).
+- Хелпер `hide_site_listings_for_listing(session, listing_id)` — чтобы refetch/stale могли подключиться
+  позже без дублирования.
+- **Ре-экспозиция не авто:** re-seen → `is_active=True` НЕ возвращает карточку; только ручной
+  toggle-public (защита от мигания).
+- **Инвалидация readmodel-кэша** при смене `is_public` (кэш каталога не ключуется по is_public —
+  иначе изменение видно только после TTL).
+
+**Принятые дефолты (обратимы Дарьей; см. список вопросов в сессии):** автопубликовать все PUBLISHED;
+скрывать жёстко только на 404/410; не авто-ре-экспозиция; сбрасывать featured при скрытии; ночной
+дайджест вместо пер-итем спама; без гейта по источнику в v1.
+
+## Решения по Фазе 3 (от пользователя)
+- **Батч C1, C3, B3, F1, G2, B2** — делать все. **C2** — оба канала (e-mail Resend + Telegram).
+  **E1** — обе площадки (cityexpert.rs + sasomange.rs). **C4** — нужен `SITE_WHATSAPP_URL` (кнопка
+  config-gated, скрыта при пустом URL).
+- **Финал:** полное мультиагентное ревью всего кода (безопасность/перф/корректность/edge-cases).
