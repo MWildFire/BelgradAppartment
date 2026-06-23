@@ -181,3 +181,58 @@ async def test_similar_same_district_excluding_self(site_db: str) -> None:
     ids = {v.id for v in sims}
     assert 1 not in ids  # excludes self
     assert ids == {3}  # only other public Vracar listing
+
+
+# --- A4: cross-platform dedup — catalog hides non-primary group members ---
+
+
+@pytest.mark.asyncio
+async def test_catalog_hides_non_primary_dupes(tmp_path) -> None:
+    """Two public site_listings whose underlying listings are the same dup group: only the
+    is_primary listing shows in the catalog (one card per apartment, not two)."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from src.db.models import (
+        Base, InboundPost, Listing, Match, MatchStatus, Platform, SiteListing, SourceChannel,
+    )
+
+    def _dt(d: int) -> datetime:
+        return datetime(2026, 6, d, 12, 0, tzinfo=UTC)
+
+    db_path = tmp_path / "dup.db"
+    url = f"sqlite+aiosqlite:///{db_path}"
+    engine = create_async_engine(url, future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        s.add(SourceChannel(id=1, tg_id=111))
+        await s.flush()
+        # Listings 1 & 2: same dup group (gid=1). 1 is primary, 2 is demoted.
+        s.add(Listing(id=1, platform=Platform.NEKRETNINE, external_id="e1", url="http://x/1",
+                      price_eur=600, district="Vracar", photo_urls=["u"], dup_group_id=1,
+                      is_primary=True))
+        s.add(Listing(id=2, platform=Platform.HALOOGLASI, external_id="e2", url="http://x/2",
+                      price_eur=650, district="Vracar", photo_urls=["u"], dup_group_id=1,
+                      is_primary=False))
+        for lid in (1, 2):
+            s.add(InboundPost(id=lid, source_channel_id=1, tg_message_id=100 + lid,
+                              raw_text="", photo_paths=[f"data/inbound/1/{lid}/00.jpg"]))
+        await s.flush()
+        for mid in (1, 2):
+            s.add(Match(id=mid, inbound_post_id=mid, listing_id=mid, status=MatchStatus.PUBLISHED))
+        await s.flush()
+        s.add(SiteListing(id=1, match_id=1, is_public=True, created_at=_dt(5), updated_at=_dt(5)))
+        s.add(SiteListing(id=2, match_id=2, is_public=True, created_at=_dt(6), updated_at=_dt(6)))
+        await s.commit()
+    await engine.dispose()
+
+    items, total = await rm.list_public(Filters(), database_url=url)
+    ids = {v.id for v in items}
+    # The non-primary duplicate (site_listing 2) is hidden; only the primary (1) shows.
+    assert ids == {1}
+    assert total == 1
+    # get_public on the hidden non-primary also returns None.
+    assert await rm.get_public(2, database_url=url) is None

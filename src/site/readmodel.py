@@ -110,6 +110,10 @@ async def _load_rows(database_url: str | None) -> list[_Row]:
         .join(InboundPost, InboundPost.id == Match.inbound_post_id, isouter=True)
         .join(PublishedPost, PublishedPost.match_id == Match.id, isouter=True)
         .where(SiteListing.is_public.is_(True))
+        # A4 — one card per apartment: hide non-primary members of a cross-platform dup group.
+        # Ungrouped listings (dup_group_id NULL) are always is_primary=True, so this only drops
+        # the demoted duplicates and leaves the curated public set otherwise unchanged.
+        .where(Listing.is_primary.is_(True))
     )
     rows: list[_Row] = []
     async with sitedb.read_session(database_url=database_url) as s:

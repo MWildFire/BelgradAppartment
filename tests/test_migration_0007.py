@@ -105,7 +105,9 @@ def test_upgrade_0007_adds_columns_index_defaults(tmp_path: Path) -> None:
 def test_downgrade_0007_drops_columns_index(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    # Pin to 0007 (not head) so this stays a 0007-specific up/down test as later revisions
+    # are added on top — `downgrade -1` must land on 0006 regardless of the current head.
+    command.upgrade(cfg, "0007_featured_lead_fields")
 
     command.downgrade(cfg, "-1")
 

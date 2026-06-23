@@ -378,6 +378,7 @@ def _select_best(
     best_count = 0
     best_score = 0.0
     best_method = METHOD_CLIP
+    best_is_primary = True
 
     for row in rows:
         ph_count = ph_counts.get(row.id, 0)
@@ -401,14 +402,24 @@ def _select_best(
         if cand_method == METHOD_CLIP and not _passes_text_check(parsed, row, settings):
             continue
 
-        # Track best across listings (prefer higher count; tie-break by score).
-        if cand_count > best_count or (
-            cand_count == best_count and cand_score > best_score
-        ):
+        # Track best across listings (prefer higher count; tie-break by score; A4 final
+        # tie-break: on an EXACT (count, score) tie, prefer the cross-platform-dedup primary
+        # so the site links the better representative. This only fires on exact ties, so it
+        # cannot change any non-tied outcome the matcher made before A4).
+        better = cand_count > best_count or (cand_count == best_count and cand_score > best_score)
+        primary_tiebreak = (
+            best_id is not None
+            and cand_count == best_count
+            and cand_score == best_score
+            and row.is_primary
+            and not best_is_primary
+        )
+        if better or primary_tiebreak:
             best_id = row.id
             best_count = cand_count
             best_score = cand_score
             best_method = cand_method
+            best_is_primary = row.is_primary
 
     return best_id, best_count, best_score, best_method
 

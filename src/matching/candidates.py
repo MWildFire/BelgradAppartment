@@ -39,6 +39,9 @@ class CandidateRow:
     area_m2: float | None
     district: str | None
     has_embs: bool
+    # A4 — cross-platform dedup primary flag. Defaults True so ungrouped listings (the vast
+    # majority) behave exactly as before; only used as a final tie-break in _select_best.
+    is_primary: bool = True
 
 
 @dataclass(slots=True)
@@ -66,6 +69,7 @@ def candidate_scan_select() -> Select:
         Listing.area_m2,
         Listing.district,
         Listing.photo_embeddings.isnot(None).label("has_embs"),
+        Listing.is_primary,
     ).where(Listing.is_active.is_(True))
 
 
@@ -98,6 +102,7 @@ def scan_rows_from_db(db_rows: Sequence[Any]) -> list[CandidateRow]:
             area_m2=r.area_m2,
             district=r.district,
             has_embs=bool(r.has_embs),
+            is_primary=bool(getattr(r, "is_primary", True)),
         )
         for r in db_rows
     ]

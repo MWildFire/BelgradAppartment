@@ -189,6 +189,13 @@ class Listing(Base):
     # NULL = details never re-fetched; rolling refresh sorts ASC (SQLite puts NULLs first).
     details_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # A4 — cross-platform dedup by pHash. NULL = not (yet) in any duplicate group. A group of
+    # ≥2 same-apartment listings shares one stable dup_group_id (= min member id); exactly one
+    # member is is_primary=True. Every ungrouped listing is its own representative (is_primary
+    # True, dup_group_id NULL). The dedup batch job only TAGS these — it never merges rows.
+    dup_group_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
     matches: Mapped[list[Match]] = relationship(back_populates="listing")
 
 

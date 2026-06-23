@@ -742,6 +742,83 @@ async def _match_all() -> None:
                 await client.disconnect()
 
 
+@cli.command("dupes-report")
+@click.option(
+    "--write/--no-write",
+    default=False,
+    show_default=True,
+    help="--write persists dup_group_id + is_primary to the DB; default --no-write only "
+         "reports (safe to run any time).",
+)
+@click.option(
+    "--hamming",
+    type=int,
+    default=None,
+    help="Override DEDUP_MAX_HAMMING for this run.",
+)
+@click.option(
+    "--min-shared",
+    type=int,
+    default=None,
+    help="Override DEDUP_MIN_SHARED_PHOTOS for this run.",
+)
+def dupes_report(write: bool, hamming: int | None, min_shared: int | None) -> None:
+    """A4: group active listings that are the same apartment (≥2 near-dup photos) and report.
+
+    Default is read-only; pass --write to persist the dup_group_id + is_primary tags.
+    """
+    asyncio.run(_dupes_report(write, hamming, min_shared))
+
+
+async def _dupes_report(write: bool, hamming: int | None, min_shared: int | None) -> None:
+    from sqlalchemy import select
+
+    from src.db.models import Listing
+    from src.db.session import get_session
+    from src.matching.dedup import find_cross_platform_dupes
+
+    stats = await find_cross_platform_dupes(
+        max_hamming=hamming, min_shared_photos=min_shared, write=write
+    )
+
+    mode = "WROTE tags" if write else "read-only (no DB changes)"
+    click.echo(
+        f"=== Cross-platform dupes — {mode} ===\n"
+        f"active scanned: {stats.active_scanned}   groups: {stats.groups_found}   "
+        f"demoted (non-primary): {stats.listings_demoted}"
+    )
+    if not stats.groups:
+        click.echo("(no duplicate groups found)")
+        return
+
+    # Hydrate member display fields (platform / price / #photos) for every group member.
+    member_ids = [mid for g in stats.groups for mid in g.member_ids]
+    async with get_session() as s:
+        rows = (
+            await s.execute(
+                select(
+                    Listing.id, Listing.platform, Listing.price_eur,
+                    Listing.photo_urls, Listing.url,
+                ).where(Listing.id.in_(member_ids))
+            )
+        ).all()
+    by_id = {r.id: r for r in rows}
+
+    for g in sorted(stats.groups, key=lambda gg: gg.dup_group_id):
+        click.echo(f"\n— group {g.dup_group_id} ({len(g.member_ids)} listings) —")
+        for mid in g.member_ids:
+            r = by_id.get(mid)
+            if r is None:
+                continue
+            marker = "★ primary" if mid == g.primary_id else "  dup    "
+            price = f"{r.price_eur}€" if r.price_eur else "?€"
+            n_photos = len(r.photo_urls) if r.photo_urls else 0
+            click.echo(
+                f"  {marker}  id={mid:<7d} {r.platform.value:12s} {price:>7s} "
+                f"photos={n_photos:<3d} {r.url}"
+            )
+
+
 @cli.command("embed-all")
 @click.option(
     "--target",

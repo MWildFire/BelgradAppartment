@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # --- Matching thresholds ---
     phash_max_hamming: int = 6
     min_matched_photos: int = 2
+    # A4 — cross-platform listing dedup (periodic batch job, NOT the per-inbound hot path).
+    # Two active listings are the SAME apartment when they share ≥ dedup_min_shared_photos
+    # photos whose pHash Hamming distance ≤ dedup_max_hamming. min=2 on purpose: a single
+    # shared photo is too weak (agency/stock photos get reused across unrelated listings).
+    dedup_max_hamming: int = 6
+    dedup_min_shared_photos: int = 2
     area_tolerance_m2: float = 5.0
     price_tolerance_eur: int = 0
     clip_similarity_threshold: float = 0.92
