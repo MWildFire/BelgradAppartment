@@ -10,9 +10,27 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.-4 Stage R «Resilience & Reach» (23.06.2026) — ✅ В `main`, ⚠️ НЕ ЗАДЕПЛОЕНО
+
+> **Самый свежий handoff.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-23.md`](docs/web/SESSION_HANDOFF_2026-06-23.md).
+> `main` @ `20bd9a8`, запушено в `origin` (20 коммитов `c55a787..20bd9a8`, 741 тест зелёный).
+
+20 фич за этап (надёжность скрейпинга + авто-синхронизация витрины сайта + продукт/охват), 2 круга
+состязательного ревью. **Хайлайты:** A1 фикс nekretnine-404 + самолечение URL · A2 live-smoke +
+fingerprint-drift алерты · A3 проверка живости ссылок · A4 межплощадочный дедуп (миграция 0008) ·
+**X1 автопубликация на сайт при постинге в Telegram** · **X2 автоскрытие при деактивации на площадке** ·
+C2 подписки на поиск (e-mail + Telegram, миграция 0009) · E1 новый скрапер cityexpert.rs ·
+B1/B2/B3/F1/G1/G2 наблюдаемость/аналитика/безопасность. WhatsApp/Viber убраны (только Telegram);
+sasomange.rs выброшен (редиректит на новостной раздел).
+
+⚠️ **Прод на alembic 0007 — Stage R НЕ выкачен.** Деплой-чеклист (миграции 0008+0009, новые таймеры,
+`heal-urls --no-dry-run`) — в §4 свежего handoff. Новые env-флаги/CLI-команды — в §2.
+
+---
+
 ### 0.-3 Post-launch + admin/curation (21.06.2026) — 🚀 ВСЁ В ПРОДЕ
 
-> **Самый свежий handoff.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-21.md`](docs/web/SESSION_HANDOFF_2026-06-21.md).
+> Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-21.md`](docs/web/SESSION_HANDOFF_2026-06-21.md).
 > `main` @ `dd1f534`, запушено в `origin`.
 
 После запуска Stage W2 (см. §0.-2) — серия фиксов и недостающая инфраструктура админки/курирования:
