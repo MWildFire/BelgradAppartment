@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     scraper_user_agent: str = ""
     scraper_proxy_url: str = ""
 
+    # --- Live-smoke probe (A2: markup-change protection) ---
+    # Healthy list page must yield >= this many previews (mirrors Scraper.MIN_PREVIEWS).
+    scrape_smoke_min_previews: int = 5
+    # SCRAPE_SMOKE_ENABLED=0 → the scrape-smoke command no-ops (kill switch).
+    scrape_smoke_enabled: bool = True
+
     # --- Nightly maintenance steps (nightly-refresh) ---
     # Every step is disableable via env (=0 → skip) and fault-isolated at runtime:
     # a step failure adds a 🚨 line to the nightly summary, only the base scrape is fatal.

@@ -191,6 +191,36 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 
+cat >/etc/systemd/system/otz-scrape-smoke.service <<UNIT
+[Unit]
+Description=otz-rent-finder — live smoke probe (markup-change protection, A2)
+OnFailure=otz-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+User=$OTZ_USER
+WorkingDirectory=$OTZ_HOME
+# xvfb-run because halooglasi's probe drives Playwright (same wrapper as monitor/nightly).
+ExecStart=/usr/bin/xvfb-run -a $OTZ_HOME/.venv/bin/python -m src.cli scrape-smoke
+ExecStartPost=-$OTZ_HOME/.venv/bin/python -m src.cli ship-log /var/log/otz/scrape-smoke.log --label scrape-smoke --lines 40
+StandardOutput=append:/var/log/otz/scrape-smoke.log
+StandardError=append:/var/log/otz/scrape-smoke.log
+TimeoutStartSec=30min
+UNIT
+
+cat >/etc/systemd/system/otz-scrape-smoke.timer <<UNIT
+[Unit]
+Description=otz scrape smoke probe (every 6h, offset from the 03:00 nightly)
+
+[Timer]
+OnCalendar=*-*-* 00/6:30:00
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 # Triggered via OnFailure=otz-notify-failure@%n.service on the units above.
 # %i = name of the failed unit. Smoke: systemctl start otz-notify-failure@smoke.service
 cat >/etc/systemd/system/otz-notify-failure@.service <<UNIT
@@ -214,6 +244,7 @@ log "systemd units installed. Enable + start with:"
 log "  systemctl enable --now otz-monitor"
 log "  systemctl enable --now otz-nightly-refresh.timer"
 log "  systemctl enable --now otz-daily-summary.timer"
+log "  systemctl enable --now otz-scrape-smoke.timer"
 
 # ─────────────────────────── 7. Final check ────────────────────────────────
 log "──────────────────────────────────────────"
@@ -226,5 +257,5 @@ log ""
 log "Don't forget:"
 log "  1. Put .env at $OTZ_HOME/.env (mode 600)"
 log "  2. Put Telethon session at $OTZ_HOME/data/otz_monitor.session (mode 600)"
-log "  3. systemctl enable --now otz-monitor otz-nightly-refresh.timer otz-daily-summary.timer"
+log "  3. systemctl enable --now otz-monitor otz-nightly-refresh.timer otz-daily-summary.timer otz-scrape-smoke.timer"
 log "──────────────────────────────────────────"

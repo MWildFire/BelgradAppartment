@@ -55,6 +55,25 @@ class Scraper(abc.ABC):
     platform: ClassVar[Platform]
     list_url: ClassVar[str]
 
+    # --- Live-smoke / structure-fingerprint contract (feature A2) ---
+    # A healthy list page yields at least this many previews; fewer trips the smoke probe.
+    MIN_PREVIEWS: ClassVar[int] = 5
+    # A live detail must carry every one of these non-empty (the probe's "is the parser alive?"
+    # check). price/area can legitimately be absent on a lone ad — the probe tolerates that by
+    # checking several previews; see smoke.run_smoke.
+    REQUIRED_DETAIL_FIELDS: ClassVar[tuple[str, ...]] = ("price_eur", "area_m2", "photo_urls")
+
+    @classmethod
+    def fingerprint(cls, list_html: str) -> dict[str, Any]:
+        """Stable structure-only fingerprint of a list page (keys/types/source, NEVER values).
+
+        Used to detect when a site silently changes its HTML/JSON shape: a drift in the returned
+        dict is a WARN signal (markup changed, may still parse but is about to break). Default is
+        empty; each scraper overrides with its own extraction. Deterministic & sorted so equal
+        structures compare equal regardless of dict ordering.
+        """
+        return {}
+
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self._owned_client = client is None
         self._client = client or self._make_client()

@@ -235,6 +235,34 @@ sudo systemctl list-timers | grep otz
 
 > **Зачем `xvfb-run` в monitor**: live monitor может триггерить halooglasi-scrape когда Дарья форвардит новый inbound (через `process_new_inbound` → `scrape_all_with_throttle`). Тогда halooglasi-скрапер пытается поднять Chromium. Без `xvfb-run` ему некуда показывать окно и он падает.
 
+### 3.2.1 `otz-scrape-smoke.service` + `.timer` — защита от смены разметки (A2)
+
+Каждые 6 ч (`OnCalendar=*-*-* 00/6:30:00`, со сдвигом от ночного `03:00`) `otz scrape-smoke`
+проверяет каждую площадку: тянет одну list-страницу, требует `≥ SCRAPE_SMOKE_MIN_PREVIEWS`
+превью, берёт первые живые превью и делает `fetch_detail`, проверяя что обязательные поля
+(`price_eur`, `area_m2`, `photo_urls`) непустые, и сравнивает **fingerprint структуры** list-страницы
+с last-known-good. Юниты прописаны heredoc'ом в `scripts/vps_install.sh` (тот же `xvfb-run -a`
+враппер, что у monitor/nightly — halooglasi-зонд поднимает Chromium).
+
+```bash
+sudo systemctl enable --now otz-scrape-smoke.timer
+sudo systemctl list-timers | grep scrape-smoke
+```
+
+**Интерпретация алертов (позитивный прогон — ТИШИНА):**
+- **`❌ not-ok`** (мало превью / сломан detail / исключение) → ненулевой exit → `OnFailure` шлёт
+  алерт. Это hard-fail: парсер списка или детали сломан прямо сейчас.
+- **`⚠️ drift`** (структура изменилась — добавился/пропал ключ в fingerprint, сменился `source`) →
+  exit 0, но WARN-нотис уходит. Мягкий сигнал: данные ещё парсятся, но форма поменялась и скоро
+  может сломаться — стоит проверить парсер заранее.
+
+**Baseline-стейт:** last-known-good fingerprint каждой площадки хранится в
+`data/state/parser_fingerprints.json` (`platform.value → {source, *_keys, n}` — только ключи/типы,
+никаких значений). Он обновляется **только после ok-прогона**, так что сломанный прогон не
+«отравляет» baseline. На свежем VPS файла нет → первый прогон записывает baseline и НЕ шлёт
+drift-алерт (нечего сравнивать). После первого таймера убедись, что файл появился и (при здоровых
+площадках) нотис НЕ пришёл; для проверки алерта временно сломай селектор на копии.
+
 ### 3.3 Бэкап в Backblaze B2 (через cron)
 
 ```bash

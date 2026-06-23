@@ -75,6 +75,10 @@ class HalooglasiScraper(Scraper):
         self._context = None
         self._skipped_pages = 0
         self._site_total: int | None = None  # serverListData.TotalCount — coverage denominator
+        # Raw page-1 HTML from the most recent list_recent walk. Stashed so the A2 smoke probe can
+        # fingerprint the list structure without a second (expensive Playwright) fetch — halooglasi
+        # has no cheap httpx `_fetch_page` like the other scrapers.
+        self._last_list_html: str | None = None
         # Cloudflare's "Just a moment…" challenge often denies the headless-shell binary.
         # Default to headed so it passes on macOS; on Linux VPS use xvfb-run or override via env.
         # Toggle with HALOOGLASI_HEADLESS=true in .env when you really need headless.
@@ -179,6 +183,8 @@ class HalooglasiScraper(Scraper):
                     break
                 continue
             consecutive_failures = 0
+            if page_num == 1:
+                self._last_list_html = html  # for the A2 smoke fingerprint (see __init__)
 
             if self._site_total is None:
                 data = _extract_json_var(html, _LIST_VAR)
@@ -319,6 +325,21 @@ class HalooglasiScraper(Scraper):
                 )
             )
         return previews
+
+    @classmethod
+    def fingerprint(cls, list_html: str) -> dict[str, Any]:
+        """Structure-only fingerprint of serverListData (first ad's keys, not values)."""
+        data = _extract_json_var(list_html, _LIST_VAR)
+        if not isinstance(data, dict):
+            return {}
+        ads = data.get("Ads")
+        if not isinstance(ads, list) or not ads or not isinstance(ads[0], dict):
+            return {}
+        return {
+            "source": "serverListData",
+            "ad_keys": sorted(ads[0].keys()),
+            "n": len(ads),
+        }
 
     @classmethod
     def parse_detail(cls, url: str, html: str) -> ListingDetail:

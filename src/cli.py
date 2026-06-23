@@ -2475,6 +2475,93 @@ async def _heal_urls(*, platform: str, dry_run: bool) -> int:
     return healed
 
 
+@cli.command("scrape-smoke")
+@click.option(
+    "--platform",
+    default=None,
+    type=click.Choice(list(PLATFORM_NAMES.keys()), case_sensitive=False),
+    help="Platform to probe. Omit to probe every platform.",
+)
+def scrape_smoke(platform: str | None) -> None:
+    """Live-smoke probe: list+detail health + structure-fingerprint drift, per platform.
+
+    Positive runs are SILENT (a readable table is printed but no notice is sent). On any not-ok
+    result OR fingerprint drift, a concise notice is sent to the bot recipients. Exits 1 if any
+    result is not-ok (so systemd OnFailure fires); a drift-only run (all ok) exits 0 but still
+    sends the WARN notice.
+    """
+    settings = get_settings()
+    if not settings.scrape_smoke_enabled:
+        click.echo("scrape-smoke disabled (SCRAPE_SMOKE_ENABLED=0) — no-op")
+        return
+    plats = [PLATFORM_NAMES[platform.lower()]] if platform else list(SCRAPERS.keys())
+    any_not_ok = asyncio.run(_run_smoke(plats))
+    if any_not_ok:
+        sys.exit(1)
+
+
+async def _run_smoke(platforms: list[Platform]) -> bool:
+    """Probe each platform, print a table, alert on not-ok/drift. Returns True if any not-ok."""
+    from src.scrapers.smoke import SmokeResult, run_smoke
+
+    settings = get_settings()
+    results: list[SmokeResult] = []
+    for plat in platforms:
+        scraper_cls = SCRAPERS[plat]
+        # `async with` inside the try: a Playwright __aenter__ failure (halooglasi) must become a
+        # not-ok SmokeResult for that platform, not crash the whole probe.
+        try:
+            async with scraper_cls() as scraper:
+                scraper.MIN_PREVIEWS = settings.scrape_smoke_min_previews
+                results.append(await run_smoke(scraper))
+        except Exception as e:  # noqa: BLE001
+            logging.getLogger(__name__).exception("[smoke] %s setup failed", plat.value)
+            results.append(
+                SmokeResult(
+                    platform=plat.value, ok=False, n_previews=0, detail_ok=False,
+                    missing_fields=[], drift=[], error=str(e) or type(e).__name__,
+                )
+            )
+
+    click.echo("")
+    click.echo("=== Scrape smoke ===")
+    for r in results:
+        status = "OK " if r.ok else "FAIL"
+        flag = " ⚠ DRIFT" if r.drift else ""
+        click.echo(
+            f"  {status} {r.platform:14} previews={r.n_previews:3d} detail_ok={r.detail_ok}"
+            f"{flag}"
+        )
+        if r.missing_fields:
+            click.echo(f"        missing detail fields: {', '.join(r.missing_fields)}")
+        if r.error:
+            click.echo(f"        error: {r.error}")
+        for line in r.drift:
+            click.echo(f"        drift: {line}")
+
+    not_ok = [r for r in results if not r.ok]
+    drifted = [r for r in results if r.drift]
+    if not_ok or drifted:
+        lines = ["🚨 Smoke-зонд площадок"]
+        for r in not_ok:
+            detail = []
+            if r.n_previews < settings.scrape_smoke_min_previews:
+                detail.append(f"превью={r.n_previews}")
+            if not r.detail_ok:
+                miss = f" ({', '.join(r.missing_fields)})" if r.missing_fields else ""
+                detail.append(f"detail сломан{miss}")
+            if r.error:
+                detail.append(f"ошибка: {r.error}")
+            lines.append(f"❌ {r.platform}: {'; '.join(detail) or 'not ok'}")
+        for r in drifted:
+            lines.append(f"⚠️ {r.platform}: структура изменилась — {'; '.join(r.drift)}")
+        from src.telegram.bot_delivery import send_text_via_bot
+
+        await send_text_via_bot("\n".join(lines))
+
+    return bool(not_ok)
+
+
 def main() -> None:
     try:
         cli()

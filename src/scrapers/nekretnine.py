@@ -306,6 +306,21 @@ class NekretnineScraper(Scraper):
         return cls._previews_from_payload(data)
 
     @classmethod
+    def fingerprint(cls, list_html: str) -> dict[str, Any]:
+        """Structure-only fingerprint of the __NEXT_DATA__ results payload (keys, not values)."""
+        data = cls._list_payload(list_html)
+        if data is None:
+            return {}
+        results = data.get("results")
+        if not isinstance(results, list) or not results or not isinstance(results[0], dict):
+            return {}
+        return {
+            "source": "__NEXT_DATA__",
+            "result_keys": sorted(results[0].keys()),
+            "n": len(results),
+        }
+
+    @classmethod
     def parse_detail(cls, url: str, html: str) -> ListingDetail:
         external_id = cls._external_id_from_url(url)
         nxt = cls._extract_next_data(html)

@@ -307,6 +307,22 @@ class CetiriZidaScraper(Scraper):
         return previews
 
     @classmethod
+    def fingerprint(cls, list_html: str) -> dict[str, Any]:
+        """Structure-only fingerprint of the JSON-LD graph (@types present + first item's keys)."""
+        blocks = _extract_json_ld(list_html)
+        item_list = _find_first(blocks, lambda b: b.get("@type") == "ItemList")
+        if item_list is None:
+            return {}
+        types = sorted({b["@type"] for b in blocks if isinstance(b.get("@type"), str)})
+        elements = item_list.get("itemListElement")
+        item_keys: list[str] = []
+        if isinstance(elements, list) and elements and isinstance(elements[0], dict):
+            el0 = elements[0]
+            item = el0.get("item") if isinstance(el0.get("item"), dict) else el0
+            item_keys = sorted(item.keys())
+        return {"source": "json-ld", "types": types, "item_keys": item_keys}
+
+    @classmethod
     def parse_detail(cls, url: str, html: str) -> ListingDetail:
         external_id = _external_id_from_url(url) or url.rstrip("/").split("/")[-1]
         blocks = _extract_json_ld(html)
