@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from datetime import timedelta
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from src.admin.auth import require_admin
@@ -25,7 +27,7 @@ from src.db import (
     SourceChannel,
     get_session,
 )
-from src.db.models import DailyMetrics, Lead, SiteListing, utcnow
+from src.db.models import DailyMetrics, Lead, Platform, SiteListing, utcnow
 from src.post import render_post
 
 logger = logging.getLogger(__name__)
@@ -364,6 +366,170 @@ async def metrics_view(request: Request, _: str = Depends(require_admin)) -> HTM
         request,
         "metrics.html",
         {"chart": chart, "latest": latest, "active_nav": "metrics"},
+    )
+
+
+# --------------------------------------------------------------------------- Health dashboard (B3)
+# One read-only «всё ли живо» screen for Дарья: per-platform scraper liveness + monitor
+# staleness, built ONLY from signals that already exist (no new table, no migration).
+
+# Status thresholds (module constants so the rules live in one place and tests can import them).
+SCRAPE_STALE_WARN_DAYS = 2  # last scrape older than this → ⚠️ (площадка молчит)
+DEACTIVATED_WINDOW_HOURS = 24  # how far back «deactivated за сутки» counts
+TREND_DAYS = 7  # DailyMetrics active-count window shown as the 7-day trend
+INBOUND_STALE_WARN_HOURS = 24  # no inbound newer than this → ⚠️ (монитор тихий)
+
+
+@dataclass
+class HealthReport:
+    """Aggregated liveness snapshot rendered by /health (and unit-tested directly)."""
+
+    platforms: list[dict] = field(default_factory=list)
+    monitor: dict = field(default_factory=dict)
+    fingerprint: dict = field(default_factory=dict)
+    now: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+def _as_aware(dt: datetime | None) -> datetime | None:
+    """SQLite hands back naive datetimes; treat them as UTC so age math never mixes awareness."""
+    if dt is None:
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _read_fingerprint_state() -> dict:
+    """Last-known-good structure-fingerprint baseline (A2), read defensively.
+
+    The file (`data/state/parser_fingerprints.json`) may be absent (smoke probe never ran) or
+    corrupt — either way we degrade to «n/a» rather than crashing the dashboard.
+    """
+    from src.config import get_settings
+
+    path = get_settings().data_dir / "state" / "parser_fingerprints.json"
+    if not path.exists():
+        return {"present": False, "mtime": None, "platforms": []}
+    info: dict = {"present": True, "mtime": None, "platforms": []}
+    try:
+        info["mtime"] = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        info["mtime"] = None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            info["platforms"] = sorted(str(k) for k in data.keys())
+    except (json.JSONDecodeError, OSError):
+        # corrupt/unreadable baseline: file is there but we can't trust its contents
+        info["platforms"] = []
+    return info
+
+
+def _scrape_status(last_seen: datetime | None, active_count: int, now: datetime) -> str:
+    """ok / warn / crit for one platform's scraper liveness."""
+    if active_count == 0 and last_seen is None:
+        return "crit"  # площадка вообще ничего не отдала — почти наверняка сломана
+    if last_seen is None:
+        return "warn"
+    if (now - last_seen) > timedelta(days=SCRAPE_STALE_WARN_DAYS):
+        return "warn"
+    return "ok"
+
+
+async def build_health(s) -> HealthReport:
+    """Gather per-platform + monitor liveness from existing tables / state.
+
+    Per platform we show ONLY persisted signals:
+      * last_seen_at  = MAX(Listing.last_seen_at)            — last-successful-scrape proxy
+      * active_count  = COUNT(is_active=True)                — current active inventory
+      * trend         = DailyMetrics.active_count over TREND_DAYS (oldest→newest)
+      * deactivated_24h = COUNT(is_active=False AND details_refreshed_at within the window)
+    Parse-success-rate (B1) is computed per-run in memory and is NOT persisted, so it is
+    intentionally OMITTED here (no table to read it from — we don't fabricate it).
+    """
+    now = datetime.now(timezone.utc)
+    cutoff_window = now - timedelta(hours=DEACTIVATED_WINDOW_HOURS)
+    today = now.date()
+    trend_floor = (today - timedelta(days=TREND_DAYS - 1)).isoformat()
+
+    platforms: list[dict] = []
+    for plat in Platform:
+        last_seen = _as_aware(
+            (
+                await s.execute(
+                    select(func.max(Listing.last_seen_at)).where(Listing.platform == plat)
+                )
+            ).scalar_one_or_none()
+        )
+        active_count = (
+            await s.execute(
+                select(func.count())
+                .select_from(Listing)
+                .where(Listing.platform == plat, Listing.is_active.is_(True))
+            )
+        ).scalar_one() or 0
+        deactivated_24h = (
+            await s.execute(
+                select(func.count())
+                .select_from(Listing)
+                .where(
+                    Listing.platform == plat,
+                    Listing.is_active.is_(False),
+                    Listing.details_refreshed_at.is_not(None),
+                    Listing.details_refreshed_at >= cutoff_window,
+                )
+            )
+        ).scalar_one() or 0
+        # 7-day trend: DailyMetrics stores platform as Platform.value (e.g. "NEKRETNINE").
+        trend_rows = (
+            await s.execute(
+                select(DailyMetrics.active_count)
+                .where(
+                    DailyMetrics.platform == plat.value,
+                    DailyMetrics.snapshot_date >= trend_floor,
+                )
+                .order_by(DailyMetrics.snapshot_date)
+            )
+        ).scalars().all()
+        platforms.append(
+            {
+                "platform": plat.value,
+                "last_seen_at": last_seen,
+                "active_count": active_count,
+                "deactivated_24h": deactivated_24h,
+                "trend": list(trend_rows),
+                "status": _scrape_status(last_seen, active_count, now),
+            }
+        )
+
+    # --- monitor: how long since the last inbound post arrived ---
+    last_inbound = _as_aware(
+        (await s.execute(select(func.max(InboundPost.received_at)))).scalar_one_or_none()
+    )
+    if last_inbound is None:
+        monitor = {"last_inbound_at": None, "age_hours": None, "status": "crit"}
+    else:
+        age_hours = (now - last_inbound).total_seconds() / 3600.0
+        monitor = {
+            "last_inbound_at": last_inbound,
+            "age_hours": age_hours,
+            "status": "ok" if age_hours <= INBOUND_STALE_WARN_HOURS else "warn",
+        }
+
+    return HealthReport(
+        platforms=platforms,
+        monitor=monitor,
+        fingerprint=_read_fingerprint_state(),
+        now=now,
+    )
+
+
+@router.get("/health", response_class=HTMLResponse)
+async def health_view(request: Request, _: str = Depends(require_admin)) -> HTMLResponse:
+    async with get_session() as s:
+        report = await build_health(s)
+    return templates.TemplateResponse(
+        request,
+        "health.html",
+        {"report": report, "active_nav": "health"},
     )
 
 

@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Здоровье — otz-rent-finder{% endblock %}
+{% block content %}
+{% set ICON = {"ok": "🟢", "warn": "⚠️", "crit": "🚨"} %}
+{% set BADGE = {"ok": "badge-green", "warn": "badge-yellow", "crit": "badge-red"} %}
+{% macro ago(dt) -%}
+  {%- if dt is none -%}
+    —
+  {%- else -%}
+    {%- set sec = (report.now - dt).total_seconds() -%}
+    {%- if sec < 3600 -%}{{ (sec / 60) | round | int }} мин назад
+    {%- elif sec < 86400 -%}{{ (sec / 3600) | round(1) }} ч назад
+    {%- else -%}{{ (sec / 86400) | round(1) }} дн назад{%- endif -%}
+  {%- endif -%}
+{%- endmacro %}
+
+<h1>Здоровье системы</h1>
+<p class="muted" style="margin:-8px 0 16px;">
+  Одно окно «всё ли живо»: статус скрейперов по площадкам и монитора входящих.
+  Данные read-only — агрегируются из уже существующих таблиц и состояния.
+</p>
+
+<h2 style="font-size:15px; margin:0 0 10px;">Скрейперы по площадкам</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Статус</th>
+      <th>Площадка</th>
+      <th>Последний scrape</th>
+      <th>Активных сейчас</th>
+      <th>Тренд (7 дн)</th>
+      <th>Снято за сутки</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in report.platforms %}
+    <tr>
+      <td>{{ ICON[p.status] }}</td>
+      <td><span class="badge {{ BADGE[p.status] }}">{{ p.platform }}</span></td>
+      <td>
+        {% if p.last_seen_at %}
+          <span title="{{ p.last_seen_at }}">{{ ago(p.last_seen_at) }}</span>
+        {% else %}
+          <span class="muted">нет данных</span>
+        {% endif %}
+      </td>
+      <td>{{ p.active_count }}</td>
+      <td>
+        {% if p.trend %}
+          {{ p.trend | join(" → ") }}
+        {% else %}
+          <span class="muted">n/a</span>
+        {% endif %}
+      </td>
+      <td>{{ p.deactivated_24h }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="muted" style="font-size:12px; margin:8px 0 24px;">
+  «Последний scrape» = максимум <code>last_seen_at</code> по площадке. «Тренд» — активные объявления
+  из <code>daily_metrics</code> (ночной снапшот), старое→новое. ⚠️ если последний scrape старше
+  {{ scrape_warn_days if scrape_warn_days is defined else 2 }} дн. Parse-success-rate считается
+  пер-прогон в памяти и не персистится — здесь не показывается.
+</p>
+
+<h2 style="font-size:15px; margin:0 0 10px;">Монитор входящих</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Статус</th>
+      <th>Канал</th>
+      <th>Последний inbound</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>{{ ICON[report.monitor.status] }}</td>
+      <td>Монитор @OtzRentBelgrad</td>
+      <td>
+        {% if report.monitor.last_inbound_at %}
+          <span title="{{ report.monitor.last_inbound_at }}">{{ ago(report.monitor.last_inbound_at) }}</span>
+        {% else %}
+          <span class="muted">ни одного поста ещё не получено</span>
+        {% endif %}
+      </td>
+    </tr>
+  </tbody>
+</table>
+<p class="muted" style="font-size:12px; margin:8px 0 24px;">
+  ⚠️ если новых входящих нет более суток — монитор, вероятно, отвалился (сессия/Telethon).
+</p>
+
+<h2 style="font-size:15px; margin:0 0 10px;">Базовый отпечаток разметки</h2>
+<div class="card">
+  {% if report.fingerprint.present %}
+    <div>Файл <code>parser_fingerprints.json</code> есть.</div>
+    <div class="muted" style="margin-top:6px;">
+      Обновлён: {% if report.fingerprint.mtime %}<span title="{{ report.fingerprint.mtime }}">{{ ago(report.fingerprint.mtime) }}</span>{% else %}n/a{% endif %}
+      {% if report.fingerprint.platforms %}
+        · baseline для: {{ report.fingerprint.platforms | join(", ") }}
+      {% else %}
+        · <span class="badge badge-red">не читается</span>
+      {% endif %}
+    </div>
+  {% else %}
+    <div class="muted">Отпечатка ещё нет (<code>otz scrape-smoke</code> не запускался) — <strong>n/a</strong>.</div>
+  {% endif %}
+</div>
+{% endblock %}
