@@ -424,6 +424,12 @@ async def test_run_smoke_exception_sets_error(monkeypatch, tmp_path: Path) -> No
             "https://www.4zida.rs/izdavanje-stanova/blok-61-novi-beograd-beograd/"
             "trosoban-stan/650ae06563090cbb0c0c11e7",
         ),
+        (
+            Platform.CITYEXPERT,
+            "cityexpert/detail.json",
+            "https://cityexpert.rs/izdavanje-nekretnina/beograd/28075/"
+            "troiposoban-stan-krunska-vracar",
+        ),
     ],
 )
 def test_parse_detail_yields_all_required_fields(

@@ -117,6 +117,12 @@ class Settings(BaseSettings):
     nekretnine_list_url: str = "https://www.nekretnine.rs/izdavanje-stanova/beograd/"
     cetiri_zida_list_url: str = "https://www.4zida.rs/izdavanje-stanova/beograd"
     halooglasi_list_url: str = "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd"
+    # E1 — cityexpert.rs JSON API. list_url is the public browsable rentals page (used as a
+    # human-facing base / Referer); the scraper actually paginates GET /api/Search?req=<json>.
+    cityexpert_list_url: str = "https://cityexpert.rs/izdavanje-nekretnina/beograd"
+    cityexpert_api_base: str = "https://cityexpert.rs"
+    cityexpert_city_id: int = 1  # Belgrade
+    cityexpert_results_per_page: int = 12  # site default page size
 
     # --- Matching thresholds ---
     phash_max_hamming: int = 6

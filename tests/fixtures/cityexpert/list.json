@@ -1,0 +1,675 @@
+{
+ "result": [
+  {
+   "uniqueID": "78694-BR",
+   "propId": 78694,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.78742, 20.54214",
+   "street": "Mihaila Bulgakova",
+   "floor": "1",
+   "size": 36,
+   "structure": "1.0",
+   "municipality": "Zvezdara",
+   "polygons": [
+    "Zvezdara",
+    "Mirijevo",
+    "Mirijevo IV"
+   ],
+   "ptId": 1,
+   "price": 350.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_78694-02971-20260530.avif",
+   "rentOrSale": "r",
+   "caseId": 118933,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 2,
+   "furnishingArray": [
+    "furAircon",
+    "furCable",
+    "furDishWasher",
+    "furFridge",
+    "furInternet",
+    "furPullOutBed",
+    "furShower",
+    "furStove",
+    "furTV",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsIntercom"
+   ],
+   "heatingArray": [
+    1,
+    1,
+    4
+   ],
+   "parkingArray": [
+    2
+   ],
+   "yearOfConstruction": 6,
+   "joineryArray": [
+    2
+   ],
+   "petsArray": [
+    1
+   ],
+   "otherArray": [
+    "adpTerrace"
+   ],
+   "availableFrom": "2026-05-28T15:11:17Z",
+   "firstPublished": "2026-06-23T14:29:12Z",
+   "pricePerSize": 9.722222,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": true,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [
+    "r1"
+   ],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [],
+   "minLeaseArray": [
+    12
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5_10"
+   ],
+   "isFeatured": true,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  },
+  {
+   "uniqueID": "78232-BR",
+   "propId": 78232,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.78375, 20.51708",
+   "street": "Ustanička",
+   "floor": "2_4",
+   "size": 26,
+   "structure": "1.0",
+   "municipality": "Zvezdara",
+   "polygons": [
+    "Zvezdara",
+    "Konjarnik",
+    "Zvezdara bez Mirijeva"
+   ],
+   "ptId": 1,
+   "price": 330.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_78232-02229-20260429.avif",
+   "rentOrSale": "r",
+   "caseId": 117873,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 1,
+   "furnishingArray": [
+    "furFridge",
+    "furPullOutBed",
+    "furShower",
+    "furStove",
+    "furTV",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsElevator",
+    "bldgOptsIntercom",
+    "bldgOptsRamp",
+    "bldgOptsSurveillance"
+   ],
+   "heatingArray": [
+    1
+   ],
+   "parkingArray": [
+    1,
+    3
+   ],
+   "yearOfConstruction": 4,
+   "joineryArray": [
+    1
+   ],
+   "petsArray": [],
+   "otherArray": [
+    "adpTerrace"
+   ],
+   "availableFrom": "2026-04-28T22:00:00Z",
+   "firstPublished": "2026-06-23T13:43:03Z",
+   "pricePerSize": 12.692307,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": true,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [],
+   "minLeaseArray": [
+    12
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5_10"
+   ],
+   "isFeatured": false,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  },
+  {
+   "uniqueID": "79120-BR",
+   "propId": 79120,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.81238, 20.53834",
+   "street": "Mirka Milojkovića",
+   "floor": "2_4",
+   "size": 50,
+   "structure": "2.0",
+   "municipality": "Zvezdara",
+   "polygons": [
+    "Zvezdara",
+    "Višnjička banja",
+    "Sunnyville"
+   ],
+   "ptId": 1,
+   "price": 500.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_79120-05535-20260623.avif",
+   "rentOrSale": "r",
+   "caseId": 119812,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 2,
+   "furnishingArray": [
+    "furAircon",
+    "furBed",
+    "furDishWasher",
+    "furFridge",
+    "furShower",
+    "furStove",
+    "furTV",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsElevator",
+    "bldgOptsIntercom",
+    "bldgOptsSurveillance"
+   ],
+   "heatingArray": [
+    1,
+    1
+   ],
+   "parkingArray": [
+    3,
+    4
+   ],
+   "yearOfConstruction": 5,
+   "joineryArray": [
+    1
+   ],
+   "petsArray": [],
+   "otherArray": [
+    "adpTerrace"
+   ],
+   "availableFrom": "2026-06-21T22:00:00Z",
+   "firstPublished": "2026-06-23T12:54:28Z",
+   "pricePerSize": 10.0,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": true,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [
+    "r1"
+   ],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [],
+   "minLeaseArray": [
+    12
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5_10"
+   ],
+   "isFeatured": false,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  },
+  {
+   "uniqueID": "79016-BR",
+   "propId": 79016,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.80132, 20.37315",
+   "street": "Jurija Gagarina",
+   "floor": "5_10",
+   "size": 77,
+   "structure": "3.0",
+   "municipality": "Novi Beograd",
+   "polygons": [
+    "Novi Beograd",
+    "Blok 61",
+    "Blokovi (61-64 i 72)"
+   ],
+   "ptId": 1,
+   "price": 550.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_79016-04267-20260615.avif",
+   "rentOrSale": "r",
+   "caseId": 119579,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 2,
+   "furnishingArray": [
+    "furAircon",
+    "furBed",
+    "furFridge",
+    "furStove",
+    "furTV",
+    "furTub",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsElevator",
+    "bldgOptsIntercom"
+   ],
+   "heatingArray": [
+    1
+   ],
+   "parkingArray": [
+    3
+   ],
+   "yearOfConstruction": 6,
+   "joineryArray": [
+    2
+   ],
+   "petsArray": [],
+   "otherArray": [],
+   "availableFrom": "2026-06-14T22:00:00Z",
+   "firstPublished": "2026-06-23T12:35:32Z",
+   "pricePerSize": 7.142857,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": true,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [
+    "r2"
+   ],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [],
+   "minLeaseArray": [
+    12
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5_10"
+   ],
+   "isFeatured": false,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  },
+  {
+   "uniqueID": "79123-BR",
+   "propId": 79123,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.80168, 20.45264",
+   "street": "Sarajevska",
+   "floor": "1",
+   "size": 55,
+   "structure": "2.0",
+   "municipality": "Savski venac",
+   "polygons": [
+    "Savski venac",
+    "Savski amfiteatar"
+   ],
+   "ptId": 1,
+   "price": 900.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_79123-03661-20260623.avif",
+   "rentOrSale": "r",
+   "caseId": 119824,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 1,
+   "furnishingArray": [
+    "furBed",
+    "furCable",
+    "furFridge",
+    "furInternet",
+    "furInverter",
+    "furShower",
+    "furStove",
+    "furTV",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsElevator",
+    "bldgOptsIntercom",
+    "bldgOptsSurveillance"
+   ],
+   "heatingArray": [
+    4
+   ],
+   "parkingArray": [
+    5
+   ],
+   "yearOfConstruction": 6,
+   "joineryArray": [
+    2
+   ],
+   "petsArray": [
+    1
+   ],
+   "otherArray": [
+    "adpTerrace"
+   ],
+   "availableFrom": "2026-06-21T22:00:00Z",
+   "firstPublished": "2026-06-23T12:32:53Z",
+   "pricePerSize": 16.363636,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": true,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [
+    "r1"
+   ],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [
+    1
+   ],
+   "minLeaseArray": [
+    12
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5"
+   ],
+   "isFeatured": false,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  },
+  {
+   "uniqueID": "78964-BR",
+   "propId": 78964,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.808, 20.45071",
+   "street": "Bulevar Vudroa Vilsona",
+   "floor": "11+",
+   "size": 52,
+   "structure": "2.0",
+   "municipality": "Savski venac",
+   "polygons": [
+    "Savski venac",
+    "Savski amfiteatar",
+    "Beograd na vodi"
+   ],
+   "ptId": 1,
+   "price": 1300.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_78964-04644-20260622.avif",
+   "rentOrSale": "r",
+   "caseId": 119477,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 1,
+   "furnishingArray": [
+    "furBed",
+    "furCable",
+    "furCornerSofa",
+    "furDishWasher",
+    "furFridge",
+    "furInternet",
+    "furInverter",
+    "furStove",
+    "furTV",
+    "furTub",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsElevator",
+    "bldgOptsIntercom",
+    "bldgOptsRamp",
+    "bldgOptsSecurity",
+    "bldgOptsSurveillance"
+   ],
+   "heatingArray": [
+    1,
+    1
+   ],
+   "parkingArray": [
+    1
+   ],
+   "yearOfConstruction": 5,
+   "joineryArray": [
+    1
+   ],
+   "petsArray": [],
+   "otherArray": [],
+   "availableFrom": "2026-06-09T22:00:00Z",
+   "firstPublished": "2026-06-23T12:32:18Z",
+   "pricePerSize": 25.0,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": false,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [
+    "r1"
+   ],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [],
+   "minLeaseArray": [
+    6
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5"
+   ],
+   "isFeatured": false,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  },
+  {
+   "uniqueID": "76274-BR",
+   "propId": 76274,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.78435, 20.51395",
+   "street": "Mirka Sandića",
+   "floor": "1",
+   "size": 48,
+   "structure": "2.0",
+   "municipality": "Zvezdara",
+   "polygons": [
+    "Zvezdara",
+    "Konjarnik",
+    "Širi centar",
+    "Zvezdara bez Mirijeva"
+   ],
+   "ptId": 1,
+   "price": 650.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_76274_-_0359_-_20251230.jpg",
+   "rentOrSale": "r",
+   "caseId": 119773,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 1,
+   "furnishingArray": [
+    "furAircon",
+    "furCornerSofa",
+    "furDishWasher",
+    "furFridge",
+    "furStove",
+    "furTV",
+    "furTub",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsElevator",
+    "bldgOptsIntercom"
+   ],
+   "heatingArray": [
+    1,
+    1
+   ],
+   "parkingArray": [
+    4
+   ],
+   "yearOfConstruction": 6,
+   "joineryArray": [
+    1
+   ],
+   "petsArray": [],
+   "otherArray": [],
+   "availableFrom": "2026-07-07T22:00:00Z",
+   "firstPublished": "2026-06-23T12:01:43Z",
+   "pricePerSize": 13.541667,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": true,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [
+    "r1"
+   ],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [],
+   "minLeaseArray": [
+    6
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5_10"
+   ],
+   "isFeatured": true,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  },
+  {
+   "uniqueID": "36674-BR",
+   "propId": 36674,
+   "statusId": 51,
+   "cityId": 1,
+   "location": "44.77035, 20.41553",
+   "street": "Petra Lekovića",
+   "floor": "PR",
+   "size": 31,
+   "structure": "1.0",
+   "municipality": "Čukarica",
+   "polygons": [
+    "Čukarica",
+    "Banovo brdo"
+   ],
+   "ptId": 1,
+   "price": 250.0,
+   "coverPhoto": "cityexpert.rs_-_nekretnina_id_-_36674-03653-20260623.avif",
+   "rentOrSale": "r",
+   "caseId": 119768,
+   "caseType": "BR",
+   "underConstruction": false,
+   "filed": 0,
+   "furnished": 1,
+   "ceiling": 2,
+   "furnishingArray": [
+    "furBed",
+    "furFridge",
+    "furStove",
+    "furTV",
+    "furTub",
+    "furWasher"
+   ],
+   "bldgOptsArray": [
+    "bldgOptsIntercom",
+    "bldgOptsSurveillance"
+   ],
+   "heatingArray": [
+    4
+   ],
+   "parkingArray": [
+    3
+   ],
+   "yearOfConstruction": 2,
+   "joineryArray": [
+    3
+   ],
+   "petsArray": [],
+   "otherArray": [
+    "tolBusiness"
+   ],
+   "availableFrom": "2026-06-30T22:00:00Z",
+   "firstPublished": "2026-06-23T11:48:30Z",
+   "pricePerSize": 8.064516,
+   "showPdv": null,
+   "oldPrice": null,
+   "isSalonac": false,
+   "isNotLastFloor": true,
+   "isNoElevatorButLow": true,
+   "bedroomsArray": [],
+   "bathroomArray": [
+    "b1+"
+   ],
+   "renovationArray": [
+    2
+   ],
+   "minLeaseArray": [
+    6
+   ],
+   "newDevelopment": false,
+   "distanceCenterArray": [
+    "5_10"
+   ],
+   "isFeatured": false,
+   "isLux": false,
+   "newImagePipeline": true,
+   "isRecommended": false
+  }
+ ],
+ "info": {
+  "pageNumber": 1,
+  "pageCount": 102,
+  "pageSize": 12,
+  "documentCount": 1220,
+  "documentsOnPage": 12,
+  "isFirstPage": true,
+  "isLastPage": false,
+  "hasPreviousPage": false,
+  "hasNextPage": true
+ },
+ "stats": null
+}

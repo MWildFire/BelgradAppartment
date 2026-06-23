@@ -69,3 +69,13 @@ def cetiri_zida_list_html() -> str:
 @pytest.fixture
 def cetiri_zida_detail_html() -> str:
     return _read("cetiri_zida/detail.html")
+
+
+@pytest.fixture
+def cityexpert_list_json() -> str:
+    return _read("cityexpert/list.json")
+
+
+@pytest.fixture
+def cityexpert_detail_json() -> str:
+    return _read("cityexpert/detail.json")

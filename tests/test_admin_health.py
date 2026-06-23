@@ -131,11 +131,11 @@ async def test_build_health_per_platform_active_count_and_last_seen(db):
 
 
 @pytest.mark.asyncio
-async def test_build_health_lists_all_three_platforms_even_when_empty(db):
+async def test_build_health_lists_all_platforms_even_when_empty(db):
     async with db() as s:
         report = await build_health(s)
     values = {p["platform"] for p in report.platforms}
-    assert values == {"NEKRETNINE", "CETIRI_ZIDA", "HALOOGLASI"}
+    assert values == {"NEKRETNINE", "CETIRI_ZIDA", "HALOOGLASI", "CITYEXPERT"}
     # empty platform: zero active, no last-seen, no crash
     for p in report.platforms:
         assert p["active_count"] == 0

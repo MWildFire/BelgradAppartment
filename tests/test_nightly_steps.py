@@ -390,7 +390,7 @@ async def test_metrics_snapshot_upsert_and_drop_detection(db):
 
     res = await orchestrator.snapshot_daily_metrics()
 
-    assert res.rows_written == 3  # one per platform, incl. empty HALOOGLASI
+    assert res.rows_written == 4  # one per platform, incl. empty HALOOGLASI + CITYEXPERT
     assert res.drops == [("NEKRETNINE", 10, 4, yesterday)]
     assert res.drop_threshold == 0.2
 
@@ -400,11 +400,12 @@ async def test_metrics_snapshot_upsert_and_drop_detection(db):
             await s.execute(select(DailyMetrics).where(DailyMetrics.snapshot_date == today))
         ).scalars().all()
         by_plat = {r.platform: r for r in rows}
-    assert len(rows) == 3
+    assert len(rows) == 4
     assert by_plat["NEKRETNINE"].active_count == 4
     assert by_plat["NEKRETNINE"].no_photo_count == 1
     assert by_plat["CETIRI_ZIDA"].active_count == 4
     assert by_plat["HALOOGLASI"].active_count == 0
+    assert by_plat["CITYEXPERT"].active_count == 0
 
     # Re-run same day → upsert, not duplicate rows.
     async with db_session.get_session() as s:
@@ -417,9 +418,9 @@ async def test_metrics_snapshot_upsert_and_drop_detection(db):
         rows = (
             await s.execute(select(DailyMetrics).where(DailyMetrics.snapshot_date == today))
         ).scalars().all()
-    assert len(rows) == 3
+    assert len(rows) == 4
     assert {r.platform: r.active_count for r in rows}["NEKRETNINE"] == 3
-    assert res2.rows_written == 3
+    assert res2.rows_written == 4
 
 
 async def test_metrics_no_drop_without_previous_snapshot(db):

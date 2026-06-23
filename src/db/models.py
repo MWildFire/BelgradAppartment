@@ -47,6 +47,10 @@ class Platform(str, enum.Enum):
     NEKRETNINE = "NEKRETNINE"
     CETIRI_ZIDA = "CETIRI_ZIDA"
     HALOOGLASI = "HALOOGLASI"
+    # E1 — cityexpert.rs (agency, Angular SPA backed by a clean JSON API). Adding an enum member
+    # is CODE-ONLY: listings.platform is a plain VARCHAR with no CHECK constraint and SQLite
+    # ignores VARCHAR length, so no migration is needed (alembic head stays at 0009_subscriptions).
+    CITYEXPERT = "CITYEXPERT"
 
 
 class InboundStatus(str, enum.Enum):
