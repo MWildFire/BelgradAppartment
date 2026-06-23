@@ -99,6 +99,22 @@ class ScrapeResult:
     errors: int = 0
     skipped_pages: int = 0  # list pages we couldn't fetch and walked past (partial under-run signal)
     site_total: int | None = None  # listings the SITE says exist for the search (coverage denominator)
+    # B1 — per-parser parse-success-rate. In-memory only (no DB migration this phase).
+    # details_attempted: a detail page was actually fetched (re-seen rows DON'T count).
+    # details_parsed_ok: that fetch produced a non-shell detail we inserted.
+    # empty_shells: the all-None-shell guard fired (markup-change signal).
+    details_attempted: int = 0
+    details_parsed_ok: int = 0
+    empty_shells: int = 0
+
+    @property
+    def parse_rate(self) -> float:
+        """details_parsed_ok / details_attempted. Returns 1.0 when no details were attempted —
+        "no attempts" must NOT look like degradation (and the nightly sample gate stops a
+        zero-attempt run from ever alerting)."""
+        if self.details_attempted == 0:
+            return 1.0
+        return self.details_parsed_ok / self.details_attempted
 
 
 async def scrape_platform(
@@ -145,9 +161,18 @@ async def scrape_platform(
         if max_new is not None and new_count >= max_new:
             break
         try:
-            inserted, photos = await _process_one(
+            inserted, photos, fetched_detail = await _process_one(
                 scraper, prev.url, prev.external_id, download_photos=download_photos
             )
+        except _EmptyShellError:
+            # The all-None-shell guard fired: a detail WAS fetched but the parser couldn't read it
+            # (markup change / challenge page). Count it as an attempt that did NOT parse ok, so it
+            # drags down parse_rate. Still an error for the existing error counter.
+            logger.warning("[%s] empty-shell detail %s", scraper.platform.value, prev.url)
+            result.details_attempted += 1
+            result.empty_shells += 1
+            result.errors += 1
+            continue
         except Exception:
             logger.exception("[%s] error processing %s", scraper.platform.value, prev.url)
             result.errors += 1
@@ -155,6 +180,10 @@ async def scrape_platform(
 
         result.fetched += 1
         result.photos_downloaded += photos
+        if fetched_detail:
+            # A detail page was actually fetched & parsed (re-seen rows skip the fetch entirely).
+            result.details_attempted += 1
+            result.details_parsed_ok += 1
         if inserted is True:
             result.inserted += 1
             new_count += 1
@@ -163,11 +192,20 @@ async def scrape_platform(
     return result
 
 
+class _EmptyShellError(RuntimeError):
+    """The all-None-shell guard fired in _process_one — a detail fetch "succeeded" on a
+    challenge/error page or a payload the parser no longer understands. Typed so scrape_platform
+    can count it toward parse_rate (details_attempted++, empty_shells++) distinctly from a generic
+    processing error."""
+
+
 async def _process_one(
     scraper: Scraper, url: str, external_id: str, *, download_photos: bool
-) -> tuple[bool | None, int]:
-    """Return (inserted, photos_downloaded): inserted is True for a new Listing, False when an
-    existing row was refreshed, None if skipped."""
+) -> tuple[bool | None, int, bool]:
+    """Return (inserted, photos_downloaded, fetched_detail): inserted is True for a new Listing,
+    False when an existing row was refreshed, None if skipped. fetched_detail is True only on the
+    path that actually called scraper.fetch_detail and parsed a non-shell detail (re-seen rows
+    return False — they must not count as a parse attempt)."""
     async with get_session() as session:
         existing = (
             await session.execute(
@@ -195,7 +233,7 @@ async def _process_one(
             # active listings.
             if not row.is_active:
                 row.is_active = True
-        return False, 0
+        return False, 0, False
 
     detail = await scraper.fetch_detail(url)
 
@@ -204,7 +242,7 @@ async def _process_one(
         # the parser no longer understands. Inserting it would freeze the listing forever
         # (existing rows are never detail-refreshed): no photos → invisible to the matcher,
         # while its external_id blocks any future re-fetch. Fail so the next walk retries.
-        raise RuntimeError(f"empty detail payload for {url} — not inserting a dead row")
+        raise _EmptyShellError(f"empty detail payload for {url} — not inserting a dead row")
 
     photo_paths: list[Path] = []
     photo_hashes: list[str] = []
@@ -235,7 +273,7 @@ async def _process_one(
             details_refreshed_at=datetime.now(timezone.utc),
         )
         session.add(listing)
-    return True, len(photo_paths)
+    return True, len(photo_paths), True
 
 
 async def _download_photos(

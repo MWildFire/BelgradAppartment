@@ -66,8 +66,9 @@ async def test_reseen_listing_refreshes_stale_url(factory):
     scraper.platform = Platform.NEKRETNINE
     scraper.fetch_detail = AsyncMock(side_effect=AssertionError("must not fetch_detail for existing row"))
 
-    inserted, _ = await _process_one(scraper, canonical, "468187", download_photos=False)
+    inserted, _, fetched_detail = await _process_one(scraper, canonical, "468187", download_photos=False)
     assert inserted is False
+    assert fetched_detail is False
 
     async with factory() as s:
         row = (await s.execute(select(Listing).where(Listing.external_id == "468187"))).scalar_one()

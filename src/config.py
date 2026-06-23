@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     scrape_smoke_min_previews: int = 5
     # SCRAPE_SMOKE_ENABLED=0 → the scrape-smoke command no-ops (kill switch).
     scrape_smoke_enabled: bool = True
+    # B1 — per-parser parse-success-rate degradation guard in the nightly run. Alert when
+    # parse_rate (details_parsed_ok/details_attempted) < parse_rate_min AND the sample is big
+    # enough (details_attempted >= parse_rate_min_sample) — don't cry wolf on tiny samples.
+    parse_rate_min: float = 0.7
+    parse_rate_min_sample: int = 10
 
     # --- Nightly maintenance steps (nightly-refresh) ---
     # Every step is disableable via env (=0 → skip) and fault-isolated at runtime:

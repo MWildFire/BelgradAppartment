@@ -1170,6 +1170,31 @@ def site_retention_notice() -> None:
     click.echo(f"retention: {n} overdue listing(s)" + (" — notice sent" if n else " — nothing to send"))
 
 
+def _parse_rate_degraded(
+    results: list[ScrapeResult],
+    *,
+    parse_rate_min: float,
+    parse_rate_min_sample: int,
+) -> list[str]:
+    """B1: one 🚨 line per platform whose detail parse-rate fell below `parse_rate_min` with a
+    big-enough sample (details_attempted >= parse_rate_min_sample). A low rate on a tiny sample —
+    or zero attempts (parse_rate==1.0) — does NOT alert: that's noise, not a markup change.
+
+    Sits alongside the dead-source / low-coverage guards (all computed inline from the per-run
+    ScrapeResult list) — the parser-degradation signal is the same kind of per-run quality gate."""
+    alerts: list[str] = []
+    for r in results:
+        if r.details_attempted < parse_rate_min_sample:
+            continue
+        if r.parse_rate < parse_rate_min:
+            pct = round(100 * r.parse_rate)
+            alerts.append(
+                f"🚨 {r.platform.value}: parse-rate {pct}% "
+                f"({r.details_parsed_ok}/{r.details_attempted}) — вероятно сменилась разметка"
+            )
+    return alerts
+
+
 async def _nightly_refresh(
     max_pages: int, inactive_after_days: int, skip_sweep: bool, skip_scrape: bool
 ) -> None:
@@ -1300,6 +1325,11 @@ async def _nightly_refresh(
                 extra += f"  покрытие {pct}% из {r.site_total}"
             if r.skipped_pages:
                 extra += f"  ⚠️ пропущено стр.: {r.skipped_pages}"
+            if r.details_attempted:
+                extra += (
+                    f"  parse-rate {round(100 * r.parse_rate)}% "
+                    f"({r.details_parsed_ok}/{r.details_attempted})"
+                )
             lines.append(f"  • {r.platform.value}: {r.previewed} / {r.inserted}{extra}")
     # The guard runs UNCONDITIONALLY: if every scraper raised, `results` is empty and `_run_all`
     # records no error counter, so without this an all-platforms-down night would post a cheerful
@@ -1316,11 +1346,20 @@ async def _nightly_refresh(
         for r in results
         if r.site_total and r.previewed < 0.7 * r.site_total
     ]
+    # B1: parser-degradation guard — same per-run quality gate as dead/low-coverage above.
+    _settings = get_settings()
+    parse_degraded = _parse_rate_degraded(
+        results,
+        parse_rate_min=_settings.parse_rate_min,
+        parse_rate_min_sample=_settings.parse_rate_min_sample,
+    )
     if dead:
         lines.append("")
         lines.append(f"🚨 ВНИМАНИЕ: площадки без результатов: {', '.join(dead)} — проверь скрейпер!")
     if low_coverage:
         lines.append(f"🚨 Низкое покрытие: {', '.join(low_coverage)} — кап пагинации/сегменты?")
+    for pd_line in parse_degraded:
+        lines.append(pd_line)
     if degraded:
         lines.append(f"⚠️ Частичный обход (пропущены страницы): {', '.join(degraded)}")
     if sweep_skipped_platforms:
@@ -1334,7 +1373,7 @@ async def _nightly_refresh(
             logging.getLogger(__name__).exception("nightly refresh summary delivery failed")
         # Active-drop + price-drop alerts go out as standalone messages too — they must not
         # drown in the summary wall of text.
-        for alert in [*steps.alerts, *price_alerts]:
+        for alert in [*steps.alerts, *price_alerts, *parse_degraded]:
             try:
                 await send_text_to_recipients(client, alert)
             except Exception:
