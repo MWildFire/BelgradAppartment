@@ -29,6 +29,12 @@ from src.site.deps import (
 )
 from src.site.leads import LeadPayload, LeadValidationError, create_lead
 from src.site.readmodel import Filters
+from src.site.subscriptions import (
+    SubscriptionPayload,
+    SubscriptionValidationError,
+    create_subscription,
+    unsubscribe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -387,3 +393,64 @@ async def lead(
     if "hx-request" in request.headers:
         return templates.TemplateResponse(request, "partials/_lead_ok.html", {})
     return RedirectResponse(url="/?lead=ok", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/subscribe")
+async def subscribe(
+    request: Request,
+    channel: str = Form("email"),
+    email: str = Form(""),
+    district: list[str] = Form(default=[]),  # multivalued, like the catalog filter
+    price_min: str = Form(""),
+    price_max: str = Form(""),
+    rooms: list[str] = Form(default=[]),
+    vnj: str = Form(""),
+    wc: str = Form(""),
+    company: str = Form(""),  # honeypot — real users never see/fill it
+    _csrf: None = Depends(require_site_csrf),
+    _rl: None = Depends(enforce_lead_ratelimit),  # C2 reuses the lead per-IP sliding window
+    db_url: str = Depends(catalog_db_url),
+) -> Response:
+    """C2 — create a saved-search subscription (same anti-spam as POST /lead).
+
+    Honeypot trip → silent OK (no row, no link). E-mail → active row. Telegram → an inactive row
+    plus a deep-link the visitor opens to link their chat. Validation errors map to 400.
+    """
+    payload = SubscriptionPayload(
+        channel=channel.strip() or "email",
+        email=email or None,
+        districts=[d for d in district if d.strip()],
+        price_min=_as_int(price_min),
+        price_max=_as_int(price_max),
+        rooms=[r for r in rooms if r.strip()],
+        vnj=vnj == "1",
+        white_card=wc == "1",
+        company=company or None,
+    )
+    try:
+        result = await create_subscription(payload, database_url=db_url)
+    except SubscriptionValidationError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    # honeypot trip returns None → still respond OK (silent), with no deep-link.
+    deep_link = result.telegram_deep_link if result is not None else None
+    if "hx-request" in request.headers:
+        return templates.TemplateResponse(
+            request, "partials/_subscribe_ok.html", {"telegram_deep_link": deep_link}
+        )
+    # Non-HTMX: telegram needs the deep-link visible, so render the same partial inline; e-mail
+    # redirects with a success marker (no link to show).
+    if deep_link:
+        return templates.TemplateResponse(
+            request, "partials/_subscribe_ok.html", {"telegram_deep_link": deep_link}
+        )
+    return RedirectResponse(url="/catalog?sub=ok", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/unsubscribe", response_class=HTMLResponse)
+async def unsubscribe_route(
+    request: Request, token: str = "", db_url: str = Depends(catalog_db_url)
+) -> Response:
+    """C2 — token-based unsubscribe (no auth). Flips is_active=False, renders a confirmation."""
+    ok = await unsubscribe(token, database_url=db_url)
+    return templates.TemplateResponse(request, "unsubscribe.html", {"ok": ok})

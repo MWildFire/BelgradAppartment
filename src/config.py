@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     # X2 auto-remove: when verify-links deactivates a listing the platform removed (404/410),
     # auto-hide its public card in the SAME transaction (NIGHTLY_AUTO_HIDE_SITE_LISTINGS=0 → skip).
     nightly_auto_hide_site_listings: bool = True
+    # C2: nightly saved-search digest — new public listings × active subscriptions → notices
+    # (idempotent via subscription_matches). NIGHTLY_NOTIFY_SUBSCRIPTIONS=0 → skip the step.
+    nightly_notify_subscriptions: bool = True
+    # Only listings created within this window are candidates (a fresh subscription doesn't get
+    # blasted with the whole back-catalog; subscription_matches still guards against re-sends).
+    subscription_notify_since_hours: int = 24
     # Wall-clock budget SHARED by heal+rolling: once exhausted both stop and report skipped rows,
     # so a night of slow Cloudflare-challenged refetches can't overrun (the 2026-06-16 SIGTERM).
     nightly_refetch_budget_sec: int = 7200  # 2h
@@ -156,6 +162,18 @@ class Settings(BaseSettings):
     # the operator provides a WhatsApp/Viber number.
     site_whatsapp_url: str = ""
     site_viber_url: str = ""
+    # --- C2: saved-search subscriptions (e-mail + Telegram digest) ---
+    # Bot username (without leading @) used to build the Telegram linking deep-link
+    # https://t.me/<username>?start=sub_<token>. EMPTY → the Telegram channel is unavailable in
+    # the subscribe form (only e-mail offered). Set this to the @username of the bot whose token
+    # is TG_BOT_TOKEN once the subscription linking daemon is enabled.
+    site_telegram_bot_username: str = ""
+    # The subscription linking daemon (otz subscription-bot) is a NEW long-running aiogram poller
+    # that listens for /start sub_<token>. OFF by default — enabling it is a deploy choice (it
+    # needs its own systemd unit). With it off, e-mail subscriptions work fully; Telegram ones
+    # can be created but stay unlinked/inactive until the daemon runs.
+    subscription_bot_enabled: bool = False
+
     # F4: lead-form submissions are e-mailed here (in addition to the bot notice).
     site_lead_email_to: str = "d.mashukova@bk.ru"
     # F4: SMTP relay for sending lead e-mails (relay-agnostic; creds live in the server .env).

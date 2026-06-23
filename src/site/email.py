@@ -9,6 +9,7 @@ configured) this is a no-op, so the lead path stays green without a live relay.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from email.message import EmailMessage
 from typing import TYPE_CHECKING, Any
 
@@ -18,6 +19,7 @@ from src.config import get_settings
 
 if TYPE_CHECKING:
     from src.site.leads import LeadPayload
+    from src.site.readmodel import SiteListingView
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,70 @@ async def send_lead_email(payload: LeadPayload, *, apartment: dict[str, Any] | N
     msg = _build_message(payload, apartment)
     # Bound the visitor-facing path: the lead is already committed, so a hung relay must not
     # block the POST /lead response for aiosmtplib's 60s default — fail fast, caller logs it.
+    await aiosmtplib.send(
+        msg,
+        hostname=settings.site_smtp_host,
+        port=settings.site_smtp_port,
+        username=settings.site_smtp_user or None,
+        password=settings.site_smtp_password or None,
+        start_tls=settings.site_smtp_starttls,
+        timeout=15,
+    )
+
+
+def _digest_listing_line(view: SiteListingView, base: str) -> str:
+    price = f"{view.price_eur}€" if view.price_eur else "—"
+    url = f"{base}/apt/{view.id}" if base else f"/apt/{view.id}"
+    return f"• {price}, {view.rooms}, {view.district} — {url}"
+
+
+def _build_digest_message(
+    email: str, listings: Sequence[SiteListingView], unsubscribe_url: str
+) -> EmailMessage:
+    """Compose the saved-search digest: one notice grouping every new matching listing."""
+    settings = get_settings()
+    base = (settings.site_public_base_url or "").rstrip("/")
+    n = len(listings)
+    lines = [
+        f"Новые квартиры по вашей подписке на RentBelgrad ({n}):",
+        "",
+        *[_digest_listing_line(v, base) for v in listings],
+        "",
+        f"Отписаться: {unsubscribe_url}",
+    ]
+    text = "\n".join(lines)
+    html_rows = "".join(f"<p>{line}</p>" for line in lines if line)
+
+    msg = EmailMessage()
+    msg["From"] = settings.site_smtp_from
+    msg["To"] = email
+    msg["Subject"] = f"Новые квартиры по вашей подписке — {n}"
+    msg.set_content(text, charset="utf-8")
+    msg.add_alternative(f"<html><body>{html_rows}</body></html>", subtype="html", charset="utf-8")
+    return msg
+
+
+async def send_subscription_digest(
+    email: str | None,
+    listings: Sequence[SiteListingView],
+    unsubscribe_url: str,
+) -> None:
+    """E-mail a saved-search digest. No-op when SMTP is unconfigured (like send_lead_email).
+
+    Also a no-op for an empty digest. Raises on a real send failure so the matcher can count it
+    and skip recording the ledger (so the subscription is retried next run).
+    """
+    if not listings:
+        return
+    settings = get_settings()
+    if not settings.site_smtp_host:
+        logger.info("SMTP not configured, skipping subscription digest e-mail")
+        return
+    if not email:
+        logger.warning("subscription digest requested with no e-mail — skipping")
+        return
+
+    msg = _build_digest_message(email, listings, unsubscribe_url)
     await aiosmtplib.send(
         msg,
         hostname=settings.site_smtp_host,

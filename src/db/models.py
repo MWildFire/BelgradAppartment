@@ -325,3 +325,75 @@ class Lead(Base):
     )
     source: Mapped[str] = mapped_column(Text, default="site", server_default="site", nullable=False)
     status: Mapped[str] = mapped_column(Text, default="new", server_default="new", nullable=False)
+
+
+class Subscription(Base):
+    """C2 — saved-search subscription: visitor's filter criteria + a notification channel.
+
+    State machine
+    -------------
+    - channel="email": created is_active=True immediately (the e-mail is the contact). Notices
+      go out as soon as a new public listing matches the criteria.
+    - channel="telegram": created is_active=False with NO chat_id and a fresh token. The visitor
+      follows the deep-link https://t.me/<bot>?start=sub_<token>; the linking bot's /start handler
+      looks the row up by token, sets telegram_chat_id + is_active=True. Until linked, the row is
+      inactive and the matcher skips it (no chat_id to send to).
+
+    Only is_active rows are notified. unsubscribe (token-based) flips is_active=False for either
+    channel. `criteria` mirrors the readmodel Filters fields so the matcher reuses one predicate.
+    """
+
+    __tablename__ = "subscriptions"
+    __table_args__ = (
+        UniqueConstraint("token", name="uq_subscriptions_token"),
+        Index("ix_subscriptions_is_active", "is_active"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Filters mirror: {"vnj": bool, "wc": bool, "district": [..], "price_min": int|None,
+    # "price_max": int|None, "rooms": [..]}. Stored as JSON so matching reuses Filters directly.
+    criteria: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    channel: Mapped[str] = mapped_column(Text, nullable=False)  # "email" | "telegram"
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
+    telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Random opaque token: unsubscribe link + telegram /start sub_<token> linking.
+    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("1"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    matches: Mapped[list[SubscriptionMatch]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan"
+    )
+
+
+class SubscriptionMatch(Base):
+    """C2 — idempotency ledger: one row per (subscription, site_listing) already notified.
+
+    The UNIQUE(subscription_id, site_listing_id) constraint is the digest idempotency guard —
+    a listing is notified to a subscription AT MOST ONCE, ever. The nightly matcher inserts a
+    row only after a successful send, so a re-run sends nothing new.
+    """
+
+    __tablename__ = "subscription_matches"
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id", "site_listing_id", name="uq_subscription_match"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False
+    )
+    site_listing_id: Mapped[int] = mapped_column(
+        ForeignKey("site_listings.id", ondelete="CASCADE"), nullable=False
+    )
+    notified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False
+    )
+
+    subscription: Mapped[Subscription] = relationship(back_populates="matches")

@@ -89,6 +89,10 @@ templates.env.globals["district_options"] = district_options()
 templates.env.globals["whatsapp_url"] = get_settings().site_whatsapp_url
 templates.env.globals["viber_url"] = get_settings().site_viber_url
 
+# C2: subscription form reads this to (a) offer the Telegram channel option and (b) build the
+# /start deep-link. Empty → only the e-mail channel is shown (no dead Telegram link).
+templates.env.globals["site_telegram_bot_username"] = get_settings().site_telegram_bot_username
+
 
 def _asset_version() -> str:
     """Content hash over the local css+js bundle → cache-busting token for /static URLs.

@@ -51,7 +51,8 @@ def test_upgrade_0008_adds_columns_defaults(tmp_path: Path) -> None:
 def test_downgrade_0008_drops_columns(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    # Upgrade to 0008 specifically (not head) so this stays correct as later revisions land.
+    command.upgrade(cfg, "0008_listing_dup_group")
 
     command.downgrade(cfg, "-1")
 

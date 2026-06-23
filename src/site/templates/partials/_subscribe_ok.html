@@ -1,0 +1,15 @@
+{# Success state for the subscription form — returned by POST /subscribe as an HX-swap.
+   For Telegram, telegram_deep_link is set: the visitor MUST open it to link their chat (the
+   subscription stays inactive until then). For e-mail it's absent and the subscription is
+   already active. #}
+<div class="subscribe-ok" id="subscribe">
+  <p class="kicker"><span class="dot" aria-hidden="true"></span>подписка оформлена</p>
+  {% if telegram_deep_link %}
+    <h2>Почти готово — привяжи Telegram</h2>
+    <p>Открой бота и нажми «Start», чтобы получать уведомления в Telegram. До этого подписка неактивна.</p>
+    <p><a class="btn primary" href="{{ telegram_deep_link }}" rel="noopener" target="_blank">Открыть бота в Telegram</a></p>
+  {% else %}
+    <h2>Готово! Будем присылать новинки</h2>
+    <p>Как только появится новая квартира под твои критерии, пришлём дайджест на e-mail. Отписаться можно по ссылке в любом письме.</p>
+  {% endif %}
+</div>

@@ -448,6 +448,37 @@ def monitor(no_backfill: bool) -> None:
     asyncio.run(_monitor(not no_backfill))
 
 
+@cli.command("subscription-bot")
+def subscription_bot() -> None:
+    """C2 — run the Telegram linking daemon for saved-search subscriptions (long-polling).
+
+    Listens for /start sub_<token> and links the sender's chat to the subscription. Config-gated:
+    when SUBSCRIPTION_BOT_ENABLED=0 (default) the command no-ops. Runs forever until interrupted.
+    """
+    from src.telegram.subscription_bot import run_subscription_bot
+
+    asyncio.run(run_subscription_bot())
+
+
+@cli.command("notify-subscriptions")
+@click.option("--since-hours", type=int, default=24, show_default=True,
+              help="Only listings exposed within this window are candidates.")
+@click.option("--dry-run", is_flag=True, help="Compute + report, but neither send nor record.")
+def notify_subscriptions_cmd(since_hours: int, dry_run: bool) -> None:
+    """C2 — run the saved-search matcher once (also wired into nightly-refresh)."""
+    from src.jobs import notify_subscriptions as notify_mod
+
+    stats = asyncio.run(
+        notify_mod.notify_subscriptions(since_hours=since_hours, dry_run=dry_run)
+    )
+    click.echo(
+        f"подписки: рассмотрено {stats.subscriptions_considered}, "
+        f"уведомлено {stats.subscriptions_notified}, "
+        f"квартир отправлено {stats.listings_sent}, ошибок {stats.errors}"
+        + (" (dry-run)" if dry_run else "")
+    )
+
+
 async def _monitor(do_backfill_first: bool) -> None:
     from telethon.errors import AuthKeyDuplicatedError, UnauthorizedError
 
@@ -1578,6 +1609,27 @@ async def _run_nightly_steps() -> NightlyStepsResult:
             lines.append("🚨 auto-publish backfill упал — см. логи")
     else:
         click.echo("→ Auto-publish backfill disabled (NIGHTLY_AUTO_PUBLISH=0)")
+
+    # C2 saved-search subscriptions: new public listings × active subscriptions → digests
+    # (idempotent via subscription_matches). In-function import is the test seam (tests
+    # monkeypatch notify_subscriptions on its module). Fault-isolated like every other step.
+    if settings.nightly_notify_subscriptions:
+        click.echo("→ Notify saved-search subscriptions…")
+        try:
+            from src.jobs import notify_subscriptions as _notify_subs_mod
+
+            sub_stats = await _notify_subs_mod.notify_subscriptions(
+                since_hours=settings.subscription_notify_since_hours
+            )
+            line = f"подписки: {sub_stats.subscriptions_notified} уведомлений отправлено"
+            if sub_stats.errors:
+                line += f", ошибок доставки: {sub_stats.errors}"
+            lines.append(line)
+        except Exception:
+            log.exception("nightly step failed: notify-subscriptions")
+            lines.append("🚨 подписки-шаг упал — см. логи")
+    else:
+        click.echo("→ Subscription notifications disabled (NIGHTLY_NOTIFY_SUBSCRIPTIONS=0)")
 
     if settings.nightly_metrics:
         click.echo("→ Daily metrics snapshot…")

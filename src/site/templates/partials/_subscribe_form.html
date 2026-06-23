@@ -1,0 +1,93 @@
+{# C2 — saved-search subscription form. POST /subscribe (honeypot + CSRF + rate-limit, same as
+   /lead) → swaps in partials/_subscribe_ok.html. The visitor picks район/цена/комнаты/ВНЖ and a
+   channel (e-mail or Telegram). Telegram option only renders when a bot username is configured.
+   Криптерии mirror the catalog filter fields so the matcher reuses ONE predicate. #}
+<form class="subscribe" id="subscribe" method="post" action="/subscribe"
+      hx-post="/subscribe" hx-target="#subscribe" hx-swap="outerHTML">
+  <p class="kicker">подписка на поиск</p>
+  <h2>Сохрани поиск — пришлём новые квартиры</h2>
+  <p class="lede">Укажи критерии, и мы уведомим тебя, как только появится новая подходящая квартира. Дайджест приходит раз в сутки — без спама.</p>
+
+  {# CSRF — synchronizer token, same field name as the lead form #}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">
+
+  {# honeypot: humans never see/fill it; bots that fill it are silently dropped #}
+  <div class="hp" aria-hidden="true">
+    <label for="sub-company">Не заполняйте это поле</label>
+    <input type="text" id="sub-company" name="company" tabindex="-1" autocomplete="off">
+  </div>
+
+  <p class="field-error" data-error-for="_form" role="alert"></p>
+
+  <div class="subscribe-grid">
+    {# — criteria: район (multi) — #}
+    <div class="field">
+      <label for="sub-district">Район</label>
+      <select id="sub-district" name="district" multiple size="5">
+        {% for name in district_options|default([]) %}
+          <option value="{{ name }}">{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    {# — цена — #}
+    <div class="field">
+      <label for="sub-price-min">Цена, €</label>
+      <div class="price-range">
+        <input type="number" inputmode="numeric" id="sub-price-min" name="price_min" min="0" placeholder="от">
+        <input type="number" inputmode="numeric" name="price_max" min="0" placeholder="до">
+      </div>
+    </div>
+
+    {# — комнаты — #}
+    <div class="field">
+      <label for="sub-rooms">Комнаты</label>
+      <select id="sub-rooms" name="rooms" multiple size="5">
+        <option value="studio">студия</option>
+        <option value="1">1-комн.</option>
+        <option value="1.5">1.5-комн.</option>
+        <option value="2">2-комн.</option>
+        <option value="3+">3+ комн.</option>
+      </select>
+    </div>
+
+    {# — ВНЖ / белый картон — #}
+    <div class="field">
+      <label class="toggle">
+        <input type="checkbox" name="vnj" value="1"> Подходит под ВНЖ
+      </label>
+      <label class="toggle wc">
+        <input type="checkbox" name="wc" value="1"> Белый картон
+      </label>
+    </div>
+  </div>
+
+  {# — канал: e-mail или Telegram — #}
+  <fieldset class="subscribe-channel">
+    <legend>Куда присылать</legend>
+    <label class="channel-opt">
+      <input type="radio" name="channel" value="email" checked
+             onclick="document.getElementById('sub-email-field').hidden=false">
+      E-mail
+    </label>
+    {% if site_telegram_bot_username %}
+      <label class="channel-opt">
+        <input type="radio" name="channel" value="telegram"
+               onclick="document.getElementById('sub-email-field').hidden=true">
+        Telegram
+      </label>
+    {% endif %}
+    <div class="field" id="sub-email-field">
+      <label for="sub-email">Ваш e-mail</label>
+      <input type="email" id="sub-email" name="email" maxlength="254" autocomplete="email"
+             placeholder="you@example.com">
+    </div>
+    {% if site_telegram_bot_username %}
+      <p class="hint" style="color:var(--ink-2);font-size:var(--step--1)">
+        Для Telegram после отправки откроется ссылка — перейди по ней, чтобы привязать чат.
+      </p>
+    {% endif %}
+  </fieldset>
+
+  <button type="submit" class="btn primary">Подписаться</button>
+</form>

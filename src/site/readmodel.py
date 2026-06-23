@@ -71,6 +71,17 @@ class _Row:
     posted_dt: datetime
 
 
+@dataclass(frozen=True)
+class SubscriptionCandidate:
+    """A public listing as the C2 subscription matcher sees it: the view (for the predicate +
+    digest body), its raw numeric rooms (predicate needs it — the view only carries the label),
+    and the SiteListing.created_at used for the since_hours «only NEW listings» window."""
+
+    view: SiteListingView
+    rooms_raw: float | None
+    created_at: datetime
+
+
 def _iso(dt: datetime | None) -> str:
     return dt.isoformat() if dt is not None else ""
 
@@ -143,22 +154,33 @@ def _rooms_matches(rooms_raw: float | None, wanted: list[str]) -> bool:
     return False
 
 
-def _passes(row: _Row, f: Filters) -> bool:
-    v = row.view
+def listing_matches_filters(view: SiteListingView, rooms_raw: float | None, f: Filters) -> bool:
+    """ONE listing-matches-Filters predicate, shared by the catalog and C2 subscriptions.
+
+    The catalog filter (`_passes`) and the subscription matcher both call this, so a listing is
+    judged against criteria by exactly one implementation — refactoring the predicate (or fixing
+    a matching bug) updates both call sites at once. `rooms_raw` is the listing's numeric rooms
+    value (SiteListingView only carries the display label, so the raw value is passed alongside).
+    """
     # C1: rented listings are hidden by default; «показать снятые» (show_rented) reveals them.
-    if v.is_rented and not f.show_rented:
+    # Subscriptions create Filters with show_rented=False, so a rented listing never notifies.
+    if view.is_rented and not f.show_rented:
         return False
-    if f.vnj and not v.for_vnj:
+    if f.vnj and not view.for_vnj:
         return False
-    if f.wc and not v.for_white_card:
+    if f.wc and not view.for_white_card:
         return False
-    if f.district and v.district not in f.district:
+    if f.district and view.district not in f.district:
         return False
-    if f.price_min is not None and v.price_eur < f.price_min:
+    if f.price_min is not None and view.price_eur < f.price_min:
         return False
-    if f.price_max is not None and v.price_eur > f.price_max:
+    if f.price_max is not None and view.price_eur > f.price_max:
         return False
-    return _rooms_matches(row.rooms_raw, f.rooms)
+    return _rooms_matches(rooms_raw, f.rooms)
+
+
+def _passes(row: _Row, f: Filters) -> bool:
+    return listing_matches_filters(row.view, row.rooms_raw, f)
 
 
 def _sort_key(sort: str):  # type: ignore[no-untyped-def]
@@ -245,6 +267,31 @@ async def apartment_summary(
         "area_m2": view.area_m2,
         "url": f"/apt/{view.id}",
     }
+
+
+async def public_candidates(
+    *, database_url: str | None = None
+) -> list[SubscriptionCandidate]:
+    """All public listings as C2 subscription candidates (view + raw rooms + created_at).
+
+    Reuses _load_rows so the candidate set is EXACTLY the catalog's public set (same joins,
+    same is_public/is_primary scoping). The matcher applies listing_matches_filters per
+    subscription — the one shared predicate — so a subscription's «matches» is identical to
+    what the catalog would show with the same filters.
+    """
+    rows = await _load_rows(database_url)
+    # _Row.posted_dt is published_at or created_at; the SiteListing.created_at (when Дарья
+    # exposed it) is the «new listing» signal we want for since_hours. Re-read it cheaply.
+    stmt = select(SiteListing.id, SiteListing.created_at).where(SiteListing.is_public.is_(True))
+    async with sitedb.read_session(database_url=database_url) as s:
+        created_by_id = {sl_id: created for sl_id, created in (await s.execute(stmt)).all()}
+    out: list[SubscriptionCandidate] = []
+    for r in rows:
+        created = created_by_id.get(r.view.id, r.posted_dt)
+        out.append(
+            SubscriptionCandidate(view=r.view, rooms_raw=r.rooms_raw, created_at=created)
+        )
+    return out
 
 
 async def facets(*, database_url: str | None = None) -> Facets:

@@ -263,6 +263,43 @@ sudo systemctl list-timers | grep scrape-smoke
 drift-алерт (нечего сравнивать). После первого таймера убедись, что файл появился и (при здоровых
 площадках) нотис НЕ пришёл; для проверки алерта временно сломай селектор на копии.
 
+### 3.2.2 `otz-subscription-bot.service` — подписки на поиск через Telegram (C2, ОПЦИОНАЛЬНО)
+
+Подписки на сохранённый поиск (район/цена/комнаты/ВНЖ → уведомление при новой подходящей
+квартире) работают по **двум каналам**: e-mail (через тот же SMTP, что и лиды) и Telegram.
+Уведомления уходят **ночным дайджестом** (шаг `notify_subscriptions` в `otz nightly-refresh`,
+флаг `NIGHTLY_NOTIFY_SUBSCRIPTIONS`, по умолчанию вкл) — идемпотентно через таблицу
+`subscription_matches` (одна квартира уведомляется подписке не более одного раза).
+
+**E-mail-канал не требует никаких новых демонов** — работает из коробки, как только настроен SMTP.
+
+**Telegram-канал требует линковки чата.** Подписка через Telegram создаётся неактивной
+(`is_active=False`, без `telegram_chat_id`); сайт отдаёт deep-link
+`https://t.me/<bot>?start=sub_<token>`. Пользователь жмёт «Start» — и демон `otz subscription-bot`
+(новый aiogram-поллер) ловит `/start sub_<token>`, проставляет `telegram_chat_id` + `is_active=True`
+и подтверждает. Демон **выключен по умолчанию** (`SUBSCRIPTION_BOT_ENABLED=0`); юнит
+`otz-subscription-bot.service` прописан heredoc'ом в `vps_install.sh`, но **НЕ** включён.
+
+Чтобы включить Telegram-канал подписок:
+
+```bash
+# 1) в .env:
+#    SUBSCRIPTION_BOT_ENABLED=1
+#    TG_BOT_TOKEN=<токен того же бота, что шлёт кандидатов, или отдельного>
+#    SITE_TELEGRAM_BOT_USERNAME=<username бота без @>   # для построения deep-link на сайте
+# 2) запустить демон:
+sudo systemctl enable --now otz-subscription-bot
+sudo systemctl status otz-subscription-bot
+journalctl -u otz-subscription-bot -f
+```
+
+Демон полностью изолирован от пути доставки (`bot_delivery.py` создаёт `Bot` на каждую отправку;
+здесь добавлен `Dispatcher` в отдельном модуле `src/telegram/subscription_bot.py`), несёт
+`OnFailure=otz-notify-failure@%n` и `Restart=on-failure`. Без `SITE_TELEGRAM_BOT_USERNAME` форма
+подписки на сайте показывает только e-mail-канал (мёртвый deep-link не выдаётся).
+
+Ручной прогон дайджеста (вне ночного): `otz notify-subscriptions [--dry-run] [--since-hours N]`.
+
 ### 3.3 Бэкап в Backblaze B2 (через cron)
 
 ```bash

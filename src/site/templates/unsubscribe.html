@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Отписка от подписки на поиск — RentBelgrad{% endblock %}
+{% block meta_description %}Отписка от уведомлений о новых квартирах RentBelgrad.{% endblock %}
+
+{% block content %}
+<section class="bay wrap">
+  <div class="sec-head">
+    <div>
+      <div class="idx">подписка</div>
+      {% if ok %}
+        <h2>Вы отписались</h2>
+      {% else %}
+        <h2>Подписка не найдена</h2>
+      {% endif %}
+    </div>
+  </div>
+  {% if ok %}
+    <p style="max-width:62ch;color:var(--ink-2)">Уведомления о новых квартирах больше приходить не будут. Если передумаешь — оформи подписку заново в <a href="/catalog" style="border-bottom:1.5px solid var(--oxblood)">каталоге</a>.</p>
+  {% else %}
+    <p style="max-width:62ch;color:var(--ink-2)">Ссылка для отписки недействительна или подписка уже отключена. Если нужно — напиши нам в <a href="{{ telegram_url|default('https://t.me/RentBelgrad') }}" rel="noopener" style="border-bottom:1.5px solid var(--oxblood)">Telegram</a>.</p>
+  {% endif %}
+</section>
+{% endblock %}

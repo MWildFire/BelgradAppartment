@@ -479,12 +479,22 @@ def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False, deadlines: lis
         # deterministic; returns 0 exposed cards.
         return 0
 
+    async def fake_notify_subscriptions(*, since_hours=24, dry_run=False, database_url=None):
+        # C2 stub — never touches the real DB so the nightly summary tests stay deterministic.
+        import src.jobs.notify_subscriptions as _notify_subs_mod
+
+        return _notify_subs_mod.NotifyStats()
+
     monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
     monkeypatch.setattr(orchestrator, "snapshot_daily_metrics", fake_metrics)
     monkeypatch.setattr(orchestrator, "prune_inactive_embeddings", fake_prune)
     monkeypatch.setattr(orchestrator, "verify_active_links", fake_verify_links)
     monkeypatch.setattr(orchestrator, "auto_publish_new_listings", fake_auto_publish_new_listings)
+
+    import src.jobs.notify_subscriptions as _notify_subs_mod
+
+    monkeypatch.setattr(_notify_subs_mod, "notify_subscriptions", fake_notify_subscriptions)
     return calls
 
 
@@ -628,6 +638,7 @@ async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
     monkeypatch.setattr(settings, "nightly_metrics", False)
     monkeypatch.setattr(settings, "nightly_verify_links", False)
     monkeypatch.setattr(settings, "nightly_auto_publish", False)
+    monkeypatch.setattr(settings, "nightly_notify_subscriptions", False)  # C2
     calls = _canned_step_stubs(monkeypatch)
 
     lines, price_changes, alerts = await _run_nightly_steps()

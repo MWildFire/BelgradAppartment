@@ -167,8 +167,9 @@ def test_catalog_lists_public_excludes_private(client):
     # public districts present...
     assert "Нови Београд" in html  # public listing 2
     assert "€600" in html and "€800" in html and "€500" in html
-    # ...private one absent.
-    assert "Земун" not in html
+    # ...private one absent. (Note: "Земун" appears as a selectable district OPTION in the C2
+    # subscribe form's curated list, so the listing-leak check keys on the private listing's
+    # data — its price — not the bare district string.)
     assert "€1200" not in html
     # total count badge: 3 public.
     assert re.search(r'class="mono">3</span>\s*квартир', html)

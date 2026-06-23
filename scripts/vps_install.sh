@@ -221,6 +221,38 @@ RandomizedDelaySec=5min
 WantedBy=timers.target
 UNIT
 
+# ─── C2: saved-search subscription LINKING daemon (OPTIONAL, OFF by default) ───
+# A NEW long-running aiogram poller that handles /start sub_<token> to link a Telegram chat to a
+# saved-search subscription. It is OPTIONAL: enabling it is a deploy choice (it needs TG_BOT_TOKEN
+# + SITE_TELEGRAM_BOT_USERNAME set, and SUBSCRIPTION_BOT_ENABLED=1 in .env — without that the
+# command no-ops). The unit is written but NOT enabled here; enable it manually only when running
+# the Telegram subscription channel. e-mail subscriptions need NONE of this.
+cat >/etc/systemd/system/otz-subscription-bot.service <<UNIT
+[Unit]
+Description=otz-rent-finder — Telegram saved-search subscription linking daemon (C2, optional)
+After=network-online.target
+Wants=network-online.target
+OnFailure=otz-notify-failure@%n.service
+
+[Service]
+Type=simple
+User=$OTZ_USER
+WorkingDirectory=$OTZ_HOME
+ExecStart=$OTZ_HOME/.venv/bin/python -m src.cli subscription-bot
+Restart=on-failure
+RestartSec=30
+StartLimitBurst=5
+StartLimitIntervalSec=600
+StandardOutput=append:/var/log/otz/subscription-bot.log
+StandardError=append:/var/log/otz/subscription-bot.log
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+# NOTE: intentionally NOT enabled. To turn on the Telegram subscription channel:
+#   1) set SUBSCRIPTION_BOT_ENABLED=1, TG_BOT_TOKEN=…, SITE_TELEGRAM_BOT_USERNAME=<botname> in .env
+#   2) systemctl enable --now otz-subscription-bot
+
 # Triggered via OnFailure=otz-notify-failure@%n.service on the units above.
 # %i = name of the failed unit. Smoke: systemctl start otz-notify-failure@smoke.service
 cat >/etc/systemd/system/otz-notify-failure@.service <<UNIT
