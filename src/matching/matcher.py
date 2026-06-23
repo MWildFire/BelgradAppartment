@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -410,7 +411,10 @@ def _select_best(
         primary_tiebreak = (
             best_id is not None
             and cand_count == best_count
-            and cand_score == best_score
+            # Float-tolerant tie: CLIP scores are order-sensitive NumPy means, so two genuinely
+            # tied candidates can differ in the last ULP — an exact == would silently skip the
+            # A4 primary preference. isclose treats those as the tie they are.
+            and math.isclose(cand_score, best_score, rel_tol=0.0, abs_tol=1e-9)
             and row.is_primary
             and not best_is_primary
         )

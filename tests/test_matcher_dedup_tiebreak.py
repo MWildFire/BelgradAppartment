@@ -50,6 +50,30 @@ def test_select_best_prefers_primary_on_exact_tie() -> None:
     assert method == METHOD_PHASH
 
 
+def test_select_best_prefers_primary_on_float_epsilon_clip_tie() -> None:
+    """Review fix: CLIP scores are order-sensitive float means, so two genuinely-tied candidates
+    can differ in the last ULP. The tie-break uses math.isclose, so the dedup-primary is still
+    preferred. With an exact ==, the sub-ULP-higher non-primary (iterated first) would win and a
+    non-primary representative would be linked."""
+    settings = get_settings()
+    parsed = parse_inbound_text("")
+
+    non_primary = _row(10, is_primary=False)  # iterated first
+    primary = _row(20, is_primary=True)
+    rows = [non_primary, primary]
+
+    # CLIP path (clip_count > ph_count): same count(1); the non-primary's score is higher by a
+    # single ULP-scale amount (1e-12 « the 1e-9 tolerance), so isclose treats them as the tie
+    # they really are and the primary wins.
+    ph_counts: dict[int, int] = {}
+    clip_results = {10: (1, 0.9 + 1e-12), 20: (1, 0.9)}
+
+    best_id, best_count, _score, _method = _select_best(
+        rows, ph_counts, clip_results, parsed, _INBOUND_INTS_PHASHES, settings
+    )
+    assert best_id == 20  # primary wins the float-epsilon tie
+
+
 def test_select_best_unaffected_when_no_tie() -> None:
     """A strictly-stronger non-primary still beats a weaker primary (tie-break only breaks ties)."""
     settings = get_settings()

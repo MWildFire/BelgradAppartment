@@ -47,7 +47,7 @@ def test_upgrade_0009_creates_tables_and_defaults(tmp_path: Path) -> None:
     # is_active server_default → True (1) when the column is omitted on insert.
     con.execute(
         "INSERT INTO subscriptions (id, criteria, channel, token, created_at)"
-        " VALUES (1, '{}', 'email', 'tok-1', ?)",
+        " VALUES (1, '{}', 'telegram', 'tok-1', ?)",
         (TS,),
     )
     con.commit()
@@ -58,7 +58,7 @@ def test_upgrade_0009_creates_tables_and_defaults(tmp_path: Path) -> None:
     try:
         con.execute(
             "INSERT INTO subscriptions (id, criteria, channel, token, created_at)"
-            " VALUES (2, '{}', 'email', 'tok-1', ?)",
+            " VALUES (2, '{}', 'telegram', 'tok-1', ?)",
             (TS,),
         )
         con.commit()
@@ -66,6 +66,54 @@ def test_upgrade_0009_creates_tables_and_defaults(tmp_path: Path) -> None:
     except sqlite3.IntegrityError:
         con.rollback()
 
+    con.close()
+
+
+def test_channel_contact_check_constraint(tmp_path: Path) -> None:
+    """Review fix: the channel/contact invariant is DB-enforced (ck_subscriptions_channel_contact)
+    — an email sub with NULL email, or a telegram sub carrying an email, is rejected; the two
+    valid shapes insert fine."""
+    db_path = tmp_path / "mig.db"
+    cfg = _alembic_cfg(db_path)
+    command.upgrade(cfg, "head")
+    con = sqlite3.connect(db_path)
+
+    # email channel REQUIRES a non-null email
+    try:
+        con.execute(
+            "INSERT INTO subscriptions (id, criteria, channel, token, created_at)"
+            " VALUES (1, '{}', 'email', 't1', ?)",
+            (TS,),
+        )
+        con.commit()
+        raise AssertionError("expected CHECK violation: email channel with NULL email")
+    except sqlite3.IntegrityError:
+        con.rollback()
+
+    # telegram channel must NOT carry an email
+    try:
+        con.execute(
+            "INSERT INTO subscriptions (id, criteria, channel, email, token, created_at)"
+            " VALUES (2, '{}', 'telegram', 'x@y.com', 't2', ?)",
+            (TS,),
+        )
+        con.commit()
+        raise AssertionError("expected CHECK violation: telegram channel with an email")
+    except sqlite3.IntegrityError:
+        con.rollback()
+
+    # both valid shapes insert fine
+    con.execute(
+        "INSERT INTO subscriptions (id, criteria, channel, email, token, created_at)"
+        " VALUES (3, '{}', 'email', 'ok@y.com', 't3', ?)",
+        (TS,),
+    )
+    con.execute(
+        "INSERT INTO subscriptions (id, criteria, channel, token, created_at)"
+        " VALUES (4, '{}', 'telegram', 't4', ?)",
+        (TS,),
+    )
+    con.commit()
     con.close()
 
 
@@ -78,7 +126,7 @@ def test_subscription_matches_unique_guard(tmp_path: Path) -> None:
     con.execute("PRAGMA foreign_keys=OFF")
     con.execute(
         "INSERT INTO subscriptions (id, criteria, channel, token, is_active, created_at)"
-        " VALUES (1, '{}', 'email', 'tok-1', 1, ?)",
+        " VALUES (1, '{}', 'telegram', 'tok-1', 1, ?)",
         (TS,),
     )
     con.execute(

@@ -17,6 +17,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     Float,
@@ -351,6 +352,13 @@ class Subscription(Base):
     __table_args__ = (
         UniqueConstraint("token", name="uq_subscriptions_token"),
         Index("ix_subscriptions_is_active", "is_active"),
+        # Channel/contact invariant (self-documenting + DB-enforced vs direct SQL / code drift):
+        # an email sub carries an e-mail; a telegram sub does not (its contact is the linked chat).
+        CheckConstraint(
+            "(channel = 'email' AND email IS NOT NULL) "
+            "OR (channel = 'telegram' AND email IS NULL)",
+            name="ck_subscriptions_channel_contact",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

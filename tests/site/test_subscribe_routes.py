@@ -68,7 +68,9 @@ def sub_db_url(tmp_path):
 
 
 def _form(**extra) -> dict[str, str]:
-    return {CSRF_FORM_FIELD: SITE_CSRF_TOKEN, **extra}
+    # A subscription needs at least one criterion (empty criteria is rejected), so default to a
+    # price cap; callers can override with price_max="" to exercise the empty-criteria path.
+    return {CSRF_FORM_FIELD: SITE_CSRF_TOKEN, "price_max": "800", **extra}
 
 
 def _fetch_subs(url: str) -> list[dict]:

@@ -91,6 +91,26 @@ def _validate(payload: SubscriptionPayload) -> None:
     if payload.price_max is not None and payload.price_max < 0:
         raise SubscriptionValidationError("price_max must be >= 0")
 
+    # Require at least one filter: an all-empty criteria matches EVERY new non-rented listing
+    # (listing_matches_filters returns True for empty Filters), which would spam the subscriber
+    # with the whole feed. A saved search must actually narrow something.
+    if not (
+        payload.price_min is not None
+        or payload.price_max is not None
+        or payload.districts
+        or payload.rooms
+        or payload.vnj
+        or payload.white_card
+    ):
+        raise SubscriptionValidationError("выберите хотя бы один критерий поиска")
+
+    # Cheap upper bounds — the form uses fixed dropdowns, so these only stop a hand-crafted POST
+    # from storing an oversized criteria blob.
+    if len(payload.districts) > 100:
+        raise SubscriptionValidationError("too many districts")
+    if len(payload.rooms) > 20:
+        raise SubscriptionValidationError("too many rooms")
+
     if payload.channel == "email":
         email = (payload.email or "").strip()
         if not email or len(email) > EMAIL_MAX or not _EMAIL_RE.match(email):

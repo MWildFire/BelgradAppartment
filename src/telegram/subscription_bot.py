@@ -86,8 +86,11 @@ async def handle_start(message, *, database_url: str | None = None) -> bool:
         # link or a re-link from the SAME chat (idempotent); refuse re-link to a different chat.
         if existing_chat is not None and int(existing_chat) != chat_id:
             await message.answer(_LINKED_ALREADY)
+            # Log the subscription id, NOT the token — the token is the sole secret guarding the
+            # subscription (it rides in every digest's unsubscribe link).
             logger.warning(
-                "[subscription-bot] refused relink of token=%s to a different chat_id", token
+                "[subscription-bot] refused relink of subscription id=%d to a different chat_id",
+                sub_id,
             )
             return False
         await s.execute(
@@ -97,7 +100,7 @@ async def handle_start(message, *, database_url: str | None = None) -> bool:
         )
 
     await message.answer(_LINKED_OK)
-    logger.info("[subscription-bot] linked chat_id=%d to subscription token=%s", chat_id, token)
+    logger.info("[subscription-bot] linked chat_id=%d to subscription id=%d", chat_id, sub_id)
     return True
 
 

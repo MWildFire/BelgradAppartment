@@ -40,6 +40,12 @@ def upgrade() -> None:
             server_default=sa.text("CURRENT_TIMESTAMP"),
         ),
         sa.UniqueConstraint("token", name="uq_subscriptions_token"),
+        # Channel/contact invariant: email subs carry an e-mail; telegram subs don't.
+        sa.CheckConstraint(
+            "(channel = 'email' AND email IS NOT NULL) "
+            "OR (channel = 'telegram' AND email IS NULL)",
+            name="ck_subscriptions_channel_contact",
+        ),
     )
     op.create_index("ix_subscriptions_is_active", "subscriptions", ["is_active"])
 

@@ -136,8 +136,18 @@ async def test_telegram_needs_configured_bot_username(sub_db: str, monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_empty_criteria_rejected(sub_db: str) -> None:
+    """Review fix: a subscription with NO filters matches every new non-rented listing (would
+    spam the whole feed) — validation must reject it."""
+    with pytest.raises(SubscriptionValidationError):
+        await create_subscription(
+            SubscriptionPayload(channel="email", email="a@b.com"), database_url=sub_db
+        )
+
+
+@pytest.mark.asyncio
 async def test_unsubscribe_flips_is_active(sub_db: str) -> None:
-    payload = SubscriptionPayload(channel="email", email="a@b.com")
+    payload = SubscriptionPayload(channel="email", email="a@b.com", districts=["Земун"])
     result = await create_subscription(payload, database_url=sub_db)
     token = (await _all_subs(sub_db))[0].token
 
