@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 from src.admin.auth import require_admin
 from src.admin.csrf import CSRF_TOKEN, require_csrf
 from src.admin.leads_report import build_leads_report
-from src.admin.publish import get_or_create_site_listing, parse_relocation_flags
+from src.admin.publish import auto_publish_site_listing, get_or_create_site_listing
 from src.db import (
     InboundPost,
     Listing,
@@ -217,12 +217,10 @@ async def mark_posted_action(
             return _flash_card(request, match_id, error=f"Match {match_id} не найден")
         match.status = MatchStatus.PUBLISHED
         match.rejection_reason = None
-        site_row, created = await get_or_create_site_listing(s, match_id)
-        if created:
-            inbound = await s.get(InboundPost, match.inbound_post_id)
-            raw = inbound.raw_text if inbound is not None else None
-            site_row.is_for_vnj, site_row.is_for_white_card = parse_relocation_flags(raw)
-            # is_public stays the DB default (True) — decision #3.
+        # Same idempotent upsert + create-time flag defaulting the delivery hot path uses
+        # (X1). is_public stays the DB default (True) — decision #3; an existing overlay keeps
+        # Дарья's manual flags/is_public/note.
+        await auto_publish_site_listing(s, match_id)
     return templates.TemplateResponse(
         request, "_card_posted.html", {"match_id": match_id}
     )
