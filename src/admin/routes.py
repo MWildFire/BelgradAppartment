@@ -261,6 +261,12 @@ async def site_toggle_public(
         if not created:
             site.is_public = not site.is_public
     # session commits on block exit; expire_on_commit=False keeps `site` readable here.
+    # Visibility changed → bust the read-model cache (same as the auto-publish/auto-hide paths)
+    # so the catalog reflects the toggle at once for same-process callers; cross-process the
+    # running site is bounded by site_cache_ttl.
+    from src.site.cache import invalidate_catalog_cache
+
+    invalidate_catalog_cache()
     return _site_controls(request, match_id, site)
 
 

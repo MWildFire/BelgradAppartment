@@ -747,12 +747,17 @@ async def refetch_listing_details(
                         status = getattr(getattr(e, "response", None), "status_code", None)
                         if status in (404, 410):
                             # Listing removed from the platform — deactivate so we never serve a
-                            # broken link (instead of merely bumping the refresh timer).
+                            # broken link. Also stamp details_refreshed_at (the rolling-refresh
+                            # contract: every attempted row gets a fresh timestamp) so the
+                            # nulls-first selection doesn't keep re-picking this dead row.
                             async with get_session() as s:
                                 await s.execute(
                                     update(Listing)
                                     .where(Listing.id == row.id)
-                                    .values(is_active=False)
+                                    .values(
+                                        is_active=False,
+                                        details_refreshed_at=datetime.now(timezone.utc),
+                                    )
                                 )
                             stats.deactivated += 1
                             logger.info("[refetch %s] #%s → %s, deactivated", plat.value, row.id, status)

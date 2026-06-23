@@ -37,6 +37,10 @@ _NO_TOKEN = (
     "Привет! Это бот уведомлений о квартирах RentBelgrad. Чтобы подключить уведомления, "
     "оформите подписку на сайте и перейдите по выданной ссылке."
 )
+_LINKED_ALREADY = (
+    "Эта подписка уже привязана к другому Telegram-аккаунту. Если это были вы — "
+    "отпишитесь по ссылке в сообщении и оформите подписку заново."
+)
 
 
 def _extract_token(text: str | None) -> str | None:
@@ -66,15 +70,25 @@ async def handle_start(message, *, database_url: str | None = None) -> bool:
 
     chat_id = int(message.chat.id)
     async with sitedb.writer_session(database_url=database_url) as s:
-        sub_id = (
+        row = (
             await s.execute(
-                select(Subscription.id).where(
+                select(Subscription.id, Subscription.telegram_chat_id).where(
                     Subscription.token == token, Subscription.channel == "telegram"
                 )
             )
-        ).scalar_one_or_none()
-        if sub_id is None:
+        ).one_or_none()
+        if row is None:
             await message.answer(_LINKED_FAIL)
+            return False
+        sub_id, existing_chat = row
+        # Ownership guard: the token is printed in EVERY digest (the unsubscribe link), so a
+        # leaked token must NOT let a different chat hijack the subscription. Allow the first
+        # link or a re-link from the SAME chat (idempotent); refuse re-link to a different chat.
+        if existing_chat is not None and int(existing_chat) != chat_id:
+            await message.answer(_LINKED_ALREADY)
+            logger.warning(
+                "[subscription-bot] refused relink of token=%s to a different chat_id", token
+            )
             return False
         await s.execute(
             update(Subscription)

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from src.config import get_settings
 from src.db.models import Subscription, SubscriptionMatch
@@ -142,15 +143,40 @@ async def _send_digest(sub: Subscription, listings: list, unsubscribe_url: str) 
         raise ValueError(f"unknown channel {sub.channel!r}")
 
 
+# A single digest is capped at this many listings — the Telegram message limit is 4096 chars,
+# and a fresh subscription shouldn't blast the whole back-catalog. Overflow is simply not
+# recorded, so the next run picks it up: a 100-match subscription drains 30/night.
+SUBSCRIPTION_DIGEST_MAX = 30
+
+
 async def _record(
     database_url: str | None, subscription_id: int, site_listing_ids: list[int]
 ) -> None:
-    """Write subscription_matches rows AFTER a successful send (idempotency ledger)."""
+    """Write subscription_matches rows AFTER a successful send (idempotency ledger).
+
+    Idempotent: INSERT … ON CONFLICT DO NOTHING on the UNIQUE(subscription_id, site_listing_id)
+    guard, so a concurrent run or a partial retry can never raise an IntegrityError that would
+    escape and abort the whole batch. `notified_at` is set explicitly because the raw insert
+    bypasses the ORM column default.
+    """
+    if not site_listing_ids:
+        return
+    now = datetime.now(timezone.utc)
     async with sitedb.writer_session(database_url=database_url) as s:
-        for sl_id in site_listing_ids:
-            s.add(
-                SubscriptionMatch(subscription_id=subscription_id, site_listing_id=sl_id)
+        await s.execute(
+            sqlite_insert(SubscriptionMatch)
+            .values(
+                [
+                    {
+                        "subscription_id": subscription_id,
+                        "site_listing_id": sl_id,
+                        "notified_at": now,
+                    }
+                    for sl_id in site_listing_ids
+                ]
             )
+            .on_conflict_do_nothing(index_elements=["subscription_id", "site_listing_id"])
+        )
 
 
 async def notify_subscriptions(
@@ -183,7 +209,9 @@ async def notify_subscriptions(
         if not new:
             continue
 
-        views = [c.view for c in new]
+        # Cap the digest; overflow is left unrecorded so it flows into the next run.
+        batch = new[:SUBSCRIPTION_DIGEST_MAX]
+        views = [c.view for c in batch]
         if dry_run:
             stats.subscriptions_notified += 1
             stats.listings_sent += len(views)
@@ -197,7 +225,16 @@ async def notify_subscriptions(
             stats.errors += 1
             continue
 
-        await _record(database_url, sub.id, [c.view.id for c in new])
+        try:
+            # Record ONLY what we sent. Idempotent + inside the try: a ledger failure after a
+            # successful send is isolated to this subscription (worst case a re-send next run)
+            # instead of escaping uncaught and aborting every remaining subscription.
+            await _record(database_url, sub.id, [c.view.id for c in batch])
+        except Exception:
+            logger.exception("[notify-subs] sub=%d ledger record failed post-send", sub.id)
+            stats.errors += 1
+            continue
+
         stats.subscriptions_notified += 1
         stats.listings_sent += len(views)
 

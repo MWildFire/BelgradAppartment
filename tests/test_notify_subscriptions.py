@@ -320,6 +320,21 @@ async def test_dry_run_sends_and_records_nothing(db_url, monkeypatch) -> None:
     assert stats.listings_sent == 2  # but reports what WOULD be sent
 
 
+@pytest.mark.asyncio
+async def test_record_is_idempotent_on_duplicate(db_url) -> None:
+    """Review fix (critical): the ledger insert is ON CONFLICT DO NOTHING, so a concurrent run
+    or a retry recording the same (subscription, listing) must NOT raise — otherwise the
+    IntegrityError would escape the per-subscription try and abort the whole nightly batch."""
+    from src.jobs.notify_subscriptions import _record
+
+    sub_id = await _add_sub(db_url, token="dup")
+    await _record(db_url, sub_id, [1, 2])
+    # Exact duplicate — would be a UNIQUE violation without on_conflict_do_nothing.
+    await _record(db_url, sub_id, [1, 2])
+
+    assert sorted(await _matches(db_url)) == [(sub_id, 1), (sub_id, 2)]  # one row each, no dupes
+
+
 # ----------------------------------------------------------- capture helpers
 
 

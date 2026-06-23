@@ -33,7 +33,12 @@ def upgrade() -> None:
         sa.Column("telegram_chat_id", sa.BigInteger(), nullable=True),
         sa.Column("token", sa.String(length=64), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+        ),
         sa.UniqueConstraint("token", name="uq_subscriptions_token"),
     )
     op.create_index("ix_subscriptions_is_active", "subscriptions", ["is_active"])
@@ -43,7 +48,12 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("subscription_id", sa.Integer(), nullable=False),
         sa.Column("site_listing_id", sa.Integer(), nullable=False),
-        sa.Column("notified_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "notified_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("CURRENT_TIMESTAMP"),
+        ),
         sa.ForeignKeyConstraint(
             ["subscription_id"], ["subscriptions.id"], ondelete="CASCADE"
         ),

@@ -229,10 +229,16 @@ async def find_cross_platform_dupes(
                 .where(Listing.is_active.is_(True))
                 .values(dup_group_id=None, is_primary=True)
             )
+            # Batch the re-tag: group the assignments by their (dup_group_id, is_primary) value
+            # and issue ONE UPDATE … WHERE id IN (…) per distinct value (≤ 2 per group) instead
+            # of one UPDATE per listing (N+1).
+            by_value: dict[tuple[int, bool], list[int]] = {}
             for listing_id, gid, is_primary in assignments:
+                by_value.setdefault((gid, is_primary), []).append(listing_id)
+            for (gid, is_primary), ids in by_value.items():
                 await s.execute(
                     update(Listing)
-                    .where(Listing.id == listing_id)
+                    .where(Listing.id.in_(ids))
                     .values(dup_group_id=gid, is_primary=is_primary)
                 )
         else:

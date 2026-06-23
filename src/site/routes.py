@@ -449,7 +449,10 @@ async def subscribe(
 
 @router.get("/unsubscribe", response_class=HTMLResponse)
 async def unsubscribe_route(
-    request: Request, token: str = "", db_url: str = Depends(catalog_db_url)
+    request: Request,
+    token: str = "",
+    db_url: str = Depends(catalog_db_url),
+    _rl: None = Depends(enforce_lead_ratelimit),  # defense-in-depth vs token-guessing / DoS
 ) -> Response:
     """C2 — token-based unsubscribe (no auth). Flips is_active=False, renders a confirmation."""
     ok = await unsubscribe(token, database_url=db_url)

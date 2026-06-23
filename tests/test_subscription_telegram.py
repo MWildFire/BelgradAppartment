@@ -122,6 +122,62 @@ async def test_start_handler_links_chat_id_by_token(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_handler_refuses_relink_to_a_different_chat(tmp_path) -> None:
+    """Security (review fix): the token rides in every digest, so a leaked token must NOT let a
+    different chat hijack an already-linked subscription. A re-link from another chat is refused;
+    the original chat_id is untouched. (A re-link from the SAME chat stays idempotent.)"""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from src.db.models import Base, Subscription
+    from src.site import db as sitedb
+    from src.telegram.subscription_bot import handle_start
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'relink.db'}"
+    engine = create_async_engine(url, future=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        s.add(
+            Subscription(
+                id=1, criteria={}, channel="telegram", email=None,
+                telegram_chat_id=111,  # already linked to chat 111
+                token="abc123", is_active=True,
+            )
+        )
+        await s.commit()
+    await engine.dispose()
+
+    replies: list[str] = []
+
+    class AttackerMessage:
+        text = "/start sub_abc123"  # leaked token
+
+        class chat:
+            id = 999  # a DIFFERENT chat trying to hijack
+
+        async def answer(self, text):
+            replies.append(text)
+
+    linked = await handle_start(AttackerMessage(), database_url=url)
+    assert linked is False  # refused
+    async with sitedb.read_session(database_url=url) as s:
+        sub = (await s.execute(select(Subscription).where(Subscription.id == 1))).scalar_one()
+        assert sub.telegram_chat_id == 111  # untouched — not hijacked
+
+    # Same-chat re-link is still allowed (idempotent).
+    class OwnerMessage(AttackerMessage):
+        class chat:
+            id = 111
+
+    assert await handle_start(OwnerMessage(), database_url=url) is True
+    async with sitedb.read_session(database_url=url) as s:
+        sub = (await s.execute(select(Subscription).where(Subscription.id == 1))).scalar_one()
+        assert sub.telegram_chat_id == 111
+
+
+@pytest.mark.asyncio
 async def test_start_handler_unknown_token_replies_but_links_nothing(tmp_path) -> None:
     from sqlalchemy.ext.asyncio import create_async_engine
 
