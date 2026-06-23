@@ -13,8 +13,8 @@
 - Тема этапа: превратить «работает, пока площадки не меняют разметку» → «ломается громко и самолечится» +
   автоматизация витрины сайта + продуктовые улучшения.
 - **2 круга состязательного мультиагентного ревью** — все подтверждённые находки исправлены (вердикт: ship).
-- ⚠️ **ВСЁ ЗАПУШЕНО, НО НЕ ЗАДЕПЛОЕНО.** Прод по-прежнему на alembic **0007**, старых юнитах, без новых таймеров.
-  Нужны прод-действия (см. §5) — их выполняет человек, агент VPS не трогает.
+- 🚀 **ЗАДЕПЛОЕНО НА ПРОД 2026-06-24** (`root@90.156.254.159:/opt/otz`, rentbelgrad.com). Прод на alembic **0009**,
+  все сервисы active, бэкап снят и проверен. Детали выкатки — §4.
 
 ---
 
@@ -112,19 +112,35 @@ CITYEXPERT_LIST_URL=...  CITYEXPERT_API_BASE=https://cityexpert.rs  CITYEXPERT_C
 
 ---
 
-## 4. Состояние прода и деплой-чеклист (⚠️ НЕ выполнено — за человеком)
-Прод сейчас: alembic **0007**, старый `vps_install`, без новых таймеров. Чтобы выкатить Stage R:
-1. **Backup БД** (ручной dump + `scripts/deploy_sync.sh`), затем проверить `scripts/restore_check.sh`.
-2. Деплой кода → `cd /opt/otz && .venv/bin/alembic upgrade head` (применит **0008 + 0009**).
-3. Прогнать `scripts/vps_install.sh` (или вручную доустановить юниты) → `systemctl enable --now otz-scrape-smoke.timer`.
-4. Разовый прод-heal A1: `otz-bg heal-urls --platform nekretnine --no-dry-run` → проверить 3-5 ранее-битых ссылок (200).
-5. (Опц.) Подключить дедуп A4 в nightly или гонять `dupes-report --write` вручную.
-6. (Опц.) Telegram-подписки: задать `SITE_TELEGRAM_BOT_USERNAME` + `SUBSCRIPTION_BOT_ENABLED=1` + `systemctl enable --now otz-subscription-bot`.
-7. Дождаться первого `scrape-smoke` → убедиться, что записался baseline-fingerprint и нет ложного алерта.
+## 4. Деплой на прод — 🚀 ВЫПОЛНЕНО (2026-06-24)
+Выкачено вручную через ssh `root@90.156.254.159`, по порядку, с проверкой каждого шага:
+1. ✅ **Backup БД** — `sqlite3 .backup` → `/opt/otz/data/backups/otz-pre-stageR-20260624-021356.db` (764MB, `integrity_check=ok`).
+   Дорелизные счётчики: 43068 listings / 21738 active / 52 site_listings.
+2. ✅ **Код** — `scripts/deploy_sync.sh` (rsync, без `--restart`).
+3. ✅ **Миграции** — `sudo -u otz .venv/bin/alembic upgrade head`: 0007→**0008**→**0009**. listings=43068 (batch-rebuild сохранил все строки).
+4. ✅ **Рестарт** `otz-site` / `otz-admin` / `otz-monitor` — все active, ошибок в логах нет.
+5. ✅ **Проверка** — `/` `/catalog` `/vnj` = 200; `/health` = 401 (не 500); `https://rentbelgrad.com/` = 200.
+   **C1 подтверждён:** дефолтный каталог скрывает rented (0 бейджей «снято» на 1-й странице; 45 публичных = 40 active + 5 rented).
+6. ✅ **scrape-smoke таймер** установлен + enabled (`OnCalendar=00/6:30`, первый прогон ~00:31 UTC).
+7. ⛔ **heal-urls — НЕ запускали (намеренно).** dry-run показал 8442 кандидата, НО это **до-Next.js трупы**
+   (alphanumeric id типа `NkFw4_O6bQ6`, путь `/stambeni-objekti/…`, newest scraped 2026-05-26, **0 из них is_active=1**).
+   И старый URL, и предлагаемый canonical `/oglasi/<alnum>/` — оба **404**. Heal переписал бы мёртвый URL в
+   такой же мёртвый. См. §5 — heal-urls нужен guard (только active + проверять, что canonical резолвится).
+
+**Не делалось (опционально, безопасные дефолты):**
+- Дедуп A4 не подключён в nightly (гонять `dupes-report --write` вручную).
+- Telegram-подписки: демон `otz-subscription-bot` НЕ установлен/выключен (нужен `SITE_TELEGRAM_BOT_USERNAME` +
+  `SUBSCRIPTION_BOT_ENABLED=1`). E-mail-подписки работают сразу (Resend SMTP уже в `.env`).
+- Новые env-флаги в `.env` не трогали — у всех безопасные дефолты в `config.py`.
 
 ---
 
 ## 5. Открытые пункты / семена для следующего Feature Plan
+- **🆕 heal-urls нужен guard + чистка до-миграционных трупов (нашли при деплое).** В проде **8442**
+  nekretnine-строки до-Next.js-формата (alphanumeric id, `/stambeni-objekti/…`, все `is_active=0`, 1 с матчем).
+  `heal-urls` переписал бы их в `/oglasi/<alnum>/`, который тоже 404 → бессмысленно. Фиксы: (а) `_heal_urls`
+  должен брать **только `is_active=1`** и/или проверять, что canonical резолвится (HEAD 200); (б) отдельная
+  one-off чистка/архивация этих 8442 трупов (они и так невидимы матчеру, но засоряют БД и `total`-счётчики).
 - **D1 (отложено, YAGNI):** pHash banding/LSH-индекс для матчера — когда объёмы вырастут до 100k+.
 - **A4 wiring:** дедуп-джоб не в nightly — решить, подключать ли автоматически и как сайт выбирает primary
   при конфликте с ручной курацией Дарьи (сейчас primary = больше фото/координаты, может разойтись с `is_public`).

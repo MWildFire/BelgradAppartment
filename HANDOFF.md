@@ -10,10 +10,11 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
-### 0.-4 Stage R «Resilience & Reach» (23.06.2026) — ✅ В `main`, ⚠️ НЕ ЗАДЕПЛОЕНО
+### 0.-4 Stage R «Resilience & Reach» (23.06.2026) — 🚀 ЗАДЕПЛОЕНО НА ПРОД (24.06)
 
 > **Самый свежий handoff.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-23.md`](docs/web/SESSION_HANDOFF_2026-06-23.md).
 > `main` @ `20bd9a8`, запушено в `origin` (20 коммитов `c55a787..20bd9a8`, 741 тест зелёный).
+> **Прод @ alembic `0009`**, все сервисы active, бэкап `otz-pre-stageR-20260624-021356.db` снят.
 
 20 фич за этап (надёжность скрейпинга + авто-синхронизация витрины сайта + продукт/охват), 2 круга
 состязательного ревью. **Хайлайты:** A1 фикс nekretnine-404 + самолечение URL · A2 live-smoke +
@@ -23,8 +24,10 @@ C2 подписки на поиск (e-mail + Telegram, миграция 0009) �
 B1/B2/B3/F1/G1/G2 наблюдаемость/аналитика/безопасность. WhatsApp/Viber убраны (только Telegram);
 sasomange.rs выброшен (редиректит на новостной раздел).
 
-⚠️ **Прод на alembic 0007 — Stage R НЕ выкачен.** Деплой-чеклист (миграции 0008+0009, новые таймеры,
-`heal-urls --no-dry-run`) — в §4 свежего handoff. Новые env-флаги/CLI-команды — в §2.
+🚀 **Задеплоено 24.06:** backup → rsync → миграции 0008+0009 → рестарт site/admin/monitor → scrape-smoke
+таймер. C1 на проде подтверждён (rented скрыты по умолчанию). `heal-urls` **намеренно НЕ запускали** —
+8442 кандидата оказались до-миграционными трупами (canonical тоже 404); см. §4-7 / §5 свежего handoff.
+Опционально не делалось: дедуп A4 в nightly, Telegram-демон подписок (выключен). Env-флаги/CLI — в §2.
 
 ---
 
