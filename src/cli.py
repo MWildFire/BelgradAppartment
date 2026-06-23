@@ -1484,6 +1484,7 @@ async def _run_nightly_steps() -> NightlyStepsResult:
     # monkeypatch them on the orchestrator module — a top-level from-import would freeze
     # the originals (and the import stays lazy for unrelated CLI commands).
     from src.scrapers.orchestrator import (
+        auto_publish_new_listings,
         heal_broken_listings,
         prune_inactive_embeddings,
         rolling_detail_refresh,
@@ -1553,6 +1554,8 @@ async def _run_nightly_steps() -> NightlyStepsResult:
                 f"ссылки: проверено {vl.checked}, "
                 f"деактивировано {vl.deactivated}, ошибок {vl.errors}"
             )
+            if vl.site_listings_hidden:
+                line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
             lines.append(line)
@@ -1561,6 +1564,20 @@ async def _run_nightly_steps() -> NightlyStepsResult:
             lines.append("🚨 verify-links шаг упал — см. логи")
     else:
         click.echo("→ Verify links disabled (NIGHTLY_VERIFY_LINKS=0)")
+
+    # X1 auto-publish backfill: expose any delivered-but-not-yet-published matches (hot-path
+    # hook missed: kill switch was on, a helper exception, or an older deploy). Fault-isolated.
+    if settings.nightly_auto_publish:
+        click.echo("→ Auto-publish backfill (delivered matches → site)…")
+        try:
+            exposed = await auto_publish_new_listings(since_hours=24)
+            if exposed:
+                lines.append(f"🆕 авто-публикация на сайт: {exposed}")
+        except Exception:
+            log.exception("nightly step failed: auto-publish-backfill")
+            lines.append("🚨 auto-publish backfill упал — см. логи")
+    else:
+        click.echo("→ Auto-publish backfill disabled (NIGHTLY_AUTO_PUBLISH=0)")
 
     if settings.nightly_metrics:
         click.echo("→ Daily metrics snapshot…")

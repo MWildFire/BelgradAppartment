@@ -474,11 +474,17 @@ def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False, deadlines: lis
         # A3's liveness sweep never hits the network/DB in these unit tests.
         return orchestrator.LinkVerifyStats(checked=0, deactivated=0, errors=0)
 
+    async def fake_auto_publish_new_listings(*, since_hours=24, limit=None):
+        # X1 backfill stub — records nothing (no network/DB) so the nightly summary tests stay
+        # deterministic; returns 0 exposed cards.
+        return 0
+
     monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
     monkeypatch.setattr(orchestrator, "snapshot_daily_metrics", fake_metrics)
     monkeypatch.setattr(orchestrator, "prune_inactive_embeddings", fake_prune)
     monkeypatch.setattr(orchestrator, "verify_active_links", fake_verify_links)
+    monkeypatch.setattr(orchestrator, "auto_publish_new_listings", fake_auto_publish_new_listings)
     return calls
 
 
@@ -507,6 +513,39 @@ async def test_run_nightly_steps_assembles_summary_lines(monkeypatch):
     assert alerts == drop_lines  # drop alert also goes out standalone
     # W2-C2 contract surfaces unchanged for the Wave-3 price-drop hook.
     assert price_changes == [(1, 500, 450), (2, None, 300), (3, 400, 410)]
+
+
+async def test_run_nightly_steps_surfaces_site_sync_lines(monkeypatch):
+    """X1/X2 wiring: verify-links line carries the auto-hidden count, and the auto-publish
+    backfill step adds its own line when it exposes cards."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import orchestrator
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", True)
+    monkeypatch.setattr(settings, "nightly_auto_publish", True)
+    _canned_step_stubs(monkeypatch)
+
+    async def verify_with_hidden(*, limit=None, deadline=None, platform=None, client=None):
+        return orchestrator.LinkVerifyStats(
+            checked=10, deactivated=2, errors=0, site_listings_hidden=2
+        )
+
+    async def backfill_exposes_three(*, since_hours=24, limit=None):
+        return 3
+
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_with_hidden)
+    monkeypatch.setattr(orchestrator, "auto_publish_new_listings", backfill_exposes_three)
+
+    lines, _price_changes, _alerts = await _run_nightly_steps()
+
+    assert any("скрыто карточек с сайта: 2" in ln for ln in lines), lines
+    assert any("авто-публикация на сайт: 3" in ln for ln in lines), lines
 
 
 async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
@@ -588,6 +627,7 @@ async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
     monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
     monkeypatch.setattr(settings, "nightly_metrics", False)
     monkeypatch.setattr(settings, "nightly_verify_links", False)
+    monkeypatch.setattr(settings, "nightly_auto_publish", False)
     calls = _canned_step_stubs(monkeypatch)
 
     lines, price_changes, alerts = await _run_nightly_steps()
