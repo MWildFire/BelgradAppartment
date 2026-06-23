@@ -2726,6 +2726,66 @@ async def _run_smoke(platforms: list[Platform]) -> bool:
     return bool(not_ok)
 
 
+@cli.command("pipeline-probe")
+def pipeline_probe() -> None:
+    """Synthetic «golden inbound» end-to-end probe (B2).
+
+    Seeds a deterministic golden (committed images) into an isolated in-memory DB and runs the
+    REAL matcher against it — catching regressions across the whole matching pipeline
+    (pHash → candidate scan → thresholds → DB), not just the parser. The golden matches through
+    the pHash path alone, so no CLIP model / API key is needed.
+
+    Prints the verdict. On a missing/low-confidence match (or an unexpected error) it sends a
+    bot notice and exits 1, so a systemd OnFailure can alert. A healthy run is silent (table
+    only) and exits 0.
+    """
+    asyncio.run(_pipeline_probe())
+
+
+async def _pipeline_probe() -> None:
+    from src.jobs.probe import GOLDEN_EXTERNAL_ID, PROBE_MIN_CONFIDENCE, run_pipeline_probe
+
+    result = await run_pipeline_probe()
+
+    ok = (
+        result.error is None
+        and result.matched
+        and result.listing_external_id == GOLDEN_EXTERNAL_ID
+        and result.confidence >= PROBE_MIN_CONFIDENCE
+    )
+
+    click.echo("")
+    click.echo("=== Pipeline probe (golden inbound) ===")
+    status = "OK  " if ok else "FAIL"
+    click.echo(
+        f"  {status} matched={result.matched} listing={result.listing_external_id} "
+        f"conf={result.confidence:.3f} method={result.method}"
+    )
+    if result.error:
+        click.echo(f"        error: {result.error}")
+
+    if not ok:
+        reasons = []
+        if result.error:
+            reasons.append(f"ошибка: {result.error}")
+        elif not result.matched:
+            reasons.append("матч НЕ найден")
+        elif result.listing_external_id != GOLDEN_EXTERNAL_ID:
+            reasons.append(f"матч указал на чужой listing: {result.listing_external_id}")
+        elif result.confidence < PROBE_MIN_CONFIDENCE:
+            reasons.append(
+                f"confidence {result.confidence:.3f} < {PROBE_MIN_CONFIDENCE}"
+            )
+        msg = "🚨 Pipeline-зонд (golden inbound) упал\n" + "; ".join(reasons or ["not ok"])
+        try:
+            from src.telegram.bot_delivery import send_text_via_bot
+
+            await send_text_via_bot(msg)
+        except Exception:  # noqa: BLE001 — alert is best-effort; the non-zero exit still fires.
+            logging.getLogger(__name__).exception("[probe] bot alert failed")
+        sys.exit(1)
+
+
 def main() -> None:
     try:
         cli()
