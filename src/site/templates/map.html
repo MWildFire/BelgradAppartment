@@ -17,6 +17,12 @@
       background:var(--ink);color:var(--paper);border:1.5px solid var(--paper);
       border-radius:999px;padding:3px 9px;font-size:.72rem;line-height:1;
       box-shadow:0 1px 4px rgba(0,0,0,.28);transform:translate(-50%,-50%)}
+    /* Sequential ochre→oxblood price ramp (single warm hue, not a rainbow). White text stays
+       legible on all four — each tint is dark enough. ВНЖ pins keep the sage semantic below. */
+    .price-pin.bucket-1{background:var(--ochre)}     /* < 500 €      */
+    .price-pin.bucket-2{background:#C9743C}          /* 500–799 €    */
+    .price-pin.bucket-3{background:#B85334}          /* 800–1199 €   */
+    .price-pin.bucket-4{background:var(--oxblood)}   /* ≥ 1200 €     */
     .price-pin.is-vnj{background:var(--sage);border-color:var(--paper)}
     .map-pop{min-width:150px;font-family:var(--text)}
     .map-pop-price{font-size:var(--step-1);color:var(--ink);font-weight:700}
@@ -32,6 +38,23 @@
       border-radius:999px;padding:9px 18px;font-size:var(--step--1);color:var(--ink);
       box-shadow:0 10px 28px -16px rgba(27,26,23,.55);text-align:center}
     .map-note a{color:var(--oxblood);font-weight:600;white-space:nowrap}
+    /* Map chrome row: ВНЖ filter toggle (reuses .toggle from site.css) + price-bucket legend.
+       Sits above the map (not a Leaflet overlay) so it can't intercept pan/zoom on the canvas. */
+    .map-chrome{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;margin:0 0 12px}
+    .map-chrome .toggle{padding:8px 12px}
+    .map-legend{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;
+      font-size:var(--step--1);color:var(--ink-2)}
+    .map-legend .lg-title{font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;
+      text-transform:uppercase;color:var(--ink-3)}
+    .map-legend .lg-item{display:inline-flex;align-items:center;gap:6px}
+    .map-legend .lg-swatch{width:13px;height:13px;border-radius:4px;border:1px solid rgba(27,26,23,.18);
+      flex:none}
+    .map-legend .lg-swatch.bucket-1{background:var(--ochre)}
+    .map-legend .lg-swatch.bucket-2{background:#C9743C}
+    .map-legend .lg-swatch.bucket-3{background:#B85334}
+    .map-legend .lg-swatch.bucket-4{background:var(--oxblood)}
+    .map-legend .lg-swatch.is-vnj{background:var(--sage)}
+    .map-legend .lg-val{font-family:var(--mono)}
     @media(prefers-reduced-motion:reduce){
       .leaflet-fade-anim .leaflet-tile,.leaflet-zoom-anim .leaflet-zoom-animated{transition:none!important}
     }
@@ -43,6 +66,24 @@
   <div class="sec-head">
     <div><div class="idx">карта</div><h2>Квартиры на карте</h2></div>
     <p style="max-width:30ch;color:var(--ink-2);font-size:var(--step--1)">Точки тянутся из <span class="mono">/api/map.json</span>. Кликни по цене — откроется квартира.</p>
+  </div>
+
+  {# Map chrome: ВНЖ filter toggle + price-bucket legend. The toggle is a real checkbox (label
+     wraps it → keyboard-operable, focus-visible via site.css); map.js reads #map-vnj-toggle and
+     re-clusters the markers when it changes. If JS is off, it's an inert checkbox (no harm). #}
+  <div class="map-chrome">
+    <label class="toggle" for="map-vnj-toggle">
+      <input type="checkbox" id="map-vnj-toggle">
+      <span>✓ для ВНЖ</span>
+    </label>
+    <div class="map-legend" aria-label="Цвет метки по цене">
+      <span class="lg-title">цена</span>
+      <span class="lg-item"><span class="lg-swatch bucket-1"></span><span class="lg-val">&lt; 500 €</span></span>
+      <span class="lg-item"><span class="lg-swatch bucket-2"></span><span class="lg-val">500–800 €</span></span>
+      <span class="lg-item"><span class="lg-swatch bucket-3"></span><span class="lg-val">800–1200 €</span></span>
+      <span class="lg-item"><span class="lg-swatch bucket-4"></span><span class="lg-val">≥ 1200 €</span></span>
+      <span class="lg-item"><span class="lg-swatch is-vnj"></span><span>ВНЖ</span></span>
+    </div>
   </div>
 
   {# Leaflet mount point. Data + JS wired in Wave 4 (fetches /api/map.json). #}

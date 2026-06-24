@@ -31,6 +31,17 @@
     return new Intl.NumberFormat("ru-RU").format(eur) + " €";
   }
 
+  // Price → bucket index (1..4) for a sequential ochre→oxblood pin ramp. Thresholds chosen for
+  // Belgrade long-let rent: <500 / 500–799 / 800–1199 / ≥1200. Colours live in map.html (.bucket-N),
+  // and the legend there documents the same bands. Kept ВНЖ-orthogonal: the .is-vnj tint still wins.
+  function priceBucket(eur) {
+    var v = Number(eur) || 0;
+    if (v < 500) return 1;
+    if (v < 800) return 2;
+    if (v < 1200) return 3;
+    return 4;
+  }
+
   function escapeHtml(s) {
     return String(s == null ? "" : s)
       .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -51,10 +62,15 @@
   }
 
   function priceMarker(p) {
-    // A token-styled divIcon showing the price, not the default teardrop pin.
+    // A token-styled divIcon showing the price, not the default teardrop pin. The bucket-N class
+    // tints it along the price ramp; data-bucket lets tests assert the band without parsing colour.
+    var bucket = priceBucket(p.price_eur);
     var icon = L.divIcon({
-      className: "price-pin" + (p.for_vnj ? " is-vnj" : ""),
-      html: '<span class="mono">' + escapeHtml(priceLabel(p.price_eur)) + "</span>",
+      className: "price-pin bucket-" + bucket + (p.for_vnj ? " is-vnj" : ""),
+      html:
+        '<span class="mono" data-bucket="' + bucket + '">' +
+        escapeHtml(priceLabel(p.price_eur)) +
+        "</span>",
       iconSize: null, // sized by CSS
     });
     var m = L.marker([p.lat, p.lon], { icon: icon, title: priceLabel(p.price_eur) });
@@ -96,26 +112,56 @@
     }
 
     // Cluster layer (plugin); fall back to a plain layer group if it's unavailable.
-    var layer;
-    if (typeof L.markerClusterGroup === "function") {
-      layer = L.markerClusterGroup({
-        animate: !REDUCE,
-        showCoverageOnHover: false,
-        spiderfyOnMaxZoom: true,
-        chunkedLoading: true,
-      });
-    } else {
-      layer = L.layerGroup();
+    function makeLayer() {
+      if (typeof L.markerClusterGroup === "function") {
+        return L.markerClusterGroup({
+          animate: !REDUCE,
+          showCoverageOnHover: false,
+          spiderfyOnMaxZoom: true,
+          chunkedLoading: true,
+        });
+      }
+      return L.layerGroup();
     }
 
-    var bounds = [];
-    plotted.forEach(function (p) {
-      layer.addLayer(priceMarker(p));
-      bounds.push([p.lat, p.lon]);
-    });
-    map.addLayer(layer);
-    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15, animate: !REDUCE });
-    map.invalidateSize();
+    var layer = makeLayer();
+
+    // (Re)populate the (re-created) layer from the points matching the current filter, then refit.
+    // We rebuild the cluster layer wholesale on toggle — simplest correct path that re-clusters and
+    // never leaves orphan markers behind in markerClusterGroup.
+    function render(vnjOnly) {
+      var shown = plotted.filter(function (p) {
+        return !vnjOnly || p.for_vnj;
+      });
+
+      map.removeLayer(layer);
+      layer = makeLayer();
+      var bounds = [];
+      shown.forEach(function (p) {
+        layer.addLayer(priceMarker(p));
+        bounds.push([p.lat, p.lon]);
+      });
+      map.addLayer(layer);
+      if (bounds.length) {
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15, animate: !REDUCE });
+      }
+      map.invalidateSize();
+    }
+
+    // ВНЖ filter control: a real <input type=checkbox> in the page (map.html), keyboard-operable and
+    // focus-visible via the shared .toggle styles. On → keep only for_vnj points and re-cluster.
+    var vnjToggle = document.getElementById("map-vnj-toggle");
+    if (vnjToggle) {
+      var label = vnjToggle.closest(".toggle");
+      var sync = function () {
+        if (label) label.classList.toggle("on", vnjToggle.checked);
+        render(vnjToggle.checked);
+      };
+      vnjToggle.addEventListener("change", sync);
+      sync(); // honours any pre-checked state (default: unchecked → all points)
+    } else {
+      render(false);
+    }
   }
 
   fetch(src, { headers: { Accept: "application/json" } })

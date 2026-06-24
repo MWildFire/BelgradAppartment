@@ -51,6 +51,58 @@ def test_map(page, site_server: str) -> None:
 
 
 @requires_e2e
+def test_map_price_buckets_and_vnj_toggle(page, site_server: str) -> None:
+    """S5-4: pins carry a price-bucket class (.price-pin.bucket-N) and the ВНЖ toggle filters the
+    visible pins to for_vnj-only (re-clustered) and back. Seed: id=1 (600€, ВНЖ) + id=3 (500€,
+    non-ВНЖ) both have coords → 2 pins; ВНЖ-on leaves only id=1.
+    """
+    base = site_server
+
+    # Confirm the seed gives us exactly the points we reason about below (1 ВНЖ + 1 non-ВНЖ).
+    points = page.request.get(f"{base}/api/map.json").json()["points"]
+    vnj_points = [p for p in points if p["for_vnj"]]
+    assert len(points) == 2, f"expected 2 coord points, got {len(points)}"
+    assert len(vnj_points) == 1, f"expected 1 ВНЖ point, got {len(vnj_points)}"
+
+    page.goto(f"{base}/map", wait_until="networkidle")
+    page.wait_for_selector(".leaflet-container", timeout=10000)
+
+    # Pins render individually (seed coords are far enough apart not to cluster at fit-zoom).
+    page.wait_for_function(
+        "() => document.querySelectorAll('.price-pin').length >= 2", timeout=10000
+    )
+    pins = page.locator(".price-pin")
+    assert pins.count() == 2, f"expected 2 price pins, got {pins.count()}"
+
+    # Every pin carries a price-bucket class (bucket-1..4) — the colour ramp is applied.
+    bucketed = page.locator(
+        ".price-pin.bucket-1, .price-pin.bucket-2, .price-pin.bucket-3, .price-pin.bucket-4"
+    )
+    assert bucketed.count() == 2, "pins missing .bucket-N class"
+    # …and the inner span exposes the band via data-bucket (used by the legend/tests).
+    assert page.locator(".price-pin .mono[data-bucket]").count() == 2
+
+    # The ВНЖ control is a real, keyboard-operable checkbox.
+    toggle = page.locator("#map-vnj-toggle")
+    assert toggle.get_attribute("type") == "checkbox"
+
+    # Toggle ON → only the single ВНЖ pin remains (re-clustered to one marker).
+    toggle.check()
+    page.wait_for_function(
+        "() => document.querySelectorAll('.price-pin').length === 1", timeout=6000
+    )
+    assert page.locator(".price-pin").count() == 1
+    assert page.locator(".price-pin.is-vnj").count() == 1, "remaining pin is not the ВНЖ one"
+
+    # Toggle OFF → both pins are back.
+    toggle.uncheck()
+    page.wait_for_function(
+        "() => document.querySelectorAll('.price-pin').length === 2", timeout=6000
+    )
+    assert page.locator(".price-pin").count() == 2
+
+
+@requires_e2e
 def test_map_renders_base_map_when_empty(page, site_server: str) -> None:
     """Regression: with ZERO points the map must still render Belgrade (not a dead placeholder)
     and surface a non-blocking empty note. The seeded server has points, so we stub
