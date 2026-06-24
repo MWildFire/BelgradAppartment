@@ -8,6 +8,16 @@
    no 404. Tokens inlined as literals because data URIs can't read CSS vars. #}
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20fill='%23F4EFE6'/%3E%3Crect%20x='4'%20y='4'%20width='11'%20height='11'%20fill='%23A8362A'/%3E%3Crect%20x='17'%20y='17'%20width='11'%20height='11'%20fill='%2315324C'/%3E%3Crect%20x='17'%20y='4'%20width='11'%20height='11'%20fill='none'%20stroke='%231B1A17'/%3E%3Crect%20x='4'%20y='17'%20width='11'%20height='11'%20fill='none'%20stroke='%231B1A17'/%3E%3C/svg%3E">
 <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20fill='%23F4EFE6'/%3E%3Crect%20x='4'%20y='4'%20width='11'%20height='11'%20fill='%23A8362A'/%3E%3Crect%20x='17'%20y='17'%20width='11'%20height='11'%20fill='%2315324C'/%3E%3C/svg%3E">
+
+{# S5-1 PWA: installable manifest + iOS add-to-home-screen meta. The manifest declares name,
+   icons (192/512 + maskable) and standalone display; the PNG apple-touch-icon overrides the
+   SVG data-URI above for iOS (Safari ignores SVG touch icons). theme-color (paper) is set above. #}
+<link rel="manifest" href="/static/manifest.webmanifest?v={{ asset_v }}">
+<link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v={{ asset_v }}">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="RentBelgrad">
+<meta name="mobile-web-app-capable" content="yes">
 <title>{% block title %}RentBelgrad — квартиры в Белграде для своих{% endblock %}</title>
 <meta name="description" content="{% block meta_description %}Помогаем релокантам снять квартиру в Белграде на длинный срок — с договором под ВНЖ и белый картон.{% endblock %}">
 
@@ -113,10 +123,36 @@
   <span class="tg-fab-lbl">Написать в&nbsp;Telegram</span>
 </a>
 
+{# S5-1 PWA: mobile bottom-nav (≤620px only — see site.css). Four real, keyboard-operable links
+   with inline SVG icons (no emoji): Каталог / Карта / Калькулятор / Telegram. The Telegram item
+   opens the DM in a new tab; the rest are in-app navigations. Touch targets ≥44px, focus-visible
+   rings inherited; body gets bottom padding at this breakpoint so the fixed bar never covers
+   content. aria-label on <nav> + on each link keeps the icon+label pairs accessible. #}
+<nav class="bottom-nav" aria-label="Мобильная навигация">
+  <a href="/catalog" aria-label="Каталог квартир">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/></svg>
+    <span>Каталог</span>
+  </a>
+  <a href="/map" aria-label="Карта квартир">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
+    <span>Карта</span>
+  </a>
+  <a href="/calculator" aria-label="Калькулятор аренды">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4.5" y="2.5" width="15" height="19" rx="2"/><rect x="7.5" y="5.5" width="9" height="3.5"/><path d="M8 13h0M12 13h0M16 13h0M8 17h0M12 17h0M16 17h0"/></svg>
+    <span>Калькулятор</span>
+  </a>
+  <a href="{{ telegram_url }}" target="_blank" rel="noopener" aria-label="Написать в Telegram">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21.5 3.2 2.8 10.6c-.9.35-.88 1.62.03 1.95l4.6 1.64 1.78 5.4c.27.78 1.27.96 1.8.32l2.5-3.05 4.6 3.4c.6.45 1.47.13 1.65-.6L23 4.3c.2-.83-.6-1.5-1.5-1.1Z"/></svg>
+    <span>Telegram</span>
+  </a>
+</nav>
+
 {# htmx is self-hosted (no CDN) — drives the catalog filter swaps + lead form. defer: parse-blocking-free. #}
 <script src="/static/js/htmx.min.js?v={{ asset_v }}" defer></script>
 {# favorites: localStorage only, runs site-wide (counter + card controls). defer so DOM is ready. #}
 <script src="/static/js/favorites.js?v={{ asset_v }}" defer></script>
+{# S5-1 PWA: register the root-scoped service worker after load (feature-detected, non-fatal). #}
+<script src="/static/js/pwa.js?v={{ asset_v }}" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

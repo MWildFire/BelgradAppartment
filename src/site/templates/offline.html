@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{# S5-1: offline fallback shell. Served at GET /offline AND precached by the service worker,
+   which returns it for any failed HTML navigation. Branded, minimal, no DB/network needs —
+   just the wordmark, a «Нет соединения» message, a retry, and the Telegram lifeline. #}
+
+{% block title %}Нет соединения — RentBelgrad{% endblock %}
+{% block meta_description %}Похоже, пропало интернет-соединение. Откройте страницу заново, когда сеть вернётся.{% endblock %}
+
+{% block content %}
+<section class="offline-shell">
+  <div class="wrap offline-in">
+    <p class="kicker">RentBelgrad</p>
+    <div class="bigtype">Rent<span class="ox">Bel</span><span class="nv">grad</span></div>
+    <h1 class="offline-title">Нет соединения</h1>
+    <p class="offline-lede">
+      Похоже, пропал интернет. Каталог откроется заново, как только сеть вернётся —
+      попробуйте обновить страницу.
+    </p>
+    <div class="offline-cta">
+      <a class="btn ox" href="/" rel="nofollow">Обновить</a>
+      <a class="btn tg" href="{{ telegram_url }}" target="_blank" rel="noopener">
+        <svg class="tg-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M21.5 3.2 2.8 10.6c-.9.35-.88 1.62.03 1.95l4.6 1.64 1.78 5.4c.27.78 1.27.96 1.8.32l2.5-3.05 4.6 3.4c.6.45 1.47.13 1.65-.6L23 4.3c.2-.83-.6-1.5-1.5-1.1Zm-3.1 3.6-7.9 7.05c-.18.16-.3.4-.32.65l-.2 2.5-1.36-4.13 9.78-6.07Z"/></svg>
+        <span>Написать в Telegram</span>
+      </a>
+    </div>
+  </div>
+</section>
+{% endblock %}

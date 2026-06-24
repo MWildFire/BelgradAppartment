@@ -441,3 +441,50 @@ footer{border-top:1px solid var(--ink);margin-top:var(--bay)}
   /* Leaflet zoom/fade (map.html scopes these too; defensive duplicate). */
   .leaflet-fade-anim .leaflet-tile,.leaflet-zoom-anim .leaflet-zoom-animated{transition:none!important}
 }
+
+/* ═════════════ S5-1 PWA — mobile bottom-nav + offline shell ═════════════
+   The bottom-nav is a fixed, 4-item tab bar shown ONLY at the mobile breakpoint (≤620px,
+   matching where .cards collapses to one column). Real links, ≥44px touch targets, inline SVG
+   icons (no emoji), token colors, sharp geometry. Hidden on desktop (display:none by default).
+   The global :focus-visible ring applies; reduced-motion is honored by the blanket rule above. */
+.bottom-nav{display:none}
+.bottom-nav svg{width:22px;height:22px;display:block;fill:none;stroke:currentColor;
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+/* the Telegram glyph reads better filled (matches the FAB / header CTA paper-plane). */
+.bottom-nav a[target="_blank"] svg{fill:currentColor;stroke:none}
+
+@media(max-width:620px){
+  .bottom-nav{
+    display:grid;grid-template-columns:repeat(4,1fr);
+    position:fixed;left:0;right:0;bottom:0;z-index:50;
+    background:color-mix(in srgb,var(--paper) 94%,transparent);backdrop-filter:blur(10px);
+    border-top:1px solid var(--hairline);
+    /* iOS home-indicator: pad the bar's bottom by the safe-area inset so links clear the bar. */
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  .bottom-nav a{
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    /* ≥44px touch target (height 56 + the 3px gap text); full-width tap column. */
+    min-height:56px;padding:8px 4px;
+    font-family:var(--mono);font-size:.62rem;letter-spacing:.02em;
+    color:var(--ink-2);text-align:center;line-height:1;
+    transition:color .12s ease,background .12s ease}
+  .bottom-nav a:hover{color:var(--ink)}
+  .bottom-nav a:active{background:var(--paper-3);color:var(--ink)}
+  .bottom-nav a:focus-visible{outline:2px solid var(--oxblood);outline-offset:-2px}
+  /* page gets bottom room so the fixed bar never covers the footer / last card. */
+  body{padding-bottom:calc(56px + env(safe-area-inset-bottom))}
+  /* lift the sticky Telegram FAB above the bottom-nav so they don't overlap. */
+  .tg-fab{bottom:calc(56px + 14px + env(safe-area-inset-bottom))}
+}
+
+/* offline.html shell — centered branded «Нет соединения» card (precached by the SW). */
+.offline-shell{min-height:60vh;display:grid;place-items:center;padding-block:var(--bay)}
+.offline-in{text-align:center;max-width:46ch}
+.offline-in .bigtype{font-family:var(--display);font-weight:700;font-size:var(--step-3);
+  letter-spacing:-.02em;line-height:1;margin-top:.6rem}
+.offline-in .bigtype .ox{color:var(--oxblood)}
+.offline-in .bigtype .nv{color:var(--navy)}
+.offline-title{font-size:var(--step-2);margin-top:1.4rem}
+.offline-lede{color:var(--ink-2);margin-top:.9rem;font-size:var(--step-0)}
+.offline-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:1.8rem}

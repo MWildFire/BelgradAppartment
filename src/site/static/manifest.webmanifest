@@ -1,0 +1,51 @@
+{
+  "name": "RentBelgrad — аренда в Белграде",
+  "short_name": "RentBelgrad",
+  "description": "Помогаем релокантам снять квартиру в Белграде на длинный срок — с договором под ВНЖ и белый картон.",
+  "lang": "ru",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F4EFE6",
+  "theme_color": "#F4EFE6",
+  "categories": ["business", "lifestyle", "travel"],
+  "icons": [
+    {
+      "src": "/static/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/icon-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Каталог квартир",
+      "short_name": "Каталог",
+      "url": "/catalog"
+    },
+    {
+      "name": "Карта",
+      "short_name": "Карта",
+      "url": "/map"
+    },
+    {
+      "name": "Калькулятор аренды",
+      "short_name": "Калькулятор",
+      "url": "/calculator"
+    }
+  ]
+}

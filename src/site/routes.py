@@ -49,6 +49,14 @@ router = APIRouter()
 # How many freshest listings the homepage features.
 FEATURED_N = 6
 
+# S5-1 (PWA): the service-worker source, read once. It ships a __CACHE_VERSION__ placeholder
+# that GET /sw.js substitutes with the live asset version (app.py sets templates.env.globals
+# ["asset_v"]) — so every deploy that bumps asset_v yields a fresh SW cache name and the old
+# caches are evicted on activate. Served at ROOT scope (/sw.js, not /static/...) so the worker
+# can control the whole origin.
+_SW_SOURCE_PATH = Path(__file__).parent / "static" / "js" / "sw.js"
+_SW_CACHE_TOKEN = "__CACHE_VERSION__"
+
 
 # --------------------------------------------------------------------------- helpers
 
@@ -239,6 +247,36 @@ def _pager(request: Request, total: int, page: int) -> dict[str, object]:
 @router.get("/healthz")
 async def healthz() -> JSONResponse:
     return JSONResponse({"status": "ok"})
+
+
+@router.get("/sw.js")
+async def service_worker() -> Response:
+    """S5-1: serve the PWA service worker at ROOT scope so it controls the whole origin.
+
+    A worker served from /static/js/sw.js would be scoped to /static/ only; serving it here at
+    /sw.js (+ `Service-Worker-Allowed: /`) lets it intercept navigations site-wide. The live
+    asset version is baked into the SW's CACHE_NAME (replacing __CACHE_VERSION__), so a deploy —
+    which recomputes asset_v — invalidates the SW cache and drops stale entries on activate.
+    The SW file itself must NOT be cached aggressively, or a deploy could be shadowed by an old
+    worker (browsers also byte-compare it on update; no-cache keeps that check honest).
+    """
+    version = str(templates.env.globals.get("asset_v", "0"))
+    source = _SW_SOURCE_PATH.read_text(encoding="utf-8").replace(_SW_CACHE_TOKEN, version)
+    return Response(
+        content=source,
+        media_type="application/javascript",
+        headers={
+            "Service-Worker-Allowed": "/",
+            "Cache-Control": "no-cache",
+        },
+    )
+
+
+@router.get("/offline", response_class=HTMLResponse)
+async def offline(request: Request) -> HTMLResponse:
+    """S5-1: the offline fallback shell. Served here AND precached by the SW, which returns it
+    for any failed HTML navigation (network-first → cached /offline on failure)."""
+    return templates.TemplateResponse(request, "offline.html", {})
 
 
 @router.get("/", response_class=HTMLResponse)
