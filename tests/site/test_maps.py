@@ -22,7 +22,30 @@ from src.post.location import yandex_maps_url
 from src.site import cache
 from src.site.app import create_app
 from src.site.deps import catalog_db_url, lead_rate_limiter
-from src.site.maps import MapsLinks, google_maps_url, maps_links
+from src.site.maps import MapsLinks, fuzz_coords, google_maps_url, maps_links
+
+
+# --- fuzz_coords: ~100m privacy grid (D1) ----------------------------------------------
+
+
+def test_fuzz_coords_snaps_to_3_decimals():
+    # Building privacy: the exact coordinate must never reach the page; snap to a ~100m grid.
+    lat, lon = fuzz_coords(44.812345, 20.456789)
+    assert (lat, lon) == (44.812, 20.457)
+
+
+def test_fuzz_coords_none_safe():
+    assert fuzz_coords(None, 20.0) == (None, None)
+    assert fuzz_coords(44.0, None) == (None, None)
+
+
+def test_fuzz_coords_offset_stays_inside_150m_circle():
+    # The snap offset (<~70m) must keep the true point inside the 150m fuzzy circle.
+    flat, flon = fuzz_coords(44.812345, 20.456789)
+    # ~111km per degree latitude; ~79km per degree longitude at Belgrade.
+    dlat_m = abs(44.812345 - flat) * 111_000
+    dlon_m = abs(20.456789 - flon) * 79_000
+    assert (dlat_m**2 + dlon_m**2) ** 0.5 < 150
 
 
 # --- maps_links: fuzzy URLs + coordinate order -----------------------------------------

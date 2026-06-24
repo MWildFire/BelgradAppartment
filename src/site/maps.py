@@ -25,6 +25,22 @@ class MapsLinks:
     google: str  # neighbourhood-centred, NO precise pin, order LAT,LON
 
 
+# FUZZY/D1 building privacy: 3 decimals ≈ a 100m grid in Belgrade (0.001° lat ≈ 111m, lon ≈ 79m).
+# Snapping coords to this grid BEFORE they reach the page means the exact building never appears in
+# the HTML source (data-lat/lon, the circle centre, the deep-links). The snap offset (< ~70m) keeps
+# the true point comfortably inside the 150m fuzzy circle.
+FUZZ_DECIMALS = 3
+
+
+def fuzz_coords(
+    lat: float | None, lon: float | None
+) -> tuple[float | None, float | None]:
+    """Snap (lat, lon) to the ~100m privacy grid, or (None, None) if either is missing."""
+    if lat is None or lon is None:
+        return None, None
+    return round(float(lat), FUZZ_DECIMALS), round(float(lon), FUZZ_DECIMALS)
+
+
 def google_maps_url(lat: float, lon: float, *, precise: bool = False) -> str:
     """Google Maps URL for a coordinate.
 
