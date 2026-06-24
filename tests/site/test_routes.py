@@ -739,7 +739,9 @@ def test_lead_form_hidden_id_empty_by_default():
 
 def test_card_has_listing_lead_cta_with_id():
     html = _real_env().get_template("partials/_card.html").render(item=_FakeItem())
-    assert "Оставить заявку на эту квартиру" in html
+    # S1-1: the card CTA is a styled button; on the compact card the label is the short
+    # "Оставить заявку" (the apt detail page keeps the full "…на эту квартиру" — see below).
+    assert "Оставить заявку" in html
     assert "/apt/42#lead" in html
 
 

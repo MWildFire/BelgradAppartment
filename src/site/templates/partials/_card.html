@@ -34,6 +34,8 @@
     </div>
   </a>
   {# CTA for THIS apartment — sibling of the card link (not nested, keeps HTML valid).
-     Goes to the detail page anchored at the lead form, which carries item.id. #}
-  <a class="card-cta" href="/apt/{{ item.id }}#lead">Оставить заявку на эту квартиру</a>
+     Goes to the detail page anchored at the lead form, which carries item.id.
+     Reuses the .btn system (oxblood fill) so it inherits :hover/:focus-visible/:active +
+     the global keyboard ring; .card-cta pins it to the card bottom (margin-top:auto). #}
+  <a class="btn ox card-cta" href="/apt/{{ item.id }}#lead">Оставить заявку</a>
 </article>
