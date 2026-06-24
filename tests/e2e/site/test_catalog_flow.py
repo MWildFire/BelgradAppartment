@@ -38,15 +38,16 @@ def test_catalog_flow(page, site_server: str) -> None:
     _assert_no_forbidden_urls(page.content())
     page.screenshot(path=str(ARTIFACTS_DIR / "home.png"), full_page=True)
 
-    # 2) Catalog: 3 public listings (private id=4 excluded).
+    # 2) Catalog: 2 default-visible cards (private id=4 excluded; rented id=3 hidden by C1 default).
     page.goto(f"{base}/catalog", wait_until="networkidle")
     cards = page.locator("#results .card-l")
-    assert cards.count() == 3, f"expected 3 public cards, got {cards.count()}"
+    assert cards.count() == 2, f"expected 2 default-visible cards, got {cards.count()}"
     _assert_no_forbidden_urls(page.content())
     page.screenshot(path=str(ARTIFACTS_DIR / "catalog.png"), full_page=True)
 
     # 3) Toggle ВНЖ → HTMX swaps #results down to the single ВНЖ item (id=1, Врачар €600).
-    page.locator("input[name='vnj'][value='1']").check()
+    # Scope to the filter rail: the C2 subscribe form on /catalog also has an input[name='vnj'].
+    page.locator(".filters input[name='vnj'][value='1']").check()
     # Wait for the swap: count settles at 1 (HTMX replaces #results in place).
     page.wait_for_function(
         "() => document.querySelectorAll('#results .card-l').length === 1",
@@ -77,8 +78,12 @@ def test_catalog_flow(page, site_server: str) -> None:
 
 
 @requires_e2e
-def test_rented_still_visible(page, site_server: str) -> None:
-    """«снято» is social proof — rented (id=3) stays in the grid, just muted."""
+def test_rented_hidden_by_default_visible_via_toggle(page, site_server: str) -> None:
+    """C1: «снято» is hidden by default; the 'show rented' toggle brings it back, muted (social proof)."""
+    # Default catalog hides rented (id=3) — prod-confirmed C1 behavior.
     page.goto(f"{site_server}/catalog", wait_until="networkidle")
+    assert page.locator("#results .card-l.is-rented").count() == 0
+    # With show_rented=1 the rented card reappears: muted (.is-rented) + badged.
+    page.goto(f"{site_server}/catalog?show_rented=1", wait_until="networkidle")
     assert page.locator("#results .card-l.is-rented").count() == 1
     assert page.locator("#results .badge.rented").count() == 1
