@@ -16,6 +16,7 @@ def yandex_maps_url(
     address: str | None = None,
     zoom: int = 17,
     city: str = "Beograd",
+    precise: bool = True,
 ) -> str | None:
     """Return a long Yandex Maps URL pointing at the listing.
 
@@ -28,6 +29,13 @@ def yandex_maps_url(
 
     Previously coords-first was used — that produced a red dot in the middle of nowhere because
     Yandex doesn't infer the street from a bare pin.
+
+    `precise` (default True) keeps the historical behavior for the TG-post pipeline (Дарья):
+    the coords-only branch drops a `pt=` pin so the exact spot is visible. Pass `precise=False`
+    for the public site (Stage S, FUZZY mode / DECISIONS-S D1): the coords-only branch omits the
+    `pt=` pin so the deep-link opens the neighbourhood centre (default caller passes `zoom=15`)
+    without revealing the building. The address-first branch is unaffected — fuzzy callers use
+    coords-only.
     """
     if address:
         # Tack on the city so identically-named streets (e.g. "Cara Dušana") resolve to Belgrade,
@@ -38,8 +46,8 @@ def yandex_maps_url(
             url += f"&ll={lon},{lat}&z={zoom}"
         return url
     if lat is not None and lon is not None:
-        return (
-            f"https://yandex.com/maps/?ll={lon},{lat}&z={zoom}"
-            f"&pt={lon},{lat}"
-        )
+        url = f"https://yandex.com/maps/?ll={lon},{lat}&z={zoom}"
+        if precise:
+            url += f"&pt={lon},{lat}"
+        return url
     return None

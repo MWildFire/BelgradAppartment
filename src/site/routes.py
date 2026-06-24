@@ -28,6 +28,7 @@ from src.site.deps import (
     require_site_csrf,
 )
 from src.site.leads import LeadPayload, LeadValidationError, create_lead
+from src.site.maps import maps_links
 from src.site.readmodel import Filters
 from src.site.subscriptions import (
     SubscriptionPayload,
@@ -284,8 +285,18 @@ async def apt(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     similar = await readmodel.similar(item, limit=4, database_url=db_url)
+    # Stage S Wave 2 (§M, FUZZY/D1): the template renders the map block only when coords exist;
+    # maps carries the fuzzy Yandex/Google deep-links (None if no coords).
+    coords = (
+        {"lat": item.lat, "lon": item.lon}
+        if item.lat is not None and item.lon is not None
+        else None
+    )
+    maps = maps_links(item.lat, item.lon)
     return templates.TemplateResponse(
-        request, "apt.html", {"item": item, "similar": similar}
+        request,
+        "apt.html",
+        {"item": item, "similar": similar, "coords": coords, "maps": maps},
     )
 
 
