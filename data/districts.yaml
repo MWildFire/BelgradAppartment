@@ -1,0 +1,171 @@
+# District / location → Latinic hashtag for Belgrade.
+#
+# Keys are normalised: lowercased, no diacritics, sequences of non-alphanum collapsed to a space.
+# We try to match the normalised form of Listing.district (or fallback substrings) against the
+# normalised form of each key. The first hit wins.
+#
+# Add new entries as Darya finds gaps. Comment any obscure ones with a brief note.
+
+# --- 17 общин Београда (administrative districts) ---
+"Барајево": Barajevo
+"Barajevo": Barajevo
+"Чукарица": Cukarica
+"Cukarica": Cukarica
+"Гроцка": Grocka
+"Grocka": Grocka
+"Лазаревац": Lazarevac
+"Lazarevac": Lazarevac
+"Младеновац": Mladenovac
+"Mladenovac": Mladenovac
+"Нови Београд": NoviBeograd
+"Novi Beograd": NoviBeograd
+"Обреновац": Obrenovac
+"Obrenovac": Obrenovac
+"Палилула": Palilula
+"Palilula": Palilula
+"Раковица": Rakovica
+"Rakovica": Rakovica
+"Савски венац": Savskivenac
+"Savski Venac": Savskivenac
+"Сопот": Sopot
+"Sopot": Sopot
+"Стари град": Starigrad
+"Stari Grad": Starigrad
+"Сурчин": Surcin
+"Surcin": Surcin
+"Вождовац": Vozdovac
+"Vozdovac": Vozdovac
+"Voždovac": Vozdovac
+"Врачар": Vracar
+"Vracar": Vracar
+"Земун": Zemun
+"Zemun": Zemun
+"Звездара": Zvezdara
+"Zvezdara": Zvezdara
+
+# --- Popular micro-locations / neighbourhoods ---
+# NOTE (S1-3): each Latinic value below also carries a Cyrillic key so the public catalog
+# reverse-lookup (src/site/format.human_district) can render a Cyrillic display name and no
+# latinica leaks onto the showcase. The Cyrillic key is the human-readable display form;
+# the Latinic key(s) stay for raw-value matching.
+"Бежанијска коса": BezanijskaKosa
+"Bežanijska kosa": BezanijskaKosa
+"Bezanijska Kosa": BezanijskaKosa
+"Београд на води": BeogradNaVodi
+"Beograd na vodi": BeogradNaVodi
+"Belgrade Waterfront": BeogradNaVodi
+"Mirijevo": Mirijevo
+"Дорћол": Dorcol
+"Dorćol": Dorcol
+"Dorcol": Dorcol
+"Баново брдо": BanovoBrdo
+"Banovo brdo": BanovoBrdo
+"Banovo Brdo": BanovoBrdo
+"Церак": Cerak
+"Cerak": Cerak
+"Карабурма": Karaburma
+"Karaburma": Karaburma
+"Konjarnik": Konjarnik
+"Центар": Centar
+"Centar": Centar
+"Славија": Slavija
+"Slavija": Slavija
+"Дедиње": Dedinje
+"Dedinje": Dedinje
+"Сењак": Senjak
+"Senjak": Senjak
+"Топчидерско брдо": TopciderskoBrdo
+"Topčidersko brdo": TopciderskoBrdo
+"Topcidersko Brdo": TopciderskoBrdo
+"Филмски град": FilmskiGrad
+"Filmski grad": FilmskiGrad
+"Петлово брдо": PetlovoBrdo
+"Petlovo brdo": PetlovoBrdo
+"Гардош": Gardos
+"Gardoš": Gardos
+"Gardos": Gardos
+# Професорска колонија — микрорайон в общине Звездара; на витрине встречается как
+# "Profesorska kolonija" и "Profesorska kolonija - Hala Pionir" (матчер ловит по подстроке).
+"Професорска колонија": ProfesorskaKolonija
+"Profesorska kolonija": ProfesorskaKolonija
+"Profesorska Kolonija": ProfesorskaKolonija
+"Bulevar Mihaila Pupina": NoviBeograd
+"Bulevar Kralja Aleksandra": Vracar
+
+# --- Micro-locations seen in halooglasi / 4zida listing.district fields ---
+# Added 2026-05-20 after manual review of false-positive matches.
+"Lekino brdo": Vozdovac
+"Vojvode Stepe": Vozdovac
+"Vojvode Vlahovića": Vozdovac
+"Vojvode Vlahovica": Vozdovac
+"Dušanovac": Vozdovac
+"Dusanovac": Vozdovac
+"Trošarina": Vozdovac
+"Trosarina": Vozdovac
+"Voždove kapije": Vozdovac
+"Vozdove kapije": Vozdovac
+"Južni bulevar": Vracar
+"Juzni bulevar": Vracar
+"Hram svetog Save": Vracar
+"Vukov spomenik": Vracar
+"Vukov Spomenik": Vracar
+"Kalenić pijaca": Vracar
+"Kalenic pijaca": Vracar
+"Crveni krst": Vracar
+"Crveni Krst": Vracar
+"Neimar": Vracar
+"Pravni fakultet": Vracar
+"Cvijićeva": Palilula
+"Cvijiceva": Palilula
+"Tašmajdan": Palilula
+"Tasmajdan": Palilula
+"Pop-Lukina": Starigrad
+"Pop Lukina": Starigrad
+"Kosančićev venac": Starigrad
+"Kosancicev venac": Starigrad
+"Kosancicev Venac": Starigrad
+"Botanička bašta": Starigrad
+"Botanicka basta": Starigrad
+"Skadarlija": Starigrad
+"Terazije": Starigrad
+"Gundulićev venac": Starigrad
+"Gundulicev venac": Starigrad
+"Cara Dušana": Zemun
+"Cara Dusana": Zemun
+"Donji grad Zemun": Zemun
+"Pregrevica": Zemun
+"Stari grad Zemun": Zemun
+"Autokomanda": Vozdovac
+"Konjarnik": Zvezdara
+"Kluz": Zvezdara
+"Mirijevo": Zvezdara
+# Belgrade blocks (Blok N) — all in Novi Beograd
+"Blok 1": NoviBeograd
+"Blok 11": NoviBeograd
+"Blok 11a": NoviBeograd
+"Blok 11A": NoviBeograd
+"Blok 21": NoviBeograd
+"Blok 22": NoviBeograd
+"Blok 23": NoviBeograd
+"Blok 24": NoviBeograd
+"Blok 25": NoviBeograd
+"Blok 28": NoviBeograd
+"Blok 29": NoviBeograd
+"Blok 30": NoviBeograd
+"Blok 45": NoviBeograd
+"Blok 61": NoviBeograd
+"Blok 62": NoviBeograd
+"Blok 63": NoviBeograd
+"Blok 64": NoviBeograd
+"Blok 65": NoviBeograd
+"Blok 67": NoviBeograd
+"Blok 67a": NoviBeograd
+"Blok 67A": NoviBeograd
+"Belvil": NoviBeograd
+"Belville": NoviBeograd
+"Fontana": NoviBeograd
+"A Blok": NoviBeograd
+"Sava Mala": Savskivenac
+"Savamala": Savskivenac
+"Čubura": Vracar
+"Cubura": Vracar

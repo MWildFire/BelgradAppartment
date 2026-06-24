@@ -41,7 +41,9 @@ uv.lock
 *.db-journal
 *.db-wal
 *.db-shm
-data/
+# NB: ignore the *contents* of data/ (data/*), not the directory itself — otherwise the
+# per-file re-includes below are no-ops (git can't un-ignore a file under an ignored dir).
+data/*
 !data/.gitkeep
 !data/districts.yaml
 

@@ -56,6 +56,58 @@ def test_human_district_none() -> None:
     assert human_district(None) == ""
 
 
+def test_human_district_empty_string() -> None:
+    assert human_district("") == ""
+
+
+# --- S1-3: no Latin district may leak onto the public catalog ---
+# Each of these raw values used to resolve to a Latin/CamelCase form (orphan yaml value
+# with no Cyrillic key) and leaked latinica onto the showcase. They must now show Cyrillic.
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Dorcol", "Дорћол"),
+        ("Dorćol", "Дорћол"),
+        ("Banovo brdo", "Баново брдо"),
+        ("Banovo Brdo", "Баново брдо"),
+        ("Senjak", "Сењак"),
+        ("Karaburma", "Карабурма"),
+        ("Centar", "Центар"),
+        ("Cerak", "Церак"),
+        ("Dedinje", "Дедиње"),
+        ("Slavija", "Славија"),
+        ("Gardoš", "Гардош"),
+        ("Gardos", "Гардош"),
+        ("Bežanijska kosa", "Бежанијска коса"),
+        ("Beograd na vodi", "Београд на води"),
+        ("Belgrade Waterfront", "Београд на води"),
+        ("Filmski grad", "Филмски град"),
+        ("Petlovo brdo", "Петлово брдо"),
+        ("Topčidersko brdo", "Топчидерско брдо"),
+        ("Profesorska kolonija", "Професорска колонија"),
+        ("Profesorska kolonija - Hala Pionir", "Професорска колонија"),
+    ],
+)
+def test_human_district_latin_no_longer_leaks(raw: str, expected: str) -> None:
+    out = human_district(raw)
+    assert out == expected
+    # Defense: the result must contain at least one Cyrillic char (no bare latinica).
+    assert any("Ѐ" <= ch <= "ӿ" for ch in out)
+
+
+def test_human_district_already_cyrillic_passthrough() -> None:
+    # Already-Cyrillic raw maps to its own Cyrillic display key, unchanged.
+    assert human_district("Звездара") == "Звездара"
+    assert human_district("Стари град") == "Стари град"
+
+
+def test_human_district_unmapped_latin_passthrough_unchanged() -> None:
+    # Genuinely unmapped latinica is returned verbatim (no crash); reportable via
+    # the districts-report CLI. Passthrough behavior must not change.
+    raw = "Neki Sasvim Nepoznat Kraj"
+    assert human_district(raw) == raw
+
+
 def test_human_district_no_cyrillic_key_falls_back_to_value() -> None:
     # "Blok 21" -> value "NoviBeograd"; there is a Cyrillic key for that value
     # ("Нови Београд"), so it should resolve to Cyrillic.
