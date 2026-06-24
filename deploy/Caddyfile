@@ -3,6 +3,16 @@
 # нужны DNS A-записи rentbelgrad.com + www.rentbelgrad.com -> 90.156.254.159 и открытые 80/443 (ufw).
 # admin.rentbelgrad.com -> внутренняя админка (:8000) за HTTP Basic-auth (ADMIN_USERNAME/ADMIN_PASSWORD);
 # требует DNS A-записи admin.rentbelgrad.com -> 90.156.254.159 (иначе Caddy не выпустит TLS). После правок: systemctl reload caddy.
+#
+# ─── Stage S Wave 3 (Cloudflare) ────────────────────────────────────────────────────────────────
+# Когда сайт встанет за Cloudflare (proxied/оранжевое облако), публичный ACME HTTP-01 ломается
+# (CF терминирует TLS на edge), поэтому проксируемые хосты переходят на **Origin CA cert** + CF SSL
+# mode = Full(Strict). Шаги — `deploy/cloudflare/RUNBOOK.md`. В этом файле строки `tls …` под каждым
+# проксируемым хостом ПОДГОТОВЛЕНЫ и ЗАКОММЕНТИРОВАНЫ — раскомментировать в шаге 3b-1 (S3-1).
+# CF-Connecting-IP: Caddy `reverse_proxy` форвардит все заголовки на бэкенд по умолчанию, поэтому
+# приложение видит `CF-Connecting-IP` как есть (читает его при `TRUST_CLOUDFLARE=1`, S3-3) — спец.
+# конфиг Caddy для этого НЕ нужен. (Опц. для корректного XFF-лога самого Caddy можно добавить
+# `trusted_proxies` с CF-диапазонами — см. RUNBOOK; на работу rate-limit приложения не влияет.)
 
 www.rentbelgrad.com {
     redir https://rentbelgrad.com{uri} permanent
@@ -13,6 +23,8 @@ www.rentbelgrad.com {
 # проксирует всё на otz-admin.service (:8000) и добавляет HTTPS + anti-clickjacking-заголовки.
 # CSP не ставим: админка тянет HTMX с unpkg и Chart.js с jsdelivr, а доступ и так за логином.
 admin.rentbelgrad.com {
+    # Stage S Wave 3b (S3-1): за Cloudflare раскомментировать — Origin CA cert вместо ACME.
+    # tls /etc/caddy/origin/rentbelgrad.pem /etc/caddy/origin/rentbelgrad.key
     encode zstd gzip
     reverse_proxy 127.0.0.1:8000
     header {
@@ -25,6 +37,10 @@ admin.rentbelgrad.com {
 }
 
 rentbelgrad.com {
+
+    # Stage S Wave 3b (S3-1): за Cloudflare раскомментировать — Origin CA cert (wildcard покрывает
+    # и admin.*), CF SSL mode = Full(Strict). Снимает зависимость от ACME HTTP-01 (ломается под CF).
+    # tls /etc/caddy/origin/rentbelgrad.pem /etc/caddy/origin/rentbelgrad.key
 
     encode zstd gzip
 
