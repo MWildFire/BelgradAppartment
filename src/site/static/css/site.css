@@ -159,8 +159,10 @@ section.bay{padding-block:var(--bay)}
 .card-l{background:var(--card);border:1px solid var(--ink);border-radius:var(--r-m);overflow:hidden;display:flex;flex-direction:column;transition:transform .14s ease,box-shadow .14s ease}
 /* The photo + body live in an <a> (default display:inline). On an inline box the child .ph
    aspect-ratio is ignored — the same Stage-R bug that collapsed .hero-photo. Force the link to a
-   block flex-column so .ph keeps its 3/2 box AND the body can flex:1 to fill the stretched card. */
-.card-l>a{display:flex;flex-direction:column;flex:1;min-height:0}
+   block flex-column so .ph keeps its 3/2 box AND the body can flex:1 to fill the stretched card.
+   :not(.card-cta) is REQUIRED — the CTA is also a direct <a> child of .card-l; without it the CTA
+   inherits flex:1 and, under .cards{grid-auto-rows:1fr}, balloons to ~half the card (Wave 4 blocker). */
+.card-l>a:not(.card-cta){display:flex;flex-direction:column;flex:1;min-height:0}
 .card-l:hover{transform:translateY(-3px);box-shadow:0 20px 40px -26px rgba(27,26,23,.5)}
 /* Rented cards stay muted (social proof, not hidden), but .72 dragged the inner text below
    AA (4.2:1). .8 keeps the «приглушённо» feel while text clears 4.5:1 (ink-2 → 5.15:1). */
@@ -188,7 +190,7 @@ section.bay{padding-block:var(--bay)}
    flex-column <article> shoves it down so every card's CTA shares one baseline regardless of
    title length. Sits within the card's padding box → never overflows onto the paper bg.
    :hover/:focus-visible/:active + the keyboard ring come from the shared .btn rules. */
-.card-cta{display:block;text-align:center;border-radius:var(--r-s);
+.card-cta{display:block;flex:0 0 auto;text-align:center;border-radius:var(--r-s);
   margin-top:auto;margin-inline:16px;margin-bottom:16px}
 
 /* ───────── how it works ───────── */

@@ -44,6 +44,9 @@ def maps_links(lat: float | None, lon: float | None) -> MapsLinks | None:
     """Fuzzy Yandex + Google deep-links for a listing, or None if coordinates are missing."""
     if lat is None or lon is None:
         return None
+    # Defense-in-depth (L1 hardening): never interpolate a non-float into a URL. Coords come from
+    # ORM Float columns today, but coercing keeps the builder safe if ever called with strings.
+    lat, lon = float(lat), float(lon)
     yandex = yandex_maps_url(lat=lat, lon=lon, precise=False, zoom=15)
     # yandex_maps_url returns a str for the coords-only fuzzy path (both lat/lon present here).
     assert yandex is not None  # noqa: S101 — invariant given non-None coords

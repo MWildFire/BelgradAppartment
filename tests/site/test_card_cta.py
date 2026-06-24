@@ -140,7 +140,8 @@ def test_css_photo_wrapper_is_block_for_aspect_ratio() -> None:
     css = _css()
     # the card's main link must be a block-level box (display:block OR flex) so the child .ph
     # aspect-ratio applies — an inline <a> would ignore it (the Stage R .hero-photo bug).
-    block_rule = re.search(r"\.card-l>a\{[^}]*\}|\.card-l > a\{[^}]*\}", css)
+    # Selector may scope out the CTA (.card-l>a:not(.card-cta)) — that's the Wave 4 balloon fix.
+    block_rule = re.search(r"\.card-l\s*>\s*a(?::not\([^)]*\))?\s*\{[^}]*\}", css)
     assert block_rule, "expected a .card-l>a rule forcing a block-level display on the photo link"
     body = block_rule.group(0).replace(" ", "")
     assert "display:block" in body or "display:flex" in body, (

@@ -17,7 +17,8 @@
 }
 .apt-loc-hint {
   font-size: var(--step--1);
-  color: var(--ink-3);
+  /* --ink-3 is 3.3:1 on paper (below AA body); use --ink-2 (8.2:1) — same fix as .kicker. */
+  color: var(--ink-2);
   margin-bottom: 0.9rem;
   max-width: 56ch;
 }
@@ -67,13 +68,6 @@
   color: var(--paper);
   background: color-mix(in srgb, var(--ink) 36%, transparent);
   cursor: pointer;
-}
-.apt-map-gate::before {
-  content: "";
-  position: absolute;
-  inset: auto auto 12px 12px;
-  width: 0;
-  height: 0;
 }
 
 /* Deep-link buttons row (S2-3): outline .btn.ghost variants from site.css, side by side,

@@ -83,3 +83,24 @@ def test_apt_without_coords_shows_fallback(page, site_server: str) -> None:
     # Still no площадка/CDN leaks, and the sticky CTA + mono price are intact.
     _assert_no_forbidden_urls(page.content())
     assert page.locator(".apt-side .price .mono").first.inner_text().find("€") >= 0
+
+
+@requires_e2e
+def test_apt_zero_horizontal_overflow_320_and_1920(page, site_server: str) -> None:
+    """L7: the /apt page (with the Leaflet block AND the no-coords fallback) must not overflow.
+
+    The plan DoD wants 320–1920 zero-overflow on ALL pages incl the map; the catalog/home guards
+    don't cover /apt. id=1 hosts the map (absolutely-positioned .leaflet-container + controls),
+    id=2 the fallback.
+    """
+    for path in ("/apt/1", "/apt/2"):
+        for width in (320, 1920):
+            page.set_viewport_size({"width": width, "height": 900})
+            page.goto(f"{site_server}{path}", wait_until="networkidle")
+            scroll_w, client_w = page.evaluate(
+                "() => [document.documentElement.scrollWidth, document.documentElement.clientWidth]"
+            )
+            assert scroll_w <= client_w + 1, (
+                f"horizontal overflow on {path} at {width}px: "
+                f"scrollWidth={scroll_w} > clientWidth={client_w}"
+            )

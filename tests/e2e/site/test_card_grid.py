@@ -4,10 +4,14 @@ Drives the seeded catalog with headless chromium and measures real layout boxes:
 - Every card in a grid ROW shares the same bottom edge (equal height).
 - The .card-cta button bottom edges line up across cards in a row (pinned to bottom).
 - The CTA button sits INSIDE its card's bounding box (never overflows onto the page bg).
+- The CTA does NOT balloon over the card body — its height stays a small fraction of the card and
+  the price (the card link's accessible name) stays visible (regression guard for the Wave 4
+  card-cta-balloon blocker: .card-l>a{flex:1} used to match the CTA anchor too).
 - Zero horizontal overflow at 320px and 1920px (scrollWidth <= clientWidth).
 
-Gated by RUN_E2E=1 (conftest.requires_e2e). The seed has 3 public cards; the catalog renders
-them in one row at desktop width, which is enough to assert row alignment + overflow bounds.
+Gated by RUN_E2E=1 (conftest.requires_e2e). The seed has 3 public listings but C1 hides the
+rented one by default, so the catalog renders 2 visible cards in one row at desktop width —
+enough to assert row alignment + overflow bounds.
 """
 
 from __future__ import annotations
@@ -50,6 +54,16 @@ def test_cards_equal_height_and_cta_pinned(page, site_server: str) -> None:
         assert cta.count() == 1, "each card must have exactly one .card-cta button"
         tb = cta.bounding_box()
         assert cb is not None and tb is not None
+        # Regression guard (Wave 4 blocker): the CTA must not balloon over the card body.
+        assert tb["height"] <= cb["height"] * 0.4, (
+            f"CTA balloons over card body: cta_h={tb['height']:.0f} is "
+            f"{tb['height'] / cb['height']:.0%} of card_h={cb['height']:.0f} (must be <40%)"
+        )
+        # The price (part of the card link's accessible name) must stay visible, not be covered.
+        price = card.locator(".body .price")
+        assert price.count() == 1 and price.first.is_visible(), "card price hidden/covered by CTA"
+        pb = price.first.bounding_box()
+        assert pb is not None and pb["height"] > 0, "card price has zero height (covered)"
         boxes.append({
             "top": cb["y"], "bottom": cb["y"] + cb["height"], "left": cb["x"],
             "cta_top": tb["y"], "cta_bottom": tb["y"] + tb["height"],
