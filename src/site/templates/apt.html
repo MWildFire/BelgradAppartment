@@ -16,7 +16,13 @@
    property="og:url" meta and the <link rel="canonical"> here via base.html's {% block head %}.
    Canonical absolute /apt/{id} — site_base_url = settings.site_public_base_url. #}
 {% block head %}<meta property="og:url" content="{{ site_base_url }}/apt/{{ item.id }}">
-<link rel="canonical" href="{{ site_base_url }}/apt/{{ item.id }}">{% endblock %}
+<link rel="canonical" href="{{ site_base_url }}/apt/{{ item.id }}">
+{# Stage S Wave 2 (S2-2/S2-3): apt-page map-block styles (site.css is owned elsewhere). #}
+<link rel="stylesheet" href="/static/css/apt.css?v={{ asset_v }}">
+{% if coords %}{# Leaflet CSS (CDN, SRI-pinned) — same provider+hashes as map.html. Only loaded
+   when there's a fuzzy map to draw; the no-coords fallback pulls in no external bytes. #}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">{% endif %}{% endblock %}
 
 {% block content %}
 <section class="bay wrap">
@@ -70,6 +76,31 @@
           <div class="item"><span class="k">агент</span><p>Сопровождаем на показе и подписании — переводим, проверяем, торгуемся.</p></div>
         </div>
       </div>
+
+      {# Stage S Wave 2 (§M, FUZZY/D1): расположение на карте. With coords → a Leaflet FUZZY
+         CIRCLE (~150 m, NO point marker — building never revealed) + Yandex/Google deep-links
+         (coordinate-area only, never a площадка). Without coords → «Точный адрес уточняйте»
+         + район + Telegram CTA. Deep-link buttons are plain anchors → work with JS off. #}
+      <section class="apt-loc" aria-label="Расположение на карте">
+        <h2>Где это</h2>
+        {% if coords %}
+          <p class="apt-loc-hint">Показываем район ориентировочно — точную точку даём при показе.</p>
+          {# Leaflet mount: apt-map.js reads data-lat/data-lon (CSP-safe) and draws the fuzzy
+             circle. Empty with JS off — the deep-link buttons below still work. #}
+          <div id="apt-map" data-lat="{{ coords.lat }}" data-lon="{{ coords.lon }}"
+               role="img" aria-label="Карта района (приблизительная зона ~150 м, без точного адреса)"></div>
+          <div class="apt-map-links">
+            <a class="btn ghost" href="{{ maps.yandex }}" target="_blank" rel="noopener">Открыть в Yandex Maps</a>
+            <a class="btn ghost" href="{{ maps.google }}" target="_blank" rel="noopener">Открыть в Google Maps</a>
+          </div>
+        {% else %}
+          <div class="apt-loc-fallback">
+            <p class="apt-loc-fb-head">Точный адрес уточняйте</p>
+            <p class="apt-loc-fb-district">Район: {{ item.district }}</p>
+            <a class="btn tg" href="{{ telegram_url }}" target="_blank" rel="noopener">Спросить адрес в Telegram</a>
+          </div>
+        {% endif %}
+      </section>
     </div>
 
     {# sticky CTA side #}
@@ -125,4 +156,12 @@
 {% block scripts %}
 {# C4: wires the [data-share] button (Web Share API + copy-link fallback). defer + DOM-ready safe. #}
 <script src="/static/js/share.js?v={{ asset_v }}" defer></script>
+{% if coords %}
+{# Stage S Wave 2 (S2-2): Leaflet core (CDN, SRI-pinned — same as map.html; NO markercluster
+   here) then the fuzzy-circle island. defer keeps order: L is defined before apt-map.js runs;
+   apt-map.js no-ops gracefully if Leaflet failed to load (deep-link buttons still work). #}
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+<script src="/static/js/apt-map.js?v={{ asset_v }}" defer></script>
+{% endif %}
 {% endblock %}

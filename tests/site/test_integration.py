@@ -92,6 +92,10 @@ def _no_listing_url_leaks(html: str) -> None:
     of them first, then assert nothing else carrying a URL scheme or a площадка marker survives.
     """
     stripped = html.replace(ALLOWED_CHANNEL, "").replace(ALLOWED_AGENT_DM, "")
+    # Stage S Wave 2: the /apt/{id} fuzzy map loads Leaflet from the plan-sanctioned jsdelivr CDN
+    # (same provider as /map, CSP-allowed). Strip that allowed origin first — like the Telegram
+    # URLs above — so the broad "://cdn" photo-CDN guard below still catches REAL leaks.
+    stripped = stripped.replace("cdn.jsdelivr.net", "")
     # Seeded source listing urls (http://x/N) and remote photo CDNs (http://cdn/...).
     assert "http://x/" not in stripped, "source listing URL (listings.url) leaked"
     assert "http://cdn/" not in stripped, "remote photo CDN URL leaked"

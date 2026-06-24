@@ -1,0 +1,120 @@
+/* ============================================================
+   RentBelgrad — /apt/{id} fuzzy map block (Stage S, Wave 2 — S2-2/S2-3)
+   Owns ONLY the apt-page map section. Tokens from tokens.css; no slop.
+   Linked from apt.html {% block head %} with ?v={{ asset_v }}.
+   site.css (apt-grid/apt-side/reloc) is owned elsewhere — not touched here.
+   ============================================================ */
+
+/* The map section sits in the left column, below «что важно для релокантов». */
+.apt-loc {
+  margin-top: 2rem;
+}
+.apt-loc h2 {
+  font-size: var(--step-1);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: 0.5rem;
+}
+.apt-loc-hint {
+  font-size: var(--step--1);
+  color: var(--ink-3);
+  margin-bottom: 0.9rem;
+  max-width: 56ch;
+}
+
+/* Leaflet mount: needs an explicit height or Leaflet renders a 0px box. ~240px reads compact
+   on the detail page (spec: 220–280px). Custom props feed apt-map.js its fuzzy-circle colours. */
+#apt-map {
+  --apt-map-stroke: var(--oxblood);
+  --apt-map-fill: var(--oxblood);
+  position: relative;
+  height: 240px;
+  border: 1.5px solid var(--ink);
+  border-radius: var(--r-m);
+  background: var(--paper-2);
+  overflow: hidden;
+}
+@media (max-width: 560px) {
+  #apt-map { height: 220px; }
+}
+
+/* Keep Leaflet tiles/controls inside the rounded clip; sit under the deep-link buttons. */
+#apt-map .leaflet-container {
+  background: var(--paper-2);
+  font-family: var(--text);
+}
+#apt-map .leaflet-control-attribution {
+  font-size: 0.62rem;
+  background: color-mix(in srgb, var(--card) 86%, transparent);
+}
+
+/* Touch interaction gate — a tap target overlaying the map so a one-finger swipe scrolls the
+   page until the user explicitly opts in (apt-map.js wires the click). */
+.apt-map-gate {
+  position: absolute;
+  inset: 0;
+  z-index: 500;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--paper);
+  background: color-mix(in srgb, var(--ink) 36%, transparent);
+  cursor: pointer;
+}
+.apt-map-gate::before {
+  content: "";
+  position: absolute;
+  inset: auto auto 12px 12px;
+  width: 0;
+  height: 0;
+}
+
+/* Deep-link buttons row (S2-3): outline .btn.ghost variants from site.css, side by side,
+   wrapping on narrow viewports. Plain anchors → work with JS off. */
+.apt-map-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.apt-map-links .btn {
+  flex: 1 1 auto;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* No-coords fallback (§M): «Точный адрес уточняйте» + район + Telegram CTA — no map, no links. */
+.apt-loc-fallback {
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-m);
+  background: var(--card);
+  padding: 18px 20px;
+}
+.apt-loc-fallback .apt-loc-fb-head {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.apt-loc-fallback .apt-loc-fb-district {
+  font-family: var(--mono);
+  font-size: var(--step--1);
+  color: var(--ink-2);
+  margin-bottom: 12px;
+}
+.apt-loc-fallback .btn {
+  display: inline-flex;
+  align-items: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #apt-map .leaflet-fade-anim .leaflet-tile,
+  #apt-map .leaflet-zoom-anim .leaflet-zoom-animated {
+    transition: none !important;
+  }
+}
