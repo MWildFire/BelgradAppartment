@@ -82,13 +82,20 @@ otz stats                   # текущее состояние БД
 otz admin                   # запустить веб-просмотр (FastAPI)
 ```
 
-## Публичный веб-каталог (этапы W / W2)
+## Публичный веб-каталог (этапы W / W2 / S)
 
 Второе FastAPI+Jinja-приложение (`src/site/`) — публичный каталог для клиентов @RentBelgrad. Читает
 **ту же SQLite read-only** и показывает только **отобранные Дарьей** квартиры (опубличенные в канале),
 никогда не линкует на площадки-конкуренты. Главная, каталог с фильтрами (ВНЖ + белый картон на видном
 месте), карточка квартиры, карта (Leaflet), калькулятор аренды, форма заявки (→ таблица `leads` + нотис
-Дарье через бота), избранное в `localStorage`. На проде слушает `127.0.0.1:8001` за Caddy (авто-TLS);
+Дарье через бота), избранное в `localStorage`.
+
+**Stage S «Showcase & Shield»** (`docs/web/SESSION_HANDOFF_2026-06-24.md`): стилизованная CTA-кнопка +
+равная высота карточек; фуззи-карта (~150м, без точного пина) + Yandex/Google deep-links на `/apt/{id}`;
+**PWA** (manifest + service-worker + offline-shell) + мобильный bottom-nav; динамический OG-share-image
+`/apt/{id}/og.png`; JSON-LD; полировка `/map` (цвет по цене + ВНЖ-тогл). **Cloudflare** перед origin —
+repo подготовлен (`deploy/cloudflare/RUNBOOK.md`, `scripts/cf_ufw_allowlist.sh`, `TRUST_CLOUDFLARE`),
+live-выкатка по раннбуку. Ноль миграций (head остаётся 0009). На проде слушает `127.0.0.1:8001` за Caddy (авто-TLS);
 фото отдаёт сам Caddy из `data/inbound` (см. [`deploy/`](deploy/): `otz-site.service`, `Caddyfile`,
 `env.additions.txt`). Обоснование архитектуры — [`docs/web/ARCHITECTURE.md`](docs/web/ARCHITECTURE.md).
 
