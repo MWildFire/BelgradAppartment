@@ -650,21 +650,22 @@ def test_404_renders_custom_template_with_globals(client):
 
 
 def test_apt_og_tags_reconciled_to_w2_format():
-    """W3-4: /apt/{id} <head> carries W2-format OpenGraph — og:title = «{price}€ · {district}»,
-    og:image absolute (site_base_url + the site /photos path, never a площадка/CDN url),
-    og:url canonical absolute, plus og:type and a canonical <link>. Rendered via the real env
-    (the route's autouse stub env can't render D's real apt.html markup)."""
+    """/apt/{id} <head> OpenGraph — og:title = «{price}€ · {district}», og:url canonical absolute,
+    og:type, a canonical <link>, and (S5-2) og:image = the absolute dynamic share-image route
+    /apt/{id}/og.png (NEVER a площадка/CDN url). Rendered via the real env (the route's autouse
+    stub env can't render D's real apt.html markup)."""
     env = _real_env()
     base = "https://rent.example.com"
     item = _FakeItem()
     item.photos = ["/photos/1/1/00.jpg"]  # site /photos path (already absolutized server-side)
-    html = env.get_template("apt.html").render(item=item, similar=[])
+    html = env.get_template("apt.html").render(item=item, similar=[], coords=None, maps=None)
 
     # og:title = «{price_eur}€ · {district}» (W2 exact format)
     assert f'property="og:title" content="{item.price_eur}€ · {item.district}"' in html
-    # og:image is ABSOLUTE: site_base_url + the /photos path; NEVER a площадка/CDN url
-    assert f'property="og:image" content="{base}/photos/1/1/00.jpg"' in html
+    # S5-2: og:image is the ABSOLUTE dynamic share-image route; NEVER a remote/площадка/CDN url
+    assert f'property="og:image" content="{base}/apt/{item.id}/og.png"' in html
     assert "cdn/" not in html and "://cdn" not in html  # no remote/площадка image
+    assert f'property="og:image" content="{base}/photos' not in html  # not the raw photo anymore
     # og:url canonical absolute /apt/{id}
     assert f'property="og:url" content="{base}/apt/{item.id}"' in html
     # og:type set + a canonical <link>
@@ -674,14 +675,17 @@ def test_apt_og_tags_reconciled_to_w2_format():
     assert html.count('property="og:title"') == 1
 
 
-def test_apt_og_image_falls_back_to_default_when_no_photos():
-    """No photos → og:image falls back to the absolute site default (no dangling/relative url)."""
+def test_apt_og_image_is_dynamic_route_even_without_photos():
+    """S5-2: og:image is the dynamic /apt/{id}/og.png route regardless of photos — the image
+    renderer handles the no-photo case server-side (paper panel), so the meta never points at a
+    raw photo url or a dangling/relative default."""
     env = _real_env()
     base = "https://rent.example.com"
     item = _FakeItem()
     item.photos = []
-    html = env.get_template("apt.html").render(item=item, similar=[])
-    assert f'property="og:image" content="{base}/static/og-default.png"' in html
+    html = env.get_template("apt.html").render(item=item, similar=[], coords=None, maps=None)
+    assert f'property="og:image" content="{base}/apt/{item.id}/og.png"' in html
+    assert "/static/og-default.png" not in html  # no longer the static default fallback
 
 
 # ============================================================== templates: lead CTA + hidden id (real markup)

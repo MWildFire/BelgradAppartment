@@ -178,10 +178,11 @@ def test_apt_has_per_listing_opengraph_absolute_image() -> None:
     assert item.district in og_title
     # og:description present.
     assert 'property="og:description"' in html
-    # og:image is ABSOLUTE — built from the site_base_url global + the first photo.
+    # og:image is ABSOLUTE — S5-2 points it at the dynamic share-image route /apt/{id}/og.png
+    # (built from the site_base_url global), not the raw first photo.
     m_img = re.search(r'<meta property="og:image" content="([^"]*)"', html)
     assert m_img, "og:image missing on apt.html"
-    assert m_img.group(1) == SITE_BASE + item.photos[0]
+    assert m_img.group(1) == f"{SITE_BASE}/apt/{item.id}/og.png"
     # twitter card present per-listing too.
     assert 'name="twitter:card"' in html
 

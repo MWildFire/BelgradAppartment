@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.templating import Jinja2Templates
 
 from src.config import get_settings
-from src.site import cache, readmodel
+from src.site import cache, og_image, readmodel
 from src.site.deps import (
     SITE_CSRF_TOKEN,
     catalog_db_url,
@@ -295,6 +295,48 @@ async def apt(
         request,
         "apt.html",
         {"item": item, "similar": similar, "coords": coords, "maps": maps},
+    )
+
+
+# How long CF edge / browsers may cache a generated OG image. The image only changes when the
+# listing's price/район/ВНЖ/first-photo change; the ETag (derived from exactly those inputs)
+# revalidates on change, and HTML is never cached, so a fresh share always resolves the live URL.
+_OG_MAX_AGE = 86_400
+
+
+@router.get("/apt/{site_listing_id}/og.png")
+async def apt_og_image(
+    request: Request, site_listing_id: int, db_url: str = Depends(catalog_db_url)
+) -> Response:
+    """S5-2: dynamic 1200×630 OpenGraph share-image for /apt/{id} (Telegram/WhatsApp previews).
+
+    Same public-visibility gate as the apt page (get_public → 404 for private/missing). The image
+    is composed from privacy-safe fields only (price/район/ВНЖ/first local photo — never an
+    address, per D1). Served with a content-derived ETag (+ If-None-Match → 304) and a CF-friendly
+    Cache-Control so the edge can hold it.
+    """
+    item = await readmodel.get_public(site_listing_id, database_url=db_url)
+    if item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    # ETag over the inputs that actually change the rendered image (cheaper + stable vs hashing the
+    # PNG bytes, which vary with Pillow/zlib): id, price, район, ВНЖ flag, first photo path.
+    first_photo = item.photos[0] if item.photos else ""
+    sig = f"{item.id}|{item.price_eur}|{item.district}|{int(item.for_vnj)}|{first_photo}"
+    etag = 'W/"og-' + hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16] + '"'
+    cache_control = f"public, max-age={_OG_MAX_AGE}"
+
+    if _etag_matches(request.headers.get("if-none-match"), etag):
+        return Response(
+            status_code=status.HTTP_304_NOT_MODIFIED,
+            headers={"ETag": etag, "Cache-Control": cache_control},
+        )
+
+    png = og_image.render_og_png(item)
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={"ETag": etag, "Cache-Control": cache_control},
     )
 
 
