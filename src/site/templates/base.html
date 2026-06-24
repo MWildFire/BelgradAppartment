@@ -58,6 +58,30 @@
   .apt-side .fav svg{width:18px;height:18px}
   @media(prefers-reduced-motion:reduce){.fav{transition:none}}
 </style>
+{# Stage S Wave 5 (S5-3): site-wide structured data (Organization + WebSite). Per-page templates
+   add more (apt.html adds Apartment+Offer). |tojson keeps it valid JSON + <script>-safe (escapes
+   </script>, quotes). No PII. #}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "name": "RentBelgrad",
+      "url": {{ (site_base_url ~ "/")|tojson }},
+      "logo": {{ (site_base_url ~ "/static/icons/icon-512.png")|tojson }},
+      "description": "Помогаем релокантам снять квартиру в Белграде на длинный срок — договор под ВНЖ и белый картон.",
+      "sameAs": [{% if telegram_url %}{{ telegram_url|tojson }}{% endif %}]
+    },
+    {
+      "@type": "WebSite",
+      "name": "RentBelgrad",
+      "url": {{ (site_base_url ~ "/")|tojson }},
+      "inLanguage": "ru"
+    }
+  ]
+}
+</script>
 {% block head %}{% endblock %}
 </head>
 {# hx-headers is inherited by every htmx request on the page → CSRF on all hx-post (mirrors

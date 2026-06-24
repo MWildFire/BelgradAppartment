@@ -29,7 +29,28 @@
 {% if coords %}{# Leaflet CSS (CDN, SRI-pinned) — same provider+hashes as map.html. Only loaded
    when there's a fuzzy map to draw; the no-coords fallback pulls in no external bytes. #}
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">{% endif %}{% endblock %}
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">{% endif %}
+{# Stage S Wave 5 (S5-3): Apartment + Offer structured data (rich results). Privacy (D1): район +
+   addressLocality «Београд» only — NEVER a street/address. |tojson keeps it valid + <script>-safe. #}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Apartment",
+  "name": {{ (item.rooms ~ " в районе " ~ item.district)|tojson }},
+  "url": "{{ site_base_url }}/apt/{{ item.id }}",
+  "image": "{{ site_base_url }}/apt/{{ item.id }}/og.png",
+  {% if item.area_m2 %}"floorSize": {"@type": "QuantitativeValue", "value": {{ item.area_m2|round|int }}, "unitCode": "MTK"},{% endif %}
+  "address": {"@type": "PostalAddress", "addressLocality": "Београд", "addressCountry": "RS"},
+  "offers": {
+    "@type": "Offer",
+    "price": {{ item.price_eur }},
+    "priceCurrency": "EUR",
+    "availability": {{ ("https://schema.org/InStock" if not item.is_rented else "https://schema.org/SoldOut")|tojson }},
+    "businessFunction": "https://purl.org/goodrelations/v1#LeaseOut",
+    "url": "{{ site_base_url }}/apt/{{ item.id }}"
+  }
+}
+</script>{% endblock %}
 
 {% block content %}
 <section class="bay wrap">

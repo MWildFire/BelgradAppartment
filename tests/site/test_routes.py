@@ -724,6 +724,8 @@ def _real_env():
     )
     env.globals["csrf_token"] = "tkn"
     env.globals["site_base_url"] = "https://rent.example.com"
+    env.globals["telegram_url"] = "https://t.me/Darya_kralj"
+    env.globals["asset_v"] = "testver"
     env.filters.setdefault("urlencode", lambda s: str(s))
     return env
 
