@@ -17,6 +17,7 @@ from collections import defaultdict, deque
 
 from fastapi import HTTPException, Request, status
 
+from src.clientip import client_ip
 from src.config import get_settings
 
 
@@ -89,10 +90,14 @@ lead_rate_limiter = _RateLimiter()
 
 
 async def enforce_lead_ratelimit(request: Request) -> None:
-    """Reject (429) a client IP that exceeds SITE_LEAD_RATELIMIT_MAX in the window."""
+    """Reject (429) a client IP that exceeds SITE_LEAD_RATELIMIT_MAX in the window.
+
+    The key is the REAL client IP (src.clientip): behind Caddy/CF, request.client.host is the
+    proxy/edge peer, which would collapse every visitor into one bucket. Covers /lead, /subscribe
+    and /unsubscribe (all reuse this dependency).
+    """
     settings = get_settings()
-    client = request.client
-    key = client.host if client and client.host else "unknown"
+    key = client_ip(request)
     ok = lead_rate_limiter.check(
         key,
         settings.site_lead_ratelimit_max,

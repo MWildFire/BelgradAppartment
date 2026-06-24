@@ -364,3 +364,39 @@ async def test_lead_honeypot_filled_writes_nothing(client):
     after = await _count_leads(client.site_db)  # type: ignore[attr-defined]
     assert after == before
     assert len(client.notifier_spy) == 0  # type: ignore[attr-defined]
+
+
+# ============================================================ S3-3: rate-limit keys on real IP
+
+
+def test_lead_ratelimit_separate_cf_ips_are_separate_buckets(site_db, notifier_spy, monkeypatch):
+    """Behind CF (trust_cloudflare=on), two distinct CF-Connecting-IP values from the SAME proxy
+    peer must NOT share a rate-limit bucket — otherwise every visitor collapses into one CF-edge
+    IP and the per-IP limit stops discriminating (the "схлопываются за CF" risk row)."""
+    from src.config import get_settings
+
+    s = get_settings()
+    monkeypatch.setattr(s, "trust_cloudflare", True)
+    monkeypatch.setattr(s, "site_lead_ratelimit_max", 2)
+    monkeypatch.setattr(s, "site_lead_ratelimit_window", 3600)
+
+    app = create_app()
+    app.dependency_overrides[catalog_db_url] = lambda: site_db
+    # One proxy peer (simulates the CF edge / Caddy) for BOTH visitors — identity is carried
+    # only by CF-Connecting-IP.
+    with TestClient(app, client=("127.0.0.1", 1)) as c:
+        token = SITE_CSRF_TOKEN
+
+        def _post(cf_ip: str):
+            return c.post(
+                "/lead",
+                data={CSRF_FORM_FIELD: token, "name": "X", "contact": "@x", "company": ""},
+                headers={"HX-Request": "true", "CF-Connecting-IP": cf_ip},
+            )
+
+        # Saturate visitor A (limit = 2).
+        assert _post("11.11.11.11").status_code == 200
+        assert _post("11.11.11.11").status_code == 200
+        assert _post("11.11.11.11").status_code == 429
+        # Visitor B is a DIFFERENT bucket — still allowed despite the shared proxy peer.
+        assert _post("22.22.22.22").status_code == 200

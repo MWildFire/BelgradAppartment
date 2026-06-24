@@ -18,6 +18,7 @@ import time
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
+from src.clientip import client_ip
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -103,9 +104,10 @@ _admin_lockout = _AdminLockout()
 
 
 def _client_key(request: Request) -> str:
-    """Client IP for the lockout store — same extraction as lead_rate_limiter (deps.py)."""
-    client = request.client
-    return client.host if client and client.host else "unknown"
+    """Real client IP for the lockout store — shared extraction (src.clientip), same as the
+    site lead rate-limiter. Behind Caddy/CF this must be the visitor, not the proxy/edge peer,
+    or every admin client collapses into one lockout bucket."""
+    return client_ip(request)
 
 
 def require_admin(

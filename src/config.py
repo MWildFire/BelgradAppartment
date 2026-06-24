@@ -185,6 +185,13 @@ class Settings(BaseSettings):
     site_smtp_from: str = "no-reply@rentbelgrad.com"
     site_smtp_starttls: bool = True
 
+    # --- Proxy / Cloudflare (Stage S, S3-3) ---
+    # When True, trust the CF-Connecting-IP header for the real client IP (rate-limit + admin
+    # G2 lockout). DEFAULT False = current behavior (rightmost X-Forwarded-For, else peer).
+    # Only enable once the origin is locked to Cloudflare IPs (S3-2) — otherwise the header is
+    # spoofable and an attacker could forge their way into a fresh rate-limit/lockout bucket.
+    trust_cloudflare: bool = False
+
     # --- Web admin ---
     admin_host: str = "127.0.0.1"
     admin_port: int = 8000
