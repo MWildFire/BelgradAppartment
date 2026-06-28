@@ -49,7 +49,7 @@ class _CachedStaticFiles(StaticFiles):
     busting still relies on the asset-version token appended to css/js URLs in templates.
     """
 
-    async def get_response(self, path: str, scope: Scope):  # type: ignore[override]
+    async def get_response(self, path: str, scope: Scope) -> Response:
         response = await super().get_response(path, scope)
         if response.status_code in (200, 304):
             response.headers.setdefault(
@@ -114,14 +114,18 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await dispose_engines()
 
 
-async def _not_found_handler(request: Request, exc: StarletteHTTPException) -> Response:
+async def _not_found_handler(request: Request, exc: Exception) -> Response:
     """W3-4: custom styled 404 → templates/404.html, status 404.
 
     Renders through routes.templates — the SAME Jinja env that carries the globals
     (telegram_url, district_options, csrf_token, site_base_url) — so 404.html can extend
     base.html and emit the «Написать в Telegram» CTA + the link back to /catalog.
     Non-404 HTTP errors fall through to Starlette's default handling.
+
+    Typed as `exc: Exception` to match Starlette's add_exception_handler signature; we register
+    it for StarletteHTTPException only, so the narrow is always satisfied at runtime.
     """
+    assert isinstance(exc, StarletteHTTPException)
     if exc.status_code != 404:
         return await http_exception_handler(request, exc)
     return templates.TemplateResponse(request, "404.html", {}, status_code=404)

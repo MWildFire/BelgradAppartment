@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#F4EFE6">
+{# The design is light-only; declare it so the UA renders native controls (select, number
+   spinners, scrollbars) in the light scheme instead of dark-ifying them under OS dark mode. #}
+<meta name="color-scheme" content="light">
 {# Inline SVG favicon (the logo mark: oxblood + navy quadrants). Data URI → no extra request,
    no 404. Tokens inlined as literals because data URIs can't read CSS vars. #}
 <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20fill='%23F4EFE6'/%3E%3Crect%20x='4'%20y='4'%20width='11'%20height='11'%20fill='%23A8362A'/%3E%3Crect%20x='17'%20y='17'%20width='11'%20height='11'%20fill='%2315324C'/%3E%3Crect%20x='17'%20y='4'%20width='11'%20height='11'%20fill='none'%20stroke='%231B1A17'/%3E%3Crect%20x='4'%20y='17'%20width='11'%20height='11'%20fill='none'%20stroke='%231B1A17'/%3E%3C/svg%3E">
@@ -37,27 +40,7 @@
 <link rel="preload" href="/static/fonts/unbounded-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/css/tokens.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/site.css?v={{ asset_v }}">
-{# Favorites control + counter live across every page; styled here (site.css is frozen for
-   this wave). Tokens only — no slop. Heart glyph fills when saved; respects reduced-motion. #}
-<style>
-  .fav{display:grid;place-items:center;width:34px;height:34px;padding:0;border:1.5px solid var(--ink);
-       border-radius:var(--r-s);background:var(--card);color:var(--ink);cursor:pointer;
-       transition:transform .12s ease,background .12s ease}
-  .fav:hover{transform:translateY(-1px)}
-  .fav svg{width:16px;height:16px;display:block}
-  .fav svg .fill{fill:none;stroke:currentColor;stroke-width:1.6}
-  .fav.is-fav{background:var(--oxblood);border-color:var(--oxblood);color:var(--paper)}
-  .fav.is-fav svg .fill{fill:currentColor;stroke:currentColor}
-  .card-l{position:relative}
-  .card-l .fav{position:absolute;right:10px;top:10px;z-index:2;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:saturate(1.1)}
-  .fav-count{font-family:var(--mono);font-size:.66rem;min-width:18px;height:18px;padding:0 5px;
-       display:inline-grid;place-items:center;border-radius:999px;background:var(--oxblood);
-       color:var(--paper);margin-left:-8px;transform:translateY(-8px)}
-  .apt-side-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-  .apt-side .fav{width:40px;height:40px}
-  .apt-side .fav svg{width:18px;height:18px}
-  @media(prefers-reduced-motion:reduce){.fav{transition:none}}
-</style>
+{# Favorites control + counter styles now live in site.css (the per-wave freeze is over). #}
 {# Stage S Wave 5 (S5-3): site-wide structured data (Organization + WebSite). Per-page templates
    add more (apt.html adds Apartment+Offer). |tojson keeps it valid JSON + <script>-safe (escapes
    </script>, quotes). No PII. #}
@@ -87,17 +70,20 @@
 {# hx-headers is inherited by every htmx request on the page → CSRF on all hx-post (mirrors
    admin base.html). The lead form's hx-post /lead thus passes require_site_csrf. #}
 <body hx-headers='{"X-CSRF-Token": "{{ csrf_token|default('') }}"}'>
+{# Current path for nav active-state (aria-current). `request` is absent in some render-time
+   tests, so guard it — falls back to '' (no link marked active). #}
+{% set cur_path = (request.url.path if request else '') %}
 <a class="skip-link" href="#main">К содержанию</a>
 
 <header class="nav">
   <div class="wrap nav-in">
     <a class="logo" href="/" aria-label="RentBelgrad — на главную"><span class="mk" aria-hidden="true"><i></i><i></i><i></i><i></i></span>RentBelgrad</a>
     <nav class="nav-links" aria-label="Основная навигация">
-      <a href="/catalog">Каталог</a>
-      <a href="/how">Как работаем</a>
-      <a href="/vnj">ВНЖ и договор</a>
-      <a href="/map">Карта</a>
-      <a href="/calculator">Калькулятор</a>
+      <a href="/catalog"{% if cur_path == '/catalog' %} aria-current="page"{% endif %}>Каталог</a>
+      <a href="/how"{% if cur_path == '/how' %} aria-current="page"{% endif %}>Как работаем</a>
+      <a href="/vnj"{% if cur_path == '/vnj' %} aria-current="page"{% endif %}>ВНЖ и договор</a>
+      <a href="/map"{% if cur_path == '/map' %} aria-current="page"{% endif %}>Карта</a>
+      <a href="/calculator"{% if cur_path == '/calculator' %} aria-current="page"{% endif %}>Калькулятор</a>
     </nav>
     <div class="nav-cta">
       {# favorites counter — reflects localStorage count, updated by favorites.js on toggle.
@@ -153,15 +139,15 @@
    rings inherited; body gets bottom padding at this breakpoint so the fixed bar never covers
    content. aria-label on <nav> + on each link keeps the icon+label pairs accessible. #}
 <nav class="bottom-nav" aria-label="Мобильная навигация">
-  <a href="/catalog" aria-label="Каталог квартир">
+  <a href="/catalog" aria-label="Каталог квартир"{% if cur_path == '/catalog' %} aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3.5" y="3.5" width="7" height="7" rx="1"/><rect x="13.5" y="3.5" width="7" height="7" rx="1"/><rect x="3.5" y="13.5" width="7" height="7" rx="1"/><rect x="13.5" y="13.5" width="7" height="7" rx="1"/></svg>
     <span>Каталог</span>
   </a>
-  <a href="/map" aria-label="Карта квартир">
+  <a href="/map" aria-label="Карта квартир"{% if cur_path == '/map' %} aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
     <span>Карта</span>
   </a>
-  <a href="/calculator" aria-label="Калькулятор аренды">
+  <a href="/calculator" aria-label="Калькулятор аренды"{% if cur_path == '/calculator' %} aria-current="page"{% endif %}>
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4.5" y="2.5" width="15" height="19" rx="2"/><rect x="7.5" y="5.5" width="9" height="3.5"/><path d="M8 13h0M12 13h0M16 13h0M8 17h0M12 17h0M16 17h0"/></svg>
     <span>Калькулятор</span>
   </a>

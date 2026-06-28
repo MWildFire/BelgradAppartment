@@ -217,7 +217,10 @@ async def test_similar_same_district_excluding_self(site_db: str) -> None:
     sims = await rm.similar(base, limit=4, database_url=site_db)
     ids = {v.id for v in sims}
     assert 1 not in ids  # excludes self
-    assert ids == {3}  # only other public Vracar listing
+    # C1: the only other public Vracar listing (id=3) is RENTED, so «похожие» must hide it —
+    # the suggestions block never offers an already-taken apartment (matches catalog default).
+    assert ids == set()
+    assert all(not v.is_rented for v in sims)
 
 
 # --- A4: cross-platform dedup — catalog hides non-primary group members ---

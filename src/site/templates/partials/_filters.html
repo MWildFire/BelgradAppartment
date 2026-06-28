@@ -1,7 +1,8 @@
 {# Filter rail. ВНЖ + белый картон are the PROMINENT top toggles (design §0 / contract §3).
    Context (§2/§3): facets (Facets), applied (AppliedFilters). HTMX → #results. #}
 <form class="filters" method="get" action="/catalog"
-      hx-get="/catalog" hx-target="#results" hx-push-url="true" hx-trigger="change, submit">
+      hx-get="/catalog" hx-target="#results" hx-push-url="true" hx-trigger="change, submit"
+      hx-indicator="#results">
   <h3>Фильтры</h3>
 
   {# — prominent relocant toggles — #}

@@ -15,21 +15,22 @@
   <style>
     .price-pin{display:inline-flex;align-items:center;white-space:nowrap;
       background:var(--ink);color:var(--paper);border:1.5px solid var(--paper);
-      border-radius:999px;padding:3px 9px;font-size:.72rem;line-height:1;
+      border-radius:999px;padding:3px 9px;font-size:.72rem;line-height:1;font-weight:600;
       box-shadow:0 1px 4px rgba(0,0,0,.28);transform:translate(-50%,-50%)}
-    /* Sequential ochre→oxblood price ramp (single warm hue, not a rainbow). White text stays
-       legible on all four — each tint is dark enough. ВНЖ pins keep the sage semantic below. */
-    .price-pin.bucket-1{background:var(--ochre)}     /* < 500 €      */
-    .price-pin.bucket-2{background:#C9743C}          /* 500–799 €    */
-    .price-pin.bucket-3{background:#B85334}          /* 800–1199 €   */
-    .price-pin.bucket-4{background:var(--oxblood)}   /* ≥ 1200 €     */
-    .price-pin.is-vnj{background:var(--sage);border-color:var(--paper)}
+    /* Sequential ochre→oxblood price ramp (single warm hue, not a rainbow). The two LIGHT rungs
+       (ochre/amber) carry DARK ink text — near-white on ochre was ~2:1 and the price (the whole
+       point of the pin) was unreadable; the two dark rungs keep paper text. ВНЖ pins below. */
+    .price-pin.bucket-1{background:var(--ochre);color:var(--ink)}  /* < 500 €   (light → ink) */
+    .price-pin.bucket-2{background:#C9743C;color:var(--ink)}       /* 500–799 € (light → ink) */
+    .price-pin.bucket-3{background:#B85334}                        /* 800–1199 €              */
+    .price-pin.bucket-4{background:var(--oxblood)}                 /* ≥ 1200 €                */
+    .price-pin.is-vnj{background:var(--sage);color:var(--paper);border-color:var(--paper)}
     .map-pop{min-width:150px;font-family:var(--text)}
     .map-pop-price{font-size:var(--step-1);color:var(--ink);font-weight:700}
     .map-pop-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
       margin:4px 0 8px;font-size:var(--step--1);color:var(--ink-2)}
     .map-pop-meta .mp-vnj{font-family:var(--mono);font-size:.62rem;letter-spacing:.06em;
-      background:var(--sage);color:#fff;padding:1px 6px;border-radius:var(--r-s)}
+      background:var(--sage);color:var(--paper);padding:1px 6px;border-radius:var(--r-s)}
     .map-pop-link{color:var(--oxblood);font-weight:600;font-size:var(--step--1)}
     .map-pop-link:hover{text-decoration:underline}
     /* non-blocking overlay shown when the map renders with zero points (empty catalog). */

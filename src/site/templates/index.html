@@ -50,7 +50,7 @@
       {% if week %}
       <a class="hero-photo" href="/apt/{{ week.id }}">
         {% if week.photos %}
-          <img src="{{ week.photos[0] }}" alt="Квартира недели — {{ week.rooms }} в районе {{ week.district }}">
+          <img src="{{ week.photos[0] }}" alt="Квартира недели — {{ week.rooms }} в районе {{ week.district }}" width="640" height="800" loading="lazy">
         {% endif %}
         <span class="ph-note">квартира недели</span>
         <div class="tagline">
@@ -132,7 +132,7 @@
         <div class="c"><span class="num">04</span><span><b>Прозрачные условия</b> — стоимость услуги называем сразу, без скрытых платежей.</span></div>
       </div>
     </div>
-    <div class="photo"><span class="ph-note">фото: подписание договора / агент с клиентом</span></div>
+    <div class="photo" role="img" aria-label="Сопровождение сделки в Белграде"><span class="ph-note">сопровождаем сделку</span></div>
   </div>
 </section>
 

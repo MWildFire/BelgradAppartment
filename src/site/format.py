@@ -9,7 +9,6 @@ that value back to a Cyrillic key. Unmapped raw passes through unchanged.
 from __future__ import annotations
 
 import re
-from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
@@ -32,15 +31,24 @@ def rooms_label(rooms: float | None) -> str:
     return f"{n}+1"
 
 
-@lru_cache(maxsize=1)
+# Process cache for the district map. NOT @lru_cache: a successful (non-empty) load is memoized
+# for the process lifetime, but a FAILED load (districts.yaml missing/empty at first call) is
+# never cached — so if the file lands after the first request the next call re-reads it instead
+# of permanently rendering every район in Latinic (BUG: lru_cache would pin the empty {}).
+_VALUE_TO_CYRILLIC: dict[str, str] | None = None
+
+
 def _value_to_cyrillic() -> dict[str, str]:
     """Latinic district value → first Cyrillic key that maps to it (YAML order).
 
     hashtags caches a *normalised* map; we re-read the raw YAML here to keep the original
     (un-normalised) Cyrillic keys for display.
     """
+    global _VALUE_TO_CYRILLIC
+    if _VALUE_TO_CYRILLIC:
+        return _VALUE_TO_CYRILLIC
     if not DISTRICTS_PATH.exists():
-        return {}
+        return {}  # not cached — retry on the next call once the file exists
     raw = yaml.safe_load(DISTRICTS_PATH.read_text(encoding="utf-8")) or {}
     result: dict[str, str] = {}
     for key, value in raw.items():
@@ -49,6 +57,8 @@ def _value_to_cyrillic() -> dict[str, str]:
             continue
         if _CYRILLIC_RE.search(str(key)):
             result[val] = str(key)
+    if result:
+        _VALUE_TO_CYRILLIC = result
     return result
 
 

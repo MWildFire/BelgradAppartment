@@ -2,7 +2,8 @@
    MUST carry: hidden honeypot input name="company" + the site CSRF token field.
    CSRF mirrors the admin pattern ("как в админке"): field/global name `csrf_token`. #}
 <form class="lead" id="lead" method="post" action="/lead"
-      hx-post="/lead" hx-target="#lead" hx-swap="outerHTML">
+      hx-post="/lead" hx-target="#lead" hx-swap="outerHTML"
+      hx-disabled-elt="find button[type='submit']">
   <p class="kicker">персональный поиск</p>
   <h2>Расскажи, какую квартиру ищешь</h2>
   <p class="lede">Район, бюджет, нужен ли договор под ВНЖ — пара полей, и Дарья соберёт подборку под тебя.</p>
@@ -26,15 +27,15 @@
 
   <div class="lead-grid">
     <div class="field">
-      <label for="lead-name">Как тебя зовут</label>
-      <input type="text" id="lead-name" name="name" maxlength="120" required autocomplete="name"
-             aria-describedby="err-name">
+      <label for="lead-name">Как тебя зовут <span class="req" aria-hidden="true">*</span></label>
+      <input type="text" id="lead-name" name="name" maxlength="120" required aria-required="true"
+             autocomplete="name" aria-describedby="err-name">
       {# inline error (never alert); lead.js writes here, screen readers announce via role=alert #}
       <span class="field-error" id="err-name" data-error-for="name" role="alert"></span>
     </div>
     <div class="field">
-      <label for="lead-contact">Контакт (telegram / телефон / email)</label>
-      <input type="text" id="lead-contact" name="contact" maxlength="200" required
+      <label for="lead-contact">Контакт (telegram / телефон / email) <span class="req" aria-hidden="true">*</span></label>
+      <input type="text" id="lead-contact" name="contact" maxlength="200" required aria-required="true"
              aria-describedby="err-contact">
       <span class="field-error" id="err-contact" data-error-for="contact" role="alert"></span>
     </div>
@@ -65,6 +66,7 @@
   .lead .field-error{font-family:var(--mono);font-size:.66rem;letter-spacing:.04em;color:var(--oxblood);min-height:0}
   .lead .field-error:empty{display:none}
   .lead [aria-invalid="true"]{border-color:var(--oxblood)}
+  .lead .req{color:var(--oxblood);font-weight:700}
 </style>
 {# inline validation + server-400 surfacing; no-JS form still POSTs natively. #}
 <script src="/static/js/lead.js?v={{ asset_v }}" defer></script>

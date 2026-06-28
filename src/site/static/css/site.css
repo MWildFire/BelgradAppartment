@@ -72,7 +72,7 @@
 
 /* ───────── top bar (deliberate backdrop-blur nav — taste reference, kept 1:1) ───────── */
 .nav{position:sticky;top:0;z-index:40;background:color-mix(in srgb,var(--paper) 88%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--hairline)}
-.nav-in{display:flex;align-items:center;gap:var(--gutter);height:68px}
+.nav-in{display:flex;align-items:center;gap:var(--gutter);height:var(--nav-h)}
 .logo{display:flex;align-items:center;gap:10px;font-family:var(--display);font-weight:700;font-size:1.2rem;letter-spacing:-0.03em}
 .logo .mk{width:30px;height:30px;display:grid;grid-template:1fr 1fr/1fr 1fr;border:1.5px solid var(--ink)}
 .logo .mk i{border:.75px solid var(--ink)}
@@ -171,9 +171,9 @@ section.bay{padding-block:var(--bay)}
 .card-l .ph img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .card-l .ph .flag{position:absolute;left:10px;top:10px;display:flex;gap:6px;flex-wrap:wrap;z-index:1}
 .badge{font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;padding:4px 8px;border-radius:var(--r-s);font-weight:500}
-.badge.vnj{background:var(--sage);color:#fff}
-.badge.wc{background:var(--navy);color:#fff}
-.badge.fresh{background:var(--oxblood);color:#fff}
+.badge.vnj{background:var(--sage);color:var(--paper)}
+.badge.wc{background:var(--navy);color:var(--paper)}
+.badge.fresh{background:var(--oxblood);color:var(--paper)}
 .badge.rented{background:var(--ink);color:var(--paper)}
 .card-l .body{padding:16px 16px 18px;display:flex;flex-direction:column;gap:8px;flex:1}
 .card-l .price{font-family:var(--display);font-weight:700;font-size:var(--step-2);letter-spacing:-0.03em}
@@ -228,6 +228,8 @@ section.bay{padding-block:var(--bay)}
 .field{display:flex;flex-direction:column;gap:6px}
 .field.span-2{grid-column:1/-1}
 .field label{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2)}
+/* required-field marker (the visible "*" next to a label); aria-required carries it for AT. */
+.req{color:var(--oxblood);font-weight:700}
 .field input,.field textarea,.field select{font-family:var(--text);font-size:var(--step-0);color:var(--ink);background:var(--paper);border:1.5px solid var(--hairline);border-radius:var(--r-s);padding:11px 13px}
 .field input:focus,.field textarea:focus,.field select:focus{border-color:var(--ink)}
 /* Drop the default outline ONLY for pointer focus; keyboard focus (:focus-visible above) keeps the ring. */
@@ -244,7 +246,7 @@ section.bay{padding-block:var(--bay)}
 /* ───────── catalog (filter rail + results) ───────── */
 .catalog-grid{display:grid;grid-template-columns:280px 1fr;gap:var(--gutter);align-items:start}
 @media(max-width:900px){.catalog-grid{grid-template-columns:1fr}}
-.filters{border:1px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:20px;position:sticky;top:84px}
+.filters{border:1px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:20px;position:sticky;top:calc(var(--nav-h) + 16px)}
 @media(max-width:900px){.filters{position:static}}
 .filters h3{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);font-weight:500;margin:0 0 12px}
 .filters .group{padding:14px 0;border-top:1px solid var(--hairline)}
@@ -253,7 +255,7 @@ section.bay{padding-block:var(--bay)}
 .toggles{display:flex;flex-direction:column;gap:8px}
 .toggle{display:flex;align-items:center;gap:10px;cursor:pointer;border:1.5px solid var(--ink);border-radius:var(--r-s);padding:11px 13px;font-weight:600;font-size:var(--step--1);background:var(--paper)}
 .toggle input{accent-color:var(--sage);width:17px;height:17px}
-.toggle.on{background:var(--sage);color:#fff;border-color:var(--sage)}
+.toggle.on{background:var(--sage);color:var(--paper);border-color:var(--sage)}
 .toggle.wc.on{background:var(--navy);border-color:var(--navy)}
 /* C1: «показать снятые» — neutral ink on-state, matching the «снято» badge (not a feature
    highlight like ВНЖ/картон). Distinct accent so the rented toggle reads as a view switch. */
@@ -338,7 +340,7 @@ section.bay{padding-block:var(--bay)}
 .reloc .item .k{font-family:var(--mono);font-size:.66rem;letter-spacing:.1em;text-transform:uppercase;color:var(--oxblood);white-space:nowrap}
 .reloc .item p{font-size:var(--step--1);color:var(--ink-2)}
 /* sticky CTA side */
-.apt-side{border:1.5px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:22px;position:sticky;top:84px}
+.apt-side{border:1.5px solid var(--ink);border-radius:var(--r-m);background:var(--card);padding:22px;position:sticky;top:calc(var(--nav-h) + 16px)}
 @media(max-width:900px){.apt-side{position:static}}
 .apt-side .price{font-family:var(--display);font-weight:700;font-size:var(--step-3);letter-spacing:-0.03em}
 .apt-side .per{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2);margin:4px 0 16px}
@@ -477,6 +479,44 @@ footer{border-top:1px solid var(--ink);margin-top:var(--bay)}
   /* lift the sticky Telegram FAB above the bottom-nav so they don't overlap. */
   .tg-fab{bottom:calc(56px + 14px + env(safe-area-inset-bottom))}
 }
+
+/* ───────── nav active state (UX: orientation) ─────────
+   The current page's nav link (+ mobile bottom-nav item) carries aria-current="page" from the
+   template; mark it visibly so users know where they are. */
+.nav-links a[aria-current="page"]{color:var(--ink);border-bottom:1.5px solid var(--oxblood);padding-bottom:2px}
+.bottom-nav a[aria-current="page"]{color:var(--ink)}
+.bottom-nav a[aria-current="page"] svg{stroke:var(--oxblood)}
+.bottom-nav a[aria-current="page"][target="_blank"] svg{fill:var(--oxblood);stroke:none}
+
+/* ───────── HTMX in-flight feedback (UX: perceived performance) ─────────
+   .filters / sort / pager carry hx-indicator="#results" → #results gets .htmx-request while a
+   filter/sort/page swap is in flight; dim it so the action reads as "working" on slow links.
+   Submit buttons use hx-disabled-elt (lead/subscribe) → the shared .btn:disabled style shows the
+   busy + prevents double-submit. .htmx-indicator is the generic opt-in hook. */
+.htmx-indicator{opacity:0;transition:opacity .15s ease}
+.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{opacity:1}
+#results.htmx-request{opacity:.5;transition:opacity .15s ease}
+@media(prefers-reduced-motion:reduce){.htmx-indicator,#results.htmx-request{transition:none}}
+
+/* ───────── favorites control + counter (moved from base.html inline <style>) ─────────
+   Lives across every page (header heart + per-card heart + apt aside). Heart glyph fills when
+   saved; respects reduced-motion (the blanket reduced-motion rule above neutralizes .fav too). */
+.fav{display:grid;place-items:center;width:34px;height:34px;padding:0;border:1.5px solid var(--ink);
+     border-radius:var(--r-s);background:var(--card);color:var(--ink);cursor:pointer;
+     transition:transform .12s ease,background .12s ease}
+.fav:hover{transform:translateY(-1px)}
+.fav svg{width:16px;height:16px;display:block}
+.fav svg .fill{fill:none;stroke:currentColor;stroke-width:1.6}
+.fav.is-fav{background:var(--oxblood);border-color:var(--oxblood);color:var(--paper)}
+.fav.is-fav svg .fill{fill:currentColor;stroke:currentColor}
+.card-l{position:relative}
+.card-l .fav{position:absolute;right:10px;top:10px;z-index:2;background:color-mix(in srgb,var(--card) 88%,transparent);backdrop-filter:saturate(1.1)}
+.fav-count{font-family:var(--mono);font-size:.66rem;min-width:18px;height:18px;padding:0 5px;
+     display:inline-grid;place-items:center;border-radius:999px;background:var(--oxblood);
+     color:var(--paper);margin-left:-8px;transform:translateY(-8px)}
+.apt-side-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.apt-side .fav{width:40px;height:40px}
+.apt-side .fav svg{width:18px;height:18px}
 
 /* offline.html shell — centered branded «Нет соединения» card (precached by the SW). */
 .offline-shell{min-height:60vh;display:grid;place-items:center;padding-block:var(--bay)}

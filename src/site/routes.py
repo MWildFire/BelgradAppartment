@@ -13,8 +13,10 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlencode
 
+import anyio
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -56,6 +58,10 @@ FEATURED_N = 6
 # can control the whole origin.
 _SW_SOURCE_PATH = Path(__file__).parent / "static" / "js" / "sw.js"
 _SW_CACHE_TOKEN = "__CACHE_VERSION__"
+# Rendered SW body memoized per asset-version: the substitution result is fixed for a given
+# version, so we read+rewrite the file once instead of on every navigation's SW update check
+# (browsers re-fetch /sw.js on each navigation). Keyed by version so a deploy still busts it.
+_SW_RENDERED: dict[str, str] = {}
 
 
 # --------------------------------------------------------------------------- helpers
@@ -163,7 +169,7 @@ async def _cached_catalog(
     key = _catalog_key(request)
     cached = cache.catalog_cache.get(key)
     if cached is not cache.MISS:
-        return cached
+        return cast("tuple[list[readmodel.SiteListingView], int]", cached)
     filters, sort, page = _parse_filters(request)
     result = await readmodel.list_public(filters, sort=sort, page=page, database_url=db_url)
     cache.catalog_cache.set(key, result)
@@ -174,7 +180,7 @@ async def _cached_facets(db_url: str) -> readmodel.Facets:
     key = ("facets",)
     cached = cache.facets_cache.get(key)
     if cached is not cache.MISS:
-        return cached
+        return cast("readmodel.Facets", cached)
     result = await readmodel.facets(database_url=db_url)
     cache.facets_cache.set(key, result)
     return result
@@ -184,7 +190,7 @@ async def _cached_map(db_url: str) -> list[dict[str, object]]:
     key = ("map",)
     cached = cache.map_cache.get(key)
     if cached is not cache.MISS:
-        return cached
+        return cast("list[dict[str, object]]", cached)
     result = await readmodel.map_points(database_url=db_url)
     cache.map_cache.set(key, result)
     return result
@@ -261,7 +267,10 @@ async def service_worker() -> Response:
     worker (browsers also byte-compare it on update; no-cache keeps that check honest).
     """
     version = str(templates.env.globals.get("asset_v", "0"))
-    source = _SW_SOURCE_PATH.read_text(encoding="utf-8").replace(_SW_CACHE_TOKEN, version)
+    source = _SW_RENDERED.get(version)
+    if source is None:
+        source = _SW_SOURCE_PATH.read_text(encoding="utf-8").replace(_SW_CACHE_TOKEN, version)
+        _SW_RENDERED[version] = source
     return Response(
         content=source,
         media_type="application/javascript",
@@ -308,7 +317,7 @@ async def catalog(request: Request, db_url: str = Depends(catalog_db_url)) -> HT
         "facets": facets,
         "applied": applied,
         "total": total,
-        "pager": _pager(request, total, applied["page"]),
+        "pager": _pager(request, total, cast("int", applied["page"])),
     }
     # HTMX swaps only the results grid + pagination; full-page request gets the shell.
     template = "partials/_results.html" if "hx-request" in request.headers else "catalog.html"
@@ -370,7 +379,10 @@ async def apt_og_image(
             headers={"ETag": etag, "Cache-Control": cache_control},
         )
 
-    png = og_image.render_og_png(item)
+    # PERF: the Pillow decode/resize/scrim/encode is CPU-bound and was blocking the single
+    # uvicorn event loop per cache-miss (Telegram/WhatsApp crawlers hit these in bursts). Offload
+    # to a worker thread so concurrent share-preview fetches don't stall every other request.
+    png = await anyio.to_thread.run_sync(og_image.render_og_png, item)
     return Response(
         content=png,
         media_type="image/png",
@@ -404,16 +416,15 @@ _SITEMAP_STATIC = ("/", "/catalog", "/map", "/calculator", "/vnj", "/how")
 async def sitemap(db_url: str = Depends(catalog_db_url)) -> Response:
     """sitemaps.org urlset — static pages + every is_public /apt/{id}, all <loc> ABSOLUTE.
 
-    Public ids are enumerated via list_public with a large page_size (the public set is small,
-    a single page covers it). Private listings never surface — list_public is scoped to
-    is_public. No remote/площадка urls: every <loc> is site_public_base_url + a site path.
+    Public ids come from readmodel.public_ids() — an id-only query (no view hydration: no photo
+    URLs / район normalization / rented checks), since the sitemap only needs the ids. Private
+    listings never surface (scoped to is_public). No remote/площадка urls: every <loc> is
+    site_public_base_url + a site path.
     """
     base = get_settings().site_public_base_url.rstrip("/")
-    items, _total = await readmodel.list_public(
-        Filters(show_rented=True), sort="new", page=1, page_size=10000, database_url=db_url
-    )
+    ids = await readmodel.public_ids(database_url=db_url)
     locs = [f"{base}{path}" for path in _SITEMAP_STATIC]
-    locs.extend(f"{base}/apt/{item.id}" for item in items)
+    locs.extend(f"{base}/apt/{apt_id}" for apt_id in sorted(ids))
     body = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'

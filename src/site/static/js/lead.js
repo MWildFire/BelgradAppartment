@@ -79,11 +79,29 @@
       if (!validate(form)) e.preventDefault();
     });
 
-    // server-side validation error → keep the form, surface a form-level message inline.
+    // server-side error → keep the form, surface a form-level message inline AND move focus to
+    // it (the slot is role=alert, so it's also announced). The message differs by status so an
+    // expired session / rate-limit isn't mistaken for a field-validation problem.
     form.addEventListener("htmx:responseError", function (e) {
       var status = e.detail && e.detail.xhr ? e.detail.xhr.status : 0;
+      var msg = "";
       if (status === 400) {
-        showError(form, "_form", "Проверь поля и попробуй ещё раз.");
+        msg = "Проверь поля и попробуй ещё раз.";
+      } else if (status === 403) {
+        // CSRF token expired (e.g. the page sat open across a deploy/restart).
+        msg = "Сессия устарела — обнови страницу и отправь заявку ещё раз.";
+      } else if (status === 429) {
+        msg = "Слишком много заявок подряд — попробуй ещё раз через несколько минут.";
+      } else if (status) {
+        msg = "Что-то пошло не так. Попробуй ещё раз или напиши нам в Telegram.";
+      }
+      if (!msg) return;
+      showError(form, "_form", msg);
+      var slot = errorSlot(form, "_form");
+      if (slot) {
+        slot.setAttribute("tabindex", "-1");
+        slot.focus();
+        if (slot.scrollIntoView) slot.scrollIntoView({ block: "center" });
       }
     });
 

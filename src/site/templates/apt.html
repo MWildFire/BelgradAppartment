@@ -66,7 +66,7 @@
             <div class="g{% if loop.first %} main{% endif %}{% if loop.last and item.photos|length > 5 %} more{% endif %}">
               {# C1 photo fallback: a 404'ing gallery photo swaps to the placeholder; onerror
                  clears itself first so a missing placeholder can't loop. #}
-              <img src="{{ photo }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" loading="{{ 'eager' if loop.first else 'lazy' }}" onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
+              <img src="{{ photo }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" width="800" height="600" loading="{{ 'eager' if loop.first else 'lazy' }}"{% if loop.first %} fetchpriority="high"{% endif %} onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
               {% if loop.last and item.photos|length > 5 %}<span class="mono">+{{ item.photos|length - 5 }} фото</span>{% endif %}
             </div>
           {% endfor %}
@@ -88,6 +88,15 @@
         {% if item.for_white_card %}<span class="badge wc">белый картон</span>{% endif %}
         {% if item.is_rented %}<span class="badge rented">снято</span>{% endif %}
       </div>
+
+      {# C1: a rented listing stays visible (social proof) but we tell the visitor it's taken and
+         steer them to similar / a fresh search instead of letting them quietly send a dead lead. #}
+      {% if item.is_rented %}
+        <div class="rented-banner" role="status">
+          <b>Эта квартира уже снята.</b>
+          {% if similar %}Посмотрите <a href="#similar">похожие в районе {{ item.district }}</a> или {% else %}{% endif %}<a href="#lead">оставьте заявку</a> — подберём актуальный вариант под вас.
+        </div>
+      {% endif %}
 
       {% if item.note %}
         <p class="apt-note">{{ item.note }}</p>
@@ -148,7 +157,7 @@
       <a class="btn ox" href="#lead" data-lead-cta data-site-listing-id="{{ item.id }}">Оставить заявку на эту квартиру</a>
       {# link to the channel post (a channel URL, never a площадка). Telegram is the only
          messaging CTA — WhatsApp/Viber were dropped by request. #}
-      <a class="btn ghost" href="{{ item.channel_url }}" rel="noopener">Открыть в Telegram</a>
+      <a class="btn ghost" href="{{ item.channel_url }}" target="_blank" rel="noopener">Открыть в Telegram</a>
       {# C4: share button — Web Share API where available, copy-link fallback otherwise (wired
          by share.js). Always renders: it shares THIS page's URL, no operator number needed.
          data-share-url is the canonical absolute /apt/{id} so a copied link is shareable. #}
@@ -163,7 +172,7 @@
 
   {# similar (same district) #}
   {% if similar %}
-    <div class="sec-head" style="margin-top:var(--bay)">
+    <div id="similar" class="sec-head" style="margin-top:var(--bay)">
       <div><div class="idx">похожие</div><h2>Ещё в районе {{ item.district }}</h2></div>
       <a class="more" href="/catalog?district={{ item.district|urlencode }}">Все в районе →</a>
     </div>

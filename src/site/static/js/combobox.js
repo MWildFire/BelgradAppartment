@@ -308,6 +308,12 @@
       if (open && !box.contains(e.target)) closePanel();
     });
 
+    // Focus leaving the combobox closes the panel too (e.g. screen-reader virtual cursor or a
+    // programmatic focus shift that never fires Tab/mousedown — otherwise the listbox lingers).
+    box.addEventListener("focusout", function (e) {
+      if (open && !box.contains(e.relatedTarget)) closePanel();
+    });
+
     if (REDUCE) box.classList.add("reduce-motion");
 
     renderChips();

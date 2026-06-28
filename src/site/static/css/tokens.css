@@ -45,6 +45,7 @@
   --r-s: 3px;
   --r-m: 6px;
   --maxw: 1340px;
+  --nav-h: 68px;          /* sticky top-bar height; sticky rails offset from it */
 }
 
 *,*::before,*::after{box-sizing:border-box}

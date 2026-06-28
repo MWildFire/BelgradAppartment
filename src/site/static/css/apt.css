@@ -5,6 +5,24 @@
    site.css (apt-grid/apt-side/reloc) is owned elsewhere — not touched here.
    ============================================================ */
 
+/* Rented notice (C1): a taken listing stays visible but is clearly flagged, steering the visitor
+   to similar / a fresh lead instead of a dead enquiry. Oxblood-tinted, never alarming. */
+.rented-banner {
+  border: 1.5px solid var(--oxblood);
+  border-radius: var(--r-m);
+  background: color-mix(in srgb, var(--oxblood) 8%, var(--card));
+  padding: 12px 16px;
+  margin-bottom: 1.6rem;
+  font-size: var(--step--1);
+  color: var(--ink);
+  line-height: 1.5;
+}
+.rented-banner a {
+  color: var(--oxblood);
+  font-weight: 600;
+  border-bottom: 1.5px solid var(--oxblood);
+}
+
 /* The map section sits in the left column, below «что важно для релокантов». */
 .apt-loc {
   margin-top: 2rem;

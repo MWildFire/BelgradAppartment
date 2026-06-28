@@ -3,7 +3,8 @@
    channel (e-mail or Telegram). Telegram option only renders when a bot username is configured.
    Криптерии mirror the catalog filter fields so the matcher reuses ONE predicate. #}
 <form class="subscribe" id="subscribe" method="post" action="/subscribe"
-      hx-post="/subscribe" hx-target="#subscribe" hx-swap="outerHTML">
+      hx-post="/subscribe" hx-target="#subscribe" hx-swap="outerHTML"
+      hx-disabled-elt="find button[type='submit']">
   <p class="kicker">подписка на поиск</p>
   <h2>Сохрани поиск — пришлём новые квартиры</h2>
   <p class="lede">Укажи критерии, и мы уведомим тебя, как только появится новая подходящая квартира. Дайджест приходит раз в сутки — без спама.</p>
@@ -65,22 +66,26 @@
   {# — канал: e-mail или Telegram — #}
   <fieldset class="subscribe-channel">
     <legend>Куда присылать</legend>
+    {# onchange (not onclick): keyboard users switching radios with arrow keys fire `change`, not
+       `click`, so the email field's show/hide + required toggle stays in sync for them too. #}
     <label class="channel-opt">
       <input type="radio" name="channel" value="email" checked
-             onclick="document.getElementById('sub-email-field').hidden=false">
+             onchange="var f=document.getElementById('sub-email-field'),e=document.getElementById('sub-email');f.hidden=false;e.required=true">
       E-mail
     </label>
     {% if site_telegram_bot_username %}
       <label class="channel-opt">
         <input type="radio" name="channel" value="telegram"
-               onclick="document.getElementById('sub-email-field').hidden=true">
+               onchange="var f=document.getElementById('sub-email-field'),e=document.getElementById('sub-email');f.hidden=true;e.required=false">
         Telegram
       </label>
     {% endif %}
     <div class="field" id="sub-email-field">
-      <label for="sub-email">Ваш e-mail</label>
+      <label for="sub-email">Ваш e-mail <span class="req" aria-hidden="true">*</span></label>
+      {# required by default: e-mail is the default (checked) channel; the telegram radio clears
+         it. Server validates regardless, so the no-JS path is still safe. #}
       <input type="email" id="sub-email" name="email" maxlength="254" autocomplete="email"
-             placeholder="you@example.com">
+             required aria-required="true" placeholder="you@example.com">
     </div>
     {% if site_telegram_bot_username %}
       <p class="hint" style="color:var(--ink-2);font-size:var(--step--1)">

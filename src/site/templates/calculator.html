@@ -10,13 +10,15 @@
 
   {# Static shell — live recompute wired in Wave 4 (data-calc hooks below). #}
   <div class="calc" data-calc>
-    <div class="calc-row"><span class="lbl">Аренда, €/мес</span><input type="number" inputmode="numeric" min="0" value="650" data-calc-field="rent" aria-label="Аренда в евро"></div>
-    <div class="calc-row"><span class="lbl">Режие (отопление, вода, эл-во)</span><input type="number" inputmode="numeric" min="0" value="80" data-calc-field="rezije" aria-label="Режие в евро"></div>
-    <div class="calc-row"><span class="lbl">Инфостан (ЖКХ)</span><input type="number" inputmode="numeric" min="0" value="25" data-calc-field="infostan" aria-label="Инфостан в евро"></div>
-    <div class="calc-row"><span class="lbl">Интернет</span><input type="number" inputmode="numeric" min="0" value="15" data-calc-field="internet" aria-label="Интернет в евро"></div>
+    <div class="calc-row"><label class="lbl" for="calc-rent">Аренда, €/мес</label><input id="calc-rent" type="number" inputmode="numeric" min="0" value="650" data-calc-field="rent"></div>
+    <div class="calc-row"><label class="lbl" for="calc-rezije">Режие (отопление, вода, эл-во)</label><input id="calc-rezije" type="number" inputmode="numeric" min="0" value="80" data-calc-field="rezije"></div>
+    <div class="calc-row"><label class="lbl" for="calc-infostan">Инфостан (ЖКХ)</label><input id="calc-infostan" type="number" inputmode="numeric" min="0" value="25" data-calc-field="infostan"></div>
+    <div class="calc-row"><label class="lbl" for="calc-internet">Интернет</label><input id="calc-internet" type="number" inputmode="numeric" min="0" value="15" data-calc-field="internet"></div>
 
     <div class="calc-total">
-      <span class="big mono" data-calc-total>€770 / мес</span>
+      {# aria-live: the total is the page's whole output — announce it when inputs change so a
+         screen-reader user editing «Аренда» hears the new «всё включено» sum. #}
+      <span class="big mono" data-calc-total role="status" aria-live="polite">€770 / мес</span>
       <small>всё включено, в месяц</small>
     </div>
 

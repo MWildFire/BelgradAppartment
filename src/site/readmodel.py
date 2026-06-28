@@ -342,11 +342,40 @@ async def map_points(*, database_url: str | None = None) -> list[dict[str, objec
     return points
 
 
+async def public_ids(*, database_url: str | None = None) -> list[int]:
+    """Ids of every public, primary listing — for the sitemap (no view hydration).
+
+    The sitemap only needs ids, so this skips the full _load_rows join+hydration (price/photos/
+    район normalization) that list_public(page_size=10000) used to do per request. Same is_public
+    + is_primary scoping as the catalog, so private listings never surface.
+    """
+    stmt = (
+        select(SiteListing.id)
+        .join(Match, Match.id == SiteListing.match_id)
+        .join(Listing, Listing.id == Match.listing_id)
+        .where(SiteListing.is_public.is_(True))
+        .where(Listing.is_primary.is_(True))
+    )
+    async with sitedb.read_session(database_url=database_url) as s:
+        return [row_id for (row_id,) in (await s.execute(stmt)).all()]
+
+
 async def similar(
     view: SiteListingView, limit: int = 4, *, database_url: str | None = None
 ) -> list[SiteListingView]:
+    """Up to `limit` other listings in the same район, newest first.
+
+    C1 invariant (rented hidden by default): unlike _load_rows, this drops rented listings so the
+    «похожие» block never suggests an apartment that's already taken — matching every other public
+    surface. Ordered by recency (newest posted first) instead of arbitrary DB row order.
+    """
     rows = await _load_rows(database_url)
-    out = [
-        r.view for r in rows if r.view.district == view.district and r.view.id != view.id
+    candidates = [
+        r
+        for r in rows
+        if r.view.district == view.district
+        and r.view.id != view.id
+        and not r.view.is_rented
     ]
-    return out[:limit]
+    candidates.sort(key=lambda r: r.posted_dt, reverse=True)
+    return [r.view for r in candidates[:limit]]
