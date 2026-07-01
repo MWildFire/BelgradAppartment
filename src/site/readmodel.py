@@ -20,6 +20,7 @@ from src.config import get_settings
 from src.db.models import InboundPost, Listing, Match, PublishedPost, SiteListing
 from src.site import db as sitedb
 from src.site.format import human_district, is_rented, public_photo_url, rooms_label
+from src.site.maps import fuzz_coords
 
 
 @dataclass(frozen=True)
@@ -327,11 +328,16 @@ async def map_points(*, database_url: str | None = None) -> list[dict[str, objec
         v = r.view
         if v.lat is None or v.lon is None:
             continue
+        # ФУЗЗИ/D1 (T1-1, §M2): snap to the ~100m grid BEFORE serialization — exact building
+        # coords must never leave the DB through /api/map.json (Wave-0 диагностика caught them
+        # bit-for-bit in prod). Client-side clustering groups the already-snapped points, so
+        # this one seam covers pins, clusters and popups alike.
+        flat, flon = fuzz_coords(v.lat, v.lon)
         points.append(
             {
                 "id": v.id,
-                "lat": v.lat,
-                "lon": v.lon,
+                "lat": flat,
+                "lon": flon,
                 "price_eur": v.price_eur,
                 "rooms": v.rooms,
                 "district": v.district,
