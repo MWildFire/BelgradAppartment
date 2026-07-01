@@ -10,11 +10,35 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.-5 Stage S «Showcase & Shield» (24.06.2026) — 🚀 КОД В ПРОДЕ · ⏳ CF-выкатка ждёт
+
+> **⭐ САМЫЙ СВЕЖИЙ handoff — начни отсюда.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-24.md`](docs/web/SESSION_HANDOFF_2026-06-24.md).
+> `main` @ **`8626e1a`** (Stage R + Stage S смёржены, ff), в синхроне с `origin`. Прод @ alembic **`0009`**.
+> **Проверено вживую 2026-07-01** (стабильно ~неделю): `otz-monitor NRestarts=0`, ночной прогон чистый,
+> **cityexpert live — 1231 активных**, site 58 публичных (X1 автопубликует), listings 43k→49.5k.
+
+Stage S = UX/имидж-полировка витрины (Дмитриевские запросы) поверх Stage R: стилизованная CTA + равные
+карточки, фуззи-карта на `/apt` + Yandex/Google deep-links, **PWA+offline+bottom-nav**, динамический
+**OG-image** `/apt/{id}/og.png`, **JSON-LD** (Organization/Apartment/Offer), полировка `/map`,
+приватность координат (`fuzz_coords` ~100м), 10-линзовое ревью → ship. **Ноль миграций** (head 0009).
+
+**⚠️ Что ещё НЕ сделано (для новой сессии):**
+- **Cloudflare Wave 3b (live-switch) — НЕ выполнено.** Repo подготовлен (`deploy/cloudflare/RUNBOOK.md`,
+  `scripts/cf_ufw_allowlist.sh`), но на проде `TRUST_CLOUDFLARE` НЕ включён (origin ещё открыт). Совместная выкатка по раннбуку.
+- **`data/districts.yaml`** — ✅ на проде (mtime 24.06 01:54; `deploy_sync.sh` его явно `--include`'ит, не надо scp вручную).
+  Сырой `listings.district` остаётся латиницей (21395 строк) — это норма; витрина нормализует через `human_district()`.
+- **A4 дедуп не гоняли** — `dup_group_id` у 0 строк (в nightly не подключён; `dupes-report --write` вручную не запускали).
+- **heal-urls guard + ~8442 до-Next.js трупов** (R §5 / S §4) — `_heal_urls` без `is_active`/canonical-resolves guard; строки `is_active=0`, только засоряют `total`.
+- **Telegram-демон подписок** выключен (нужен `SITE_TELEGRAM_BOT_USERNAME`); подписок пока 0. EN-локаль (D5) отложена. CSP `unsafe-inline` (S §4).
+- ⚠️ **scrape-smoke падал 1 раз** (Jun 25, OnFailure-алерт), с тех пор `success` — вероятно транзиент (halooglasi/Playwright); если повторится — глянуть `journalctl -u otz-scrape-smoke`.
+
+---
+
 ### 0.-4 Stage R «Resilience & Reach» (23.06.2026) — 🚀 ЗАДЕПЛОЕНО НА ПРОД (24.06)
 
-> **Самый свежий handoff.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-23.md`](docs/web/SESSION_HANDOFF_2026-06-23.md).
-> `main` @ `20bd9a8`, запушено в `origin` (20 коммитов `c55a787..20bd9a8`, 741 тест зелёный).
-> **Прод @ alembic `0009`**, все сервисы active, бэкап `otz-pre-stageR-20260624-021356.db` снят.
+> Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-23.md`](docs/web/SESSION_HANDOFF_2026-06-23.md).
+> Stage R = tip `20bd9a8` (20 коммитов `c55a787..20bd9a8`, 741 тест). Смёржен в `main`; поверх него лёг Stage S (§0.-5).
+> **Прод @ alembic `0009`**, бэкап `otz-pre-stageR-20260624-021356.db` снят.
 
 20 фич за этап (надёжность скрейпинга + авто-синхронизация витрины сайта + продукт/охват), 2 круга
 состязательного ревью. **Хайлайты:** A1 фикс nekretnine-404 + самолечение URL · A2 live-smoke +

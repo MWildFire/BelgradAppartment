@@ -1,9 +1,13 @@
 # Session handoff — Stage S «Showcase & Shield» (2026-06-24)
 
+> **🔄 ОБНОВЛЕНО 2026-07-01:** Stage S **смёржен в `main`** (@ `8626e1a`) и **КОД ЗАДЕПЛОЕН НА ПРОД**
+> (~24.06, подтверждено: `maps.py`/`sw.js`/OG-роут/`cloudflare`-конфиг на сервере; стабильно ~неделю,
+> `otz-monitor NRestarts=0`, cityexpert 1231 активных). **Остался только 1 гейт: Cloudflare Wave 3b**
+> (`TRUST_CLOUDFLARE` на проде НЕ включён, origin открыт) + досинк `data/districts.yaml` (см. §3). Мерж (§5) — сделан.
+>
 > Ветка **`feature/showcase-and-shield`** (worktree branch `worktree-feature+showcase-and-shield`),
 > от `main` @ **`7ee452f`**. **15 коммитов**, **52 файла, +3611 / −58**. Полный gate зелёный:
-> **832 unit + 32 e2e**, alembic head = **0009** (ноль миграций). **НЕ задеплоено** — ждёт твоих рук
-> на двух воротах (прод-выкатка + live-Cloudflare). План: `docs/superpowers/plans/2026-06-24-showcase-and-shield.md`.
+> **832 unit + 32 e2e**, alembic head = **0009** (ноль миграций). План: `docs/superpowers/plans/2026-06-24-showcase-and-shield.md`.
 > Предыдущий: [`SESSION_HANDOFF_2026-06-23.md`](SESSION_HANDOFF_2026-06-23.md) (Stage R).
 
 ---
@@ -35,7 +39,12 @@
 - **Pillow** — уже прямая зависимость (`Pillow>=10.4`), доустановки не требует.
 - **Ноль миграций** (head = 0009).
 
-## 3. Деплой на прод — ⛔ НЕ СДЕЛАНО (нужны твои руки + `go`)
+## 3. Деплой на прод — ✅ КОД ВЫКАЧЕН (~24.06) · ⏳ ОСТАЛСЯ ТОЛЬКО CF (шаг 5)
+> Шаги 1–4 и 6 выполнены (код на проде, сервисы рестартнуты, стабильно ~неделю). **НЕ сделано: шаг 5
+> (Cloudflare live-switch)** — `TRUST_CLOUDFLARE` на проде НЕ включён, origin открыт; выкатка по RUNBOOK.
+> ✅ `data/districts.yaml` на проде (mtime 24.06; ниже §3 предупреждение неверно — `deploy_sync.sh`
+> его `--include`'ит явно, ручной scp не нужен).
+
 Порядок (как в Stage R/W, каждый ssh-шаг подтверждается):
 1. **Локально зелено** ✓ (832 unit + 32 e2e).
 2. **Бэкап БД** на VPS: `sqlite3 .backup` → `data/backups/otz-pre-stageS-$(date +%F-%H%M).db`, `integrity_check=ok`, записать дорелизные счётчики.
