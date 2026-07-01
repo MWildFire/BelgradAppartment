@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
 import click
+import httpx
 from sqlalchemy import select
 
 from src.config import get_settings
@@ -2689,14 +2690,22 @@ def check_links(platform: str | None, limit: int | None) -> None:
               help="Platform whose stored URLs to canonicalise.")
 @click.option("--dry-run/--no-dry-run", default=True, show_default=True,
               help="Dry-run prints the diff without writing. --no-dry-run applies the rewrite.")
-def heal_urls(platform: str, dry_run: bool) -> None:
+@click.option("--include-inactive", is_flag=True, default=False,
+              help="Escape hatch: old unguarded sweep — heal inactive rows too and skip the "
+                   "canonical resolve check.")
+def heal_urls(platform: str, dry_run: bool, include_inactive: bool) -> None:
     """Rewrite stored nekretnine slug-URLs to the canonical numeric /oglasi/<id>/ form.
 
     The platform periodically rewrites a listing's slug while the listing stays live, so a
     stored slug-URL 404s. The numeric form is slug-independent. One-off prod heal; the nightly
     walk also self-heals on re-seen rows.
+
+    T1-2 guard: by default only ACTIVE rows are swept, and the canonical URL must resolve
+    (HEAD < 400) before the rewrite is written — a dead canonical is skipped with a warning.
     """
-    healed = asyncio.run(_heal_urls(platform=platform, dry_run=dry_run))
+    healed = asyncio.run(
+        _heal_urls(platform=platform, dry_run=dry_run, include_inactive=include_inactive)
+    )
     verb = "would heal" if dry_run else "healed"
     click.echo(f"=== {verb} {healed} {platform} URL(s) ===")
 
@@ -2710,10 +2719,24 @@ def _canonical_url(platform: Platform, external_id: str) -> str | None:
     return None
 
 
-async def _heal_urls(*, platform: str, dry_run: bool) -> int:
+async def _heal_urls(
+    *,
+    platform: str,
+    dry_run: bool,
+    include_inactive: bool = False,
+    client: httpx.AsyncClient | None = None,
+) -> int:
     """Rewrite non-canonical stored URLs for `platform`; return the number of rows healed.
 
-    In dry-run nothing is written (only the diff is printed). Returns the count either way.
+    T1-2 guard: by default only is_active rows are swept, and before an actual write the
+    canonical URL must resolve (HEAD, status < 400, redirects followed) — a dead canonical is
+    skipped with a warning, so a heal never repoints a row at a removed page («не хуже, чем
+    было»). `include_inactive=True` is the escape hatch restoring the old unguarded sweep:
+    all rows, no resolve check.
+
+    In dry-run nothing is written and no network check runs (only the diff is printed), so the
+    count is the upper bound of what --no-dry-run would heal. `client` is injectable for tests
+    (MockTransport); in production it defaults to a fresh client with the scraper User-Agent.
     """
     from sqlalchemy import update
 
@@ -2721,26 +2744,61 @@ async def _heal_urls(*, platform: str, dry_run: bool) -> int:
 
     plat = PLATFORM_NAMES[platform.lower()]
 
+    stmt = select(Listing.id, Listing.external_id, Listing.url).where(Listing.platform == plat)
+    if not include_inactive:
+        # Inactive rows are corpses awaiting purge — healing them is wasted writes plus
+        # pointless HEADs at pages that are known-dead (инактивные лечить некому и незачем).
+        stmt = stmt.where(Listing.is_active.is_(True))
     async with get_session() as s:
-        rows = (
-            await s.execute(
-                select(Listing.id, Listing.external_id, Listing.url).where(
-                    Listing.platform == plat
-                )
-            )
-        ).all()
+        rows = (await s.execute(stmt)).all()
 
-    healed = 0
+    todo: list[tuple[int, str, str]] = []
     for lid, external_id, url in rows:
         canonical = _canonical_url(plat, external_id)
         if canonical is None or url == canonical:
             continue
-        healed += 1
-        if dry_run:
+        todo.append((lid, url, canonical))
+
+    if dry_run:
+        for _, url, canonical in todo:
             click.echo(f"  {url}  →  {canonical}")
-            continue
-        async with get_session() as s:
-            await s.execute(update(Listing).where(Listing.id == lid).values(url=canonical))
+        return len(todo)
+
+    log = logging.getLogger(__name__)
+    owns_client = False
+    if not include_inactive and todo and client is None:
+        from src.scrapers.base import DEFAULT_USER_AGENT
+
+        ua = get_settings().scraper_user_agent or DEFAULT_USER_AGENT
+        client = httpx.AsyncClient(
+            follow_redirects=True, timeout=10.0, headers={"User-Agent": ua}
+        )
+        owns_client = True
+
+    healed = 0
+    try:
+        for lid, _url, canonical in todo:
+            if not include_inactive:
+                # Write-guard: only a confirmed-live canonical gets written. Anything else —
+                # 404/410, anti-bot 4xx, 5xx or a network error — is «не резолвится» → skip,
+                # because overwriting a stored URL with a dead one is worse than leaving it.
+                try:
+                    resp = await client.head(canonical, timeout=10.0)
+                    reason = None if resp.status_code < 400 else f"HTTP {resp.status_code}"
+                except Exception as e:
+                    reason = f"{type(e).__name__}: {e}"
+                if reason is not None:
+                    log.warning(
+                        "[heal-urls] #%s canonical %s does not resolve (%s) — skipped",
+                        lid, canonical, reason,
+                    )
+                    continue
+            healed += 1
+            async with get_session() as s:
+                await s.execute(update(Listing).where(Listing.id == lid).values(url=canonical))
+    finally:
+        if owns_client:
+            await client.aclose()
 
     return healed
 
