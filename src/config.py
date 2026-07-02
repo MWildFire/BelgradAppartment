@@ -192,6 +192,15 @@ class Settings(BaseSettings):
     # spoofable and an attacker could forge their way into a fresh rate-limit/lockout bucket.
     trust_cloudflare: bool = False
 
+    # --- Server-side analytics (Stage T «Insight & Integrity», §A) ---
+    # Kill-switch: false → все хуки записи site_events становятся no-op (откат без деплоя).
+    site_analytics_enabled: bool = True
+    # Секрет суточной соли visitor-хэша (sha256(salt‖YYYY-MM-DD)); генерируется на сервере
+    # (openssl rand -hex 32), живёт ТОЛЬКО в серверном .env — не в коде/логах/гите (repr=False).
+    site_analytics_salt: str = Field(default="", repr=False)
+    # Сырые события старше N дней nightly-retention удаляет; агрегаты site_stats_daily — вечны.
+    site_analytics_raw_retention_days: int = 90
+
     # --- Web admin ---
     admin_host: str = "127.0.0.1"
     admin_port: int = 8000

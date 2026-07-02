@@ -17,12 +17,20 @@ from typing import cast
 from urllib.parse import urlencode
 
 import anyio
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    Form,
+    HTTPException,
+    Request,
+    status,
+)
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from src.config import get_settings
-from src.site import cache, og_image, readmodel
+from src.site import analytics, cache, og_image, readmodel
 from src.site.deps import (
     SITE_CSRF_TOKEN,
     catalog_db_url,
@@ -289,7 +297,11 @@ async def offline(request: Request) -> HTMLResponse:
 
 
 @router.get("/", response_class=HTMLResponse)
-async def index(request: Request, db_url: str = Depends(catalog_db_url)) -> HTMLResponse:
+async def index(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db_url: str = Depends(catalog_db_url),
+) -> HTMLResponse:
     items, _total = await readmodel.list_public(
         Filters(), sort="new", page=1, page_size=FEATURED_N, database_url=db_url
     )
@@ -302,13 +314,19 @@ async def index(request: Request, db_url: str = Depends(catalog_db_url)) -> HTML
         "vnj": facets.counts.get("vnj", 0),
         "white_card": facets.counts.get("white_card", 0),
     }
+    # T2-2: pageview — в фоне ПОСЛЕ ответа; хук в конце success-пути, ошибки страницу не трогают.
+    background_tasks.add_task(analytics.record_event, request, path="/", database_url=db_url)
     return templates.TemplateResponse(
         request, "index.html", {"featured": items, "week": week, "stats": stats}
     )
 
 
 @router.get("/catalog", response_class=HTMLResponse)
-async def catalog(request: Request, db_url: str = Depends(catalog_db_url)) -> HTMLResponse:
+async def catalog(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db_url: str = Depends(catalog_db_url),
+) -> HTMLResponse:
     items, total = await _cached_catalog(request, db_url)
     facets = await _cached_facets(db_url)
     applied = _applied(request)
@@ -319,6 +337,8 @@ async def catalog(request: Request, db_url: str = Depends(catalog_db_url)) -> HT
         "total": total,
         "pager": _pager(request, total, cast("int", applied["page"])),
     }
+    # T2-2: pageview (HX-пагинацию/фильтры record_event скипает сам — это не просмотр страницы).
+    background_tasks.add_task(analytics.record_event, request, path="/catalog", database_url=db_url)
     # HTMX swaps only the results grid + pagination; full-page request gets the shell.
     template = "partials/_results.html" if "hx-request" in request.headers else "catalog.html"
     return templates.TemplateResponse(request, template, context)
@@ -326,7 +346,10 @@ async def catalog(request: Request, db_url: str = Depends(catalog_db_url)) -> HT
 
 @router.get("/apt/{site_listing_id}", response_class=HTMLResponse)
 async def apt(
-    request: Request, site_listing_id: int, db_url: str = Depends(catalog_db_url)
+    request: Request,
+    site_listing_id: int,
+    background_tasks: BackgroundTasks,
+    db_url: str = Depends(catalog_db_url),
 ) -> HTMLResponse:
     item = await readmodel.get_public(site_listing_id, database_url=db_url)
     if item is None:
@@ -338,6 +361,11 @@ async def apt(
     flat, flon = fuzz_coords(item.lat, item.lon)
     coords = {"lat": flat, "lon": flon} if flat is not None and flon is not None else None
     maps = maps_links(flat, flon)
+    # T2-2: после 404-гейта — приватные/несуществующие id не логируются; путь нормализован
+    # по контракту §A.1: path='/apt' + apt_id (кардинальность путей в агрегатах — O(1)).
+    background_tasks.add_task(
+        analytics.record_event, request, path="/apt", apt_id=site_listing_id, database_url=db_url
+    )
     return templates.TemplateResponse(
         request,
         "apt.html",
@@ -391,8 +419,13 @@ async def apt_og_image(
 
 
 @router.get("/map", response_class=HTMLResponse)
-async def map_view(request: Request) -> HTMLResponse:
+async def map_view(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db_url: str = Depends(catalog_db_url),  # T2-2: только для писателя аналитики (тот же seam)
+) -> HTMLResponse:
     # Data is fetched client-side from /api/map.json; the page itself carries no listings.
+    background_tasks.add_task(analytics.record_event, request, path="/map", database_url=db_url)
     return templates.TemplateResponse(request, "map.html", {})
 
 
@@ -403,9 +436,19 @@ async def map_json(db_url: str = Depends(catalog_db_url)) -> JSONResponse:
 
 
 @router.get("/calculator", response_class=HTMLResponse)
-async def calculator(request: Request) -> Response:
+async def calculator(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db_url: str = Depends(catalog_db_url),  # T2-2: только для писателя аналитики
+) -> Response:
     # C3: static content page — served with an ETag + conditional 304.
-    return _static_page(request, "calculator.html")
+    resp = _static_page(request, "calculator.html")
+    # T2-2: pageview только на полный 200-рендер; условный 304 (не-2xx) — скип по контракту §A.3.
+    if resp.status_code == status.HTTP_200_OK:
+        background_tasks.add_task(
+            analytics.record_event, request, path="/calculator", database_url=db_url
+        )
+    return resp
 
 
 # Static pages that always belong in the sitemap (absolute via site_public_base_url).
@@ -443,18 +486,34 @@ async def robots() -> Response:
 
 
 @router.get("/vnj", response_class=HTMLResponse)
-async def vnj(request: Request) -> Response:
+async def vnj(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db_url: str = Depends(catalog_db_url),  # T2-2: только для писателя аналитики
+) -> Response:
     # Static content page «ВНЖ и договор» — no DB; base.html globals (telegram_url,
     # district_options, csrf_token) are supplied via the shared Jinja env.
     # C3: served with an ETag + conditional 304 (content-static page).
-    return _static_page(request, "vnj.html")
+    resp = _static_page(request, "vnj.html")
+    # T2-2: pageview только на полный 200-рендер (304 — скип, см. /calculator).
+    if resp.status_code == status.HTTP_200_OK:
+        background_tasks.add_task(analytics.record_event, request, path="/vnj", database_url=db_url)
+    return resp
 
 
 @router.get("/how", response_class=HTMLResponse)
-async def how(request: Request) -> Response:
+async def how(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db_url: str = Depends(catalog_db_url),  # T2-2: только для писателя аналитики
+) -> Response:
     # Static content page «Как работаем» (incl. the 50% commission breakdown) — no DB.
     # C3: served with an ETag + conditional 304.
-    return _static_page(request, "how.html")
+    resp = _static_page(request, "how.html")
+    # T2-2: pageview только на полный 200-рендер (304 — скип, см. /calculator).
+    if resp.status_code == status.HTTP_200_OK:
+        background_tasks.add_task(analytics.record_event, request, path="/how", database_url=db_url)
+    return resp
 
 
 @router.post("/lead")
