@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
@@ -14,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
+from src.admin.analytics import ANALYTICS_WINDOWS, DEFAULT_DAYS, build_analytics
 from src.admin.auth import require_admin
 from src.admin.csrf import CSRF_TOKEN, require_csrf
 from src.admin.leads_report import build_leads_report
@@ -373,6 +375,90 @@ async def metrics_view(request: Request, _: str = Depends(require_admin)) -> HTM
         "metrics.html",
         {"chart": chart, "latest": latest, "active_nav": "metrics"},
     )
+
+
+# --------------------------------------------------------------------------- Site analytics (T3-1)
+
+# JetBrains Mono для дашборда — те же self-hosted woff2, что у публичного сайта (read-only,
+# src/site/* не модифицируется). Отдаём со СВОЕГО origin, а не хотлинком на rentbelgrad.com:
+# admin.* — другой origin, кросс-доменный @font-face требует CORS-заголовков, которых у
+# статики сайта (Caddy handle_path /static/*) нет — шрифт молча не загрузился бы.
+_FONTS_DIR = Path(__file__).resolve().parents[1] / "site" / "static" / "fonts"
+_MONO_FONTS = frozenset(
+    f"jetbrains-mono-{part}.woff2" for part in ("latin", "latin-ext", "cyrillic", "cyrillic-ext")
+)
+
+
+def _font_version() -> str:
+    """Кэш-бастинг ?v= для @font-face: токен меняется только вместе с самими woff2."""
+    h = hashlib.sha256()
+    for name in sorted(_MONO_FONTS):
+        path = _FONTS_DIR / name
+        if path.is_file():
+            h.update(path.read_bytes())
+    return h.hexdigest()[:8]
+
+
+FONT_V = _font_version()
+
+
+def _grouped(n: int) -> str:
+    """Editorial-группировка разрядов карточек: 12345 → 12 345.
+
+    U+202F (narrow no-break space), а не обычный пробел: обычный разрешил бы перенос
+    строки внутри числа и дал бы полноширинную дыру в mono-цифрах.
+    """
+    return f"{n:,}".replace(",", " ")
+
+
+templates.env.filters["grouped"] = _grouped
+
+
+@router.get("/analytics/fonts/{fname}")
+async def analytics_font(fname: str, _: str = Depends(require_admin)) -> FileResponse:
+    """Whitelist-раздача woff2 (не файл-сервер: произвольные пути → 404, fail-closed)."""
+    if fname not in _MONO_FONTS:
+        raise HTTPException(status_code=404)
+    return FileResponse(
+        _FONTS_DIR / fname,
+        media_type="font/woff2",
+        # immutable: URL версионирован через ?v=FONT_V, содержимое по данному URL не меняется
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.get("/analytics", response_class=HTMLResponse)
+async def analytics_view(
+    request: Request,
+    days: str = Query(str(DEFAULT_DAYS)),
+    _: str = Depends(require_admin),
+) -> HTMLResponse:
+    """Дашборд first-party аналитики сайта — read-only рендер контекста §A.5.
+
+    Окно вне 7|30 (включая нечисловой мусор) падает в дефолт, не в 422/500 — та же
+    конвенция, что window у /published: параметр принимаем как str и парсим вручную.
+    Ссылки топ-квартир ведут на ПУБЛИЧНЫЙ /apt/{id} (другой app/домен) — абсолютные,
+    через site_public_base_url.
+    """
+    from src.config import get_settings
+
+    try:
+        window = int(days)
+    except ValueError:
+        window = DEFAULT_DAYS
+    if window not in ANALYTICS_WINDOWS:
+        window = DEFAULT_DAYS
+    async with get_session() as s:
+        ctx = await build_analytics(s, window)
+    ctx.update(
+        {
+            "active_nav": "analytics",
+            "windows": ANALYTICS_WINDOWS,
+            "site_base_url": get_settings().site_public_base_url.rstrip("/"),
+            "font_v": FONT_V,
+        }
+    )
+    return templates.TemplateResponse(request, "analytics.html", ctx)
 
 
 # --------------------------------------------------------------------------- Health dashboard (B3)

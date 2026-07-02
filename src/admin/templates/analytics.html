@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+{% block title %}Аналитика — otz-rent-finder{% endblock %}
+{% block content %}
+<style>
+  /* JetBrains Mono — self-host со СВОЕГО origin (роут /analytics/fonts/*, те же woff2, что у
+     публичного сайта): admin.* и сайт — разные origin, а кросс-доменный @font-face требует CORS,
+     которого у статики сайта нет — иначе mono остался бы декларацией. Сабсеты — как в site.css. */
+  @font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:400 500;font-display:swap;
+    src:url(/analytics/fonts/jetbrains-mono-cyrillic.woff2?v={{ font_v }}) format("woff2");
+    unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+  @font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:400 500;font-display:swap;
+    src:url(/analytics/fonts/jetbrains-mono-cyrillic-ext.woff2?v={{ font_v }}) format("woff2");
+    unicode-range:U+0460-052F,U+1C80-1C88,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F}
+  @font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:400 500;font-display:swap;
+    src:url(/analytics/fonts/jetbrains-mono-latin.woff2?v={{ font_v }}) format("woff2");
+    unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+  @font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:400 500;font-display:swap;
+    src:url(/analytics/fonts/jetbrains-mono-latin-ext.woff2?v={{ font_v }}) format("woff2");
+    unicode-range:U+0100-02AF,U+0304,U+0308,U+0329,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+
+  /* Belgrade Editorial — локальная копия токенов (админка — отдельный app со своим inline-CSS,
+     публичный tokens.css сюда не подключается; источник значений: src/site/static/css/tokens.css). */
+  .an {
+    --paper:#F4EFE6; --paper-2:#ECE4D6; --card-p:#FBF8F1;
+    --ink:#1B1A17; --ink-2:#4A463E; --hairline:#D8CDBA;
+    --oxblood:#A8362A; --navy:#15324C; --ochre:#D89A4E;
+    /* производные вне tokens.css — только для контраста, не новые «цвета бренда»:
+       ink-3 #8A8275 даёт 3.3:1 на paper — ниже AA 4.5:1, поэтому текстовым подписям
+       нельзя; оставлен ТОЛЬКО декоративному (hover-бордер). Для смысловых мелких
+       подписей — затемнённый вариант (4.9:1 на paper, иерархия против ink-2 сохранена).
+       Охра #D89A4E на paper тоже не проходит — тексту бейджа utm нужен тёмный дериват (5.1:1). */
+    --ink-3:#8A8275; --ink-3-text:#6E675B; --ochre-ink:#8a5b1e;
+    --an-mono:"JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background:var(--paper); color:var(--ink);
+    border:1px solid var(--hairline); border-radius:6px;
+    padding:28px; margin:-4px 0 24px;
+  }
+  .an a { color:var(--navy); }
+  /* закон «hover/focus-состояния»: свой видимый ring (оксблад 2px — ≥3:1 на paper и card) */
+  .an-chip:focus-visible, .an a:focus-visible { outline:2px solid var(--oxblood); outline-offset:2px; }
+  /* цифры вне .num-колонок (№ квартиры, даты в прозе) — тоже mono, закон «все цифры в mono» */
+  .an .mono { font-family:var(--an-mono); font-variant-numeric:tabular-nums; }
+  .an-head { display:flex; align-items:baseline; gap:18px; flex-wrap:wrap; margin-bottom:6px; }
+  .an-head h1 { margin:0; font-size:22px; letter-spacing:-0.01em; }
+  .an-kicker { font-family:var(--an-mono); font-size:11px; text-transform:uppercase;
+               letter-spacing:0.18em; color:var(--ink-3-text); }
+  .an-sub { color:var(--ink-2); font-size:13px; margin:0 0 20px; }
+  .an-switch { margin-left:auto; display:flex; gap:6px; }
+  .an-chip { font-family:var(--an-mono); font-size:12px; padding:4px 12px;
+             border:1px solid var(--hairline); border-radius:3px;
+             background:var(--card-p); color:var(--ink-2); }
+  .an-chip:hover { text-decoration:none; border-color:var(--ink-3); }
+  a.an-chip:hover { color:var(--ink); }
+  .an-chip.is-on { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+
+  .an-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));
+              gap:12px; margin-bottom:24px; }
+  .an-card { background:var(--card-p); border:1px solid var(--hairline); border-radius:6px;
+             padding:14px 16px 12px; }
+  .an-num { font-family:var(--an-mono); font-size:32px; line-height:1.15; margin-top:6px;
+            font-variant-numeric:tabular-nums; }
+  .an-unit { font-size:18px; color:var(--ink-3-text); margin-left:2px; }
+  .an-note { color:var(--ink-3-text); font-size:12px; margin-top:4px; }
+
+  .an-block { background:var(--card-p); border:1px solid var(--hairline); border-radius:6px;
+              padding:16px; margin-bottom:24px; }
+  .an-block-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  .an-block-head h2 { font-size:14px; margin:0; }
+  .an-range { margin-left:auto; font-family:var(--an-mono); font-size:11px; color:var(--ink-3-text); }
+  .an-sparkrow { display:grid; grid-template-columns:110px 1fr 70px; gap:14px; align-items:center;
+                 padding:10px 0; }
+  .an-sparkrow + .an-sparkrow { border-top:1px solid var(--hairline); }
+  .an-spark { width:100%; height:64px; display:block; }
+  .an-spark-base { stroke:var(--hairline); stroke-width:1; }
+  .an-spark-val { font-family:var(--an-mono); font-size:16px; text-align:right;
+                  font-variant-numeric:tabular-nums; }
+  .an-spark-val small { display:block; font-family:var(--an-mono); font-size:10px;
+                        color:var(--ink-3-text); letter-spacing:0.08em; text-transform:uppercase; }
+
+  .an-tables { display:grid; grid-template-columns:minmax(0, 3fr) minmax(0, 2fr); gap:24px; }
+  @media (max-width: 900px) { .an-tables { grid-template-columns:1fr; } }
+  .an table { background:var(--card-p); border:1px solid var(--hairline); border-radius:6px;
+              box-shadow:none; border-collapse:separate; border-spacing:0; overflow:hidden; }
+  .an th { background:var(--paper-2); color:var(--ink-2); font-family:var(--an-mono);
+           font-weight:500; font-size:10px; text-transform:uppercase; letter-spacing:0.14em;
+           border-bottom:1px solid var(--hairline); }
+  /* anywhere, а не break-word: ключи источников (utm до 100 симв. [A-Za-z0-9._-], домены
+     referrer) не содержат точек мягкого переноса, а «anywhere» — единственное значение,
+     которое учитывается в min-content ширины ячейки: иначе таблица распирает paper-остров
+     и даёт странице горизонтальный скролл от любого визитёра с длинным ?utm_source= */
+  .an td { border-bottom:1px solid var(--hairline); font-size:13px; overflow-wrap:anywhere; }
+  .an tr:last-child td { border-bottom:none; }
+  .an td.num, .an th.num { text-align:right; font-family:var(--an-mono);
+                           font-variant-numeric:tabular-nums; }
+  .an-empty { padding:22px; text-align:center; color:var(--ink-3-text); background:var(--card-p);
+              border:1px solid var(--hairline); border-radius:6px; font-size:13px; }
+  .an-kind { font-family:var(--an-mono); font-size:10px; text-transform:uppercase;
+             letter-spacing:0.12em; padding:2px 7px; border-radius:3px;
+             border:1px solid var(--hairline); color:var(--ink-2); background:var(--paper); }
+  .an-kind.is-utm { border-color:var(--ochre); color:var(--ochre-ink); }
+  .an-kind.is-ref { border-color:var(--navy); color:var(--navy); }
+</style>
+
+{# — спарклайн: polyline из Jinja-цикла, самомасштабируемый; последняя точка (сегодня, live)
+     отмечена точкой. Ноль JS-библиотек — чистый inline-SVG. Точка — нуль-длинный path
+     c round-linecap, а не <circle>: circle под preserveAspectRatio="none" растягивается
+     в эллипс, path с vector-effect="non-scaling-stroke" остаётся круглым (как и линия). — #}
+{% macro spark(values, stroke, label) -%}
+  {%- set n = values|length -%}
+  {%- set vmax = [values|max, 1]|max -%}
+  {#- страховка от окна в 1 день: n-1 = 0 дало бы деление на ноль -#}
+  {%- set step = 548 / ([n - 1, 1]|max) -%}
+  <svg class="an-spark" viewBox="0 0 560 84" preserveAspectRatio="none" role="img"
+       aria-label="{{ label }} по дням: {{ values|join(', ') }}">
+    <line class="an-spark-base" x1="6" y1="78" x2="554" y2="78"/>
+    <polyline fill="none" stroke="{{ stroke }}" stroke-width="2"
+              stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"
+              points="{% for v in values %}{{ '%.1f'|format(6 + loop.index0 * step) }},{{ '%.1f'|format(78 - (v / vmax) * 66) }}{% if not loop.last %} {% endif %}{% endfor %}"/>
+    <path d="M554,{{ '%.1f'|format(78 - (values[-1] / vmax) * 66) }} h0" fill="none"
+          stroke="{{ stroke }}" stroke-width="7" stroke-linecap="round"
+          vector-effect="non-scaling-stroke"/>
+  </svg>
+{%- endmacro %}
+
+<section class="an">
+  <div class="an-head">
+    <div>
+      <div class="an-kicker">rentbelgrad · телеметрия</div>
+      <h1>Аналитика сайта</h1>
+    </div>
+    <nav class="an-switch" aria-label="Окно периода">
+      {% for w in windows %}
+        {% if w == days %}
+          <span class="an-chip is-on" aria-current="page">{{ w }}д</span>
+        {% else %}
+          <a class="an-chip" href="/analytics?days={{ w }}">{{ w }}д</a>
+        {% endif %}
+      {% endfor %}
+    </nav>
+  </div>
+  <p class="an-sub">Окно <span class="mono">{{ days }}</span> дней. Прошлые дни — ночные агрегаты; сегодня (<span class="mono">{{ today.strftime('%d.%m') }}</span>) — live-подсчёт из сырых событий по тем же правилам: просмотры и уники без ботов, заявки — как есть.</p>
+
+  <div class="an-cards">
+    <article class="an-card">
+      <div class="an-kicker">Просмотры</div>
+      <div class="an-num">{{ cards.views|grouped }}</div>
+      <div class="an-note">страницы, без ботов</div>
+    </article>
+    <article class="an-card">
+      <div class="an-kicker">Уники</div>
+      <div class="an-num">{{ cards.uniques|grouped }}</div>
+      <div class="an-note">дневные уники, сумма</div>
+    </article>
+    <article class="an-card">
+      <div class="an-kicker">Заявки</div>
+      <div class="an-num">{{ cards.leads|grouped }}</div>
+      <div class="an-note">lead_submit за период</div>
+    </article>
+    <article class="an-card">
+      <div class="an-kicker">Конверсия</div>
+      <div class="an-num">{{ '%.1f'|format(cards.conv_pct) }}<span class="an-unit">%</span></div>
+      <div class="an-note">заявки / просмотры</div>
+    </article>
+  </div>
+
+  <div class="an-block">
+    <div class="an-block-head">
+      <h2>По дням</h2>
+      <span class="an-range">{{ series[0].day.strftime('%d.%m') }} — {{ series[-1].day.strftime('%d.%m') }} · точка справа — сегодня, live</span>
+    </div>
+    {% set views_row = series|map(attribute='views')|list %}
+    {% set leads_row = series|map(attribute='leads')|list %}
+    <div class="an-sparkrow">
+      <div class="an-kicker">Просмотры</div>
+      {{ spark(views_row, 'var(--navy)', 'Просмотры') }}
+      <div class="an-spark-val">{{ views_row[-1] }}<small>сегодня</small></div>
+    </div>
+    <div class="an-sparkrow">
+      <div class="an-kicker">Заявки</div>
+      {{ spark(leads_row, 'var(--oxblood)', 'Заявки') }}
+      <div class="an-spark-val">{{ leads_row[-1] }}<small>сегодня</small></div>
+    </div>
+  </div>
+
+  <div class="an-tables">
+    <div>
+      <div class="an-block-head">
+        <h2>Топ-квартиры</h2>
+        <span class="an-range">по просмотрам · ссылка — на публичную страницу</span>
+      </div>
+      {% if top_apts %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Квартира</th>
+            <th scope="col">Район</th>
+            <th scope="col" class="num">€/мес</th>
+            <th scope="col" class="num">Просм.</th>
+            <th scope="col" class="num">Заявки</th>
+            <th scope="col" class="num">CTR</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in top_apts %}
+          <tr>
+            <td class="mono"><a href="{{ site_base_url }}/apt/{{ a.apt_id }}" target="_blank" rel="noopener">№{{ a.apt_id }}</a></td>
+            <td>{{ a.district if a.district else '—' }}</td>
+            <td class="num">{{ a.price_eur if a.price_eur is not none else '—' }}</td>
+            <td class="num">{{ a.views }}</td>
+            <td class="num">{{ a.leads }}</td>
+            <td class="num">{{ '%.1f'|format(a.ctr_pct) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="an-empty">Просмотров квартир за период пока нет.</div>
+      {% endif %}
+    </div>
+
+    <div>
+      <div class="an-block-head">
+        <h2>Источники</h2>
+        <span class="an-range">utm_source и домены referrer</span>
+      </div>
+      {% if sources %}
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Тип</th>
+            <th scope="col">Источник</th>
+            <th scope="col" class="num">Просм.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in sources %}
+          <tr>
+            <td><span class="an-kind is-{{ r.kind }}">{{ r.kind }}</span></td>
+            <td>{{ r.key }}</td>
+            <td class="num">{{ r.views }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="an-empty">Меченого трафика за период пока нет.</div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}
