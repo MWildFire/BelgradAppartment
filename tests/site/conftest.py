@@ -11,9 +11,11 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from src.config import get_settings
 from src.db.models import (
     Base,
     InboundPost,
@@ -25,6 +27,14 @@ from src.db.models import (
     SiteListing,
     SourceChannel,
 )
+
+
+@pytest.fixture(autouse=True)
+def _analytics_salt(monkeypatch):
+    """Fail-closed §A.1: пустая SITE_ANALYTICS_SALT глушит record_event — тестам, пишущим
+    события через роуты, нужен непустой секрет (как на проде; e2e задаёт его через env).
+    Тест самого fail-closed поведения переопределяет соль на '' поверх этой фикстуры."""
+    monkeypatch.setattr(get_settings(), "site_analytics_salt", "test-salt")
 
 
 def _dt(day: int) -> datetime:

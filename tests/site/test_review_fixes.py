@@ -91,9 +91,17 @@ def test_results_count_is_a_live_region() -> None:
                   "qs_prev": "", "qs_next": ""},
     }
     html = _render("partials/_results.html", **ctx)
-    # the count announces after an HTMX swap; the filter form drives the #results indicator
-    assert 'aria-live="polite"' in html
+    # W5-22: the live region moved OUT of the swap target (a node recreated by every swap is
+    # announced unreliably) — _results.html now updates the persistent #results-status in
+    # catalog.html via hx-swap-oob; the filter form still drives the #results indicator.
+    assert 'hx-swap-oob="innerHTML:#results-status"' in html
     assert 'hx-indicator="#results"' in html
+    catalog_ctx = {**ctx, "facets": {"districts": [], "price_bounds": (0, 0), "rooms": [],
+                                     "counts": {"vnj": 0, "white_card": 0, "total": 0}},
+                   "csrf_token": "x"}
+    catalog = _render("catalog.html", **catalog_ctx)
+    assert 'id="results-status"' in catalog
+    assert 'aria-live="polite"' in catalog
 
 
 def test_filters_form_drives_results_indicator() -> None:

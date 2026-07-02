@@ -1,8 +1,10 @@
 {# Filter rail. ВНЖ + белый картон are the PROMINENT top toggles (design §0 / contract §3).
    Context (§2/§3): facets (Facets), applied (AppliedFilters). HTMX → #results. #}
+{# W5-22: hx-swap="outerHTML" — сервер на HX-Request отдаёт _results.html ЦЕЛИКОМ (вместе с
+   <div id="results">); дефолтный innerHTML ВКЛАДЫВАЛ бы дубликат #results при каждом свопе. #}
 <form class="filters" method="get" action="/catalog"
-      hx-get="/catalog" hx-target="#results" hx-push-url="true" hx-trigger="change, submit"
-      hx-indicator="#results">
+      hx-get="/catalog" hx-target="#results" hx-swap="outerHTML" hx-push-url="true"
+      hx-trigger="change, submit" hx-indicator="#results">
   <h3>Фильтры</h3>
 
   {# — prominent relocant toggles — #}

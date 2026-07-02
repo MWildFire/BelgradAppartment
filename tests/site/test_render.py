@@ -237,6 +237,21 @@ def test_index_hero_week_card_renders_real_apartment() -> None:
     assert "скоро здесь" not in html
 
 
+def test_index_hero_week_photo_is_eager_lcp_not_lazy() -> None:
+    """W5-10: hero-фото «квартиры недели» — вероятный LCP мобильной главной (hero-side идёт
+    ПЕРВОЙ при ≤780px, order:-1). loading=lazy на LCP-элементе — анти-паттерн (браузер
+    депприоритизирует картинку); фото обязано быть eager + fetchpriority=high.
+    (Вариант photo_v('detail')/srcset проверяет e2e test_photo_variants.py — тут plain-env.)"""
+    week = FakeView(id=512, price_eur=720, district="Дорћол")
+    html = _render(
+        "index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF, week=week
+    )
+    hero = html.split('class="hero-photo"')[1].split("</a>")[0]
+    assert 'loading="eager"' in hero
+    assert 'fetchpriority="high"' in hero
+    assert 'loading="lazy"' not in hero
+
+
 def test_index_hero_week_card_placeholder_when_none() -> None:
     """W3-2: when `week` is None the hero side-card keeps the «скоро здесь» placeholder
     and emits no /apt detail link from that card."""

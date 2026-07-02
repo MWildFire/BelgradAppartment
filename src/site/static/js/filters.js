@@ -74,7 +74,10 @@
       form.querySelectorAll('.price-range input[type="number"]'),
       function (i) { return i.value !== ""; }
     );
-    return cbs > 0 || nums;
+    // W5-25: район — такой же активный фильтр; без него кнопка пряталась при deep-link'е
+    // «только район» (второй сломанный путь управления после скрытых пилюль).
+    var district = form.querySelectorAll('select[name="district"] option:checked').length;
+    return cbs > 0 || nums || district > 0;
   }
 
   var clearBtn = document.createElement("button");
@@ -90,8 +93,20 @@
     form.querySelectorAll('.price-range input[type="number"]').forEach(function (i) {
       i.value = "";
     });
+    // W5-25: сбрасываем и район — иначе «сброс» оставлял районный фильтр применённым,
+    // вопреки подписи кнопки. Native <select> — source of truth (combobox.js читает его же);
+    // отрисованные чипы комбобокса убираем сами: их re-render живёт только внутри combobox.js,
+    // а тот при следующем открытии перечитает (уже пустые) options — состояния не разойдутся.
+    form.querySelectorAll('select[name="district"] option').forEach(function (o) {
+      o.selected = false;
+    });
+    form.querySelectorAll(".combobox-chip").forEach(function (chip) {
+      chip.remove();
+    });
     var sort = form.querySelector('select[name="sort"]');
     if (sort) sort.value = "new";
+    // клик по кнопке не пускает form-`change` — прячем её явно (всё только что сброшено).
+    clearBtn.hidden = true;
     if (form.requestSubmit) form.requestSubmit();
     else form.submit();
   });

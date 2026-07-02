@@ -65,7 +65,8 @@
 {% block content %}
 <section class="bay wrap">
   <div class="sec-head">
-    <div><div class="idx">карта</div><h2>Квартиры на карте</h2></div>
+    {# W5-27: h1 (был h2 — страница без заголовка первого уровня); стиль тот же (.sec-head h1). #}
+    <div><div class="idx">карта</div><h1>Квартиры на карте</h1></div>
     <p style="max-width:30ch;color:var(--ink-2);font-size:var(--step--1)">Точки тянутся из <span class="mono">/api/map.json</span>. Кликни по цене — откроется квартира.</p>
   </div>
 

@@ -50,6 +50,9 @@
 /* skip-link for keyboard a11y */
 .skip-link{position:absolute;left:-9999px;top:0;background:var(--ink);color:var(--paper);padding:10px 16px;border-radius:var(--r-s);z-index:60}
 .skip-link:focus{left:8px;top:8px}
+/* sr-only утилита (клип-паттерн, как .combobox-native): скрыт визуально, но живёт в a11y-tree —
+   для стабильных live-регионов (#results-status, W5-22) и sr-only заголовков. НЕ display:none. */
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);border:0;white-space:nowrap}
 /* Global keyboard ring — oxblood@2px clears 3:1 against paper(5.7) and card(6.1). Applied to
    EVERY interactive element (links, buttons, inputs, checkboxes/toggles, select, pager,
    favorites control, map controls). Never removed without an equally-visible replacement. */
@@ -143,7 +146,9 @@
 /* ───────── section frame ───────── */
 section.bay{padding-block:var(--bay)}
 .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--gutter);margin-bottom:2.4rem}
-.sec-head h2{font-size:var(--step-3)}
+/* W5-27: титулы страниц (catalog/map/calculator/how/vnj/unsubscribe) подняты до семантического
+   h1, но визуально остаются прежним section-заголовком — один стиль на оба уровня. */
+.sec-head h1,.sec-head h2{font-size:var(--step-3)}
 .sec-head .idx{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
 .sec-head .more{font-size:var(--step--1);border-bottom:1.5px solid var(--oxblood);padding-bottom:2px;color:var(--ink);white-space:nowrap}
 
@@ -267,10 +272,31 @@ section.bay{padding-block:var(--bay)}
 .price-range{display:flex;gap:10px;align-items:center}
 .price-range input{width:100%;font-family:var(--mono);font-size:var(--step--1);padding:9px 11px;border:1.5px solid var(--hairline);border-radius:var(--r-s);background:var(--paper);color:var(--ink)}
 .rooms-pills{display:flex;gap:6px;flex-wrap:wrap}
-.pill{display:inline-flex;align-items:center;gap:6px;border:1.5px solid var(--ink);border-radius:999px;padding:6px 12px;font-size:var(--step--1);background:var(--paper);cursor:pointer;font-family:var(--mono)}
-.pill input{display:none}
+/* position:relative: якорит sr-only-клипнутый чекбокс внутри пилюли (без прыжков скролла при фокусе). */
+.pill{position:relative;display:inline-flex;align-items:center;gap:6px;border:1.5px solid var(--ink);border-radius:999px;padding:6px 12px;font-size:var(--step--1);background:var(--paper);cursor:pointer;font-family:var(--mono)}
+/* W5-21: НЕ display:none — оно выкидывало чекбокс из tab-порядка и из a11y-tree (WCAG 2.1.1/4.1.2),
+   фильтр «Комнат» был неоперабелен с клавиатуры и невидим для SR. Sr-only-клип (паттерн
+   .combobox-native): визуально скрыт, но фокусируем — Tab доходит, Space переключает. */
+.pill input{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);border:0}
+/* Клавиатурное кольцо — на самой пилюле (кольцо клипнутого инпута невидимо): :has(:focus-visible)
+   не зажигает его от мышиного клика; .pill:focus-within (выше) — фолбэк для движков без :has(). */
+.pill:has(input:focus-visible){outline:2px solid var(--oxblood);outline-offset:2px}
 .pill.on{background:var(--ink);color:var(--paper)}
 .filters .apply{width:100%;margin-top:6px}
+
+/* ───────── «Сохрани поиск» — форма подписки (W5-28) ─────────
+   Классы .subscribe-grid/.subscribe-channel/.channel-opt раньше не имели НИ ОДНОГО правила —
+   на каталоге рендерился сырой UA-хром (groove-fieldset, дефолтные сине-фиолетовые radio,
+   растянутые multiselect'ы). Верстаем по токенам Belgrade Editorial, зеркаля .filters/.field. */
+.subscribe-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-bottom:18px}
+@media(max-width:560px){.subscribe-grid{grid-template-columns:1fr}}
+.subscribe-grid .field select[multiple]{min-height:auto;padding:8px 10px}
+/* fieldset без UA-groove: hairline-рамка + легенда как meta-label (.field label), не как жирный UA-legend. */
+.subscribe-channel{border:1px solid var(--hairline);border-radius:var(--r-s);padding:14px 16px 16px;margin:0 0 18px}
+.subscribe-channel>legend{font-family:var(--mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-2);padding:0 6px}
+.channel-opt{display:inline-flex;align-items:center;gap:8px;margin-right:18px;font-size:var(--step--1);color:var(--ink-2);cursor:pointer}
+.channel-opt input{accent-color:var(--oxblood);width:16px;height:16px}
+.subscribe-channel #sub-email-field{margin-top:12px}
 
 /* ───────── район combobox (F2 — progressive enhancement over native <select>) ─────────
    Tokens only, no purple/glass. The native <select> stays in the DOM as the form control
@@ -334,6 +360,15 @@ section.bay{padding-block:var(--bay)}
    oxblood@2px остаётся различим. Never removed: это замена глобального ring, не отключение. */
 .gallery .g>a:focus-visible{outline-offset:-3px}
 .gallery .g.more{display:grid;place-items:center;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
+/* W5-11/26: бейдж «+N фото» — in-flow span, а тайл-<a>/<img> позиционированы absolute и по
+   paint-order (CSS Appendix E) рисовались ПОВЕРХ подписи: посетитель не видел, что фото
+   больше пяти (та же болезнь, что у .card-l .flag — там уже чинили z-index'ом). Слои:
+   ::after на самом якоре затемняет фото (иначе paper-текст нечитаем на светлом кадре, AA),
+   бейдж приподнят z-index'ом; pointer-events:none — клики проходят СКВОЗЬ бейдж в
+   тайл-ссылку, весь тайл остаётся кликабельным. Скоуп `>a~span` не трогает «фото скоро»
+   в пустой галерее (там нет якоря). */
+.gallery .g.more>a::after{content:"";position:absolute;inset:0;background:color-mix(in srgb,var(--ink) 70%,transparent)}
+.gallery .g.more>a~span{position:relative;z-index:1;pointer-events:none;color:var(--paper)}
 .gallery.gallery-empty{grid-template-columns:1fr;grid-template-rows:1fr}
 .apt-title{font-size:var(--step-3);margin:1.6rem 0 .4rem;letter-spacing:-0.03em}
 .apt-params{font-family:var(--mono);font-size:var(--step-0);color:var(--ink-2);display:flex;gap:12px;flex-wrap:wrap;margin-bottom:1.2rem}

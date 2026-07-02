@@ -1,11 +1,13 @@
 {# HTMX swap target: results grid + pagination ONLY. No <header>/nav/footer here.
-   Context (§2): items, total, applied (for sort/page), facets (unused here but passed). #}
+   Context (§2): items, total, applied (for sort/page), facets (unused here but passed).
+   W5-22: every hx-get targeting #results swaps outerHTML — the server answers HX-Request with
+   this partial INCLUDING the <div id="results"> wrapper, so innerHTML would nest a duplicate. #}
 <div id="results">
   <div class="results-head">
-    {# role=status + aria-live: after an HTMX filter/sort swap, screen readers announce the new
-       match count ("3 квартиры") so the result of a filter change isn't silent. #}
-    <div class="count" role="status" aria-live="polite"><span class="mono">{{ total }}</span> {{ 'квартира' if total == 1 else 'квартир' }}</div>
-    <form method="get" action="/catalog" hx-get="/catalog" hx-target="#results" hx-push-url="true" hx-indicator="#results">
+    {# Чисто визуальный счётчик: объявляет новый счёт СТАБИЛЬНЫЙ live-регион #results-status в
+       catalog.html (W5-22) — узел, пересоздаваемый каждым свопом, SR озвучивают ненадёжно. #}
+    <div class="count"><span class="mono">{{ total }}</span> {{ 'квартира' if total == 1 else 'квартир' }}</div>
+    <form method="get" action="/catalog" hx-get="/catalog" hx-target="#results" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#results">
       {# preserve active filters across a sort change #}
       {% if applied.vnj %}<input type="hidden" name="vnj" value="1">{% endif %}
       {% if applied.wc %}<input type="hidden" name="wc" value="1">{% endif %}
@@ -32,9 +34,9 @@
        qs_prev/qs_next come from the backend and preserve every active filter. #}
     {% if pager and pager.total_pages > 1 %}
       <nav class="pager" aria-label="Постраничная навигация">
-        {% if pager.has_prev %}<a href="/catalog?{{ pager.qs_prev }}" hx-get="/catalog?{{ pager.qs_prev }}" hx-target="#results" hx-push-url="true" hx-indicator="#results" rel="prev">← назад</a>{% endif %}
+        {% if pager.has_prev %}<a href="/catalog?{{ pager.qs_prev }}" hx-get="/catalog?{{ pager.qs_prev }}" hx-target="#results" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#results" rel="prev">← назад</a>{% endif %}
         <span class="current mono">{{ pager.page }} / {{ pager.total_pages }}</span>
-        {% if pager.has_next %}<a href="/catalog?{{ pager.qs_next }}" hx-get="/catalog?{{ pager.qs_next }}" hx-target="#results" hx-push-url="true" hx-indicator="#results" rel="next">вперёд →</a>{% endif %}
+        {% if pager.has_next %}<a href="/catalog?{{ pager.qs_next }}" hx-get="/catalog?{{ pager.qs_next }}" hx-target="#results" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#results" rel="next">вперёд →</a>{% endif %}
       </nav>
     {% endif %}
   {% else %}
@@ -44,3 +46,8 @@
     </div>
   {% endif %}
 </div>
+{# W5-22: oob-обновление ПЕРСИСТЕНТНОГО счётчика (#results-status живёт в catalog.html вне
+   свопа): innerHTML-своп меняет только ТЕКСТ живого региона, не пересоздавая узел — так SR
+   стабильно объявляют новый счёт. hidden+aria-hidden: при полнострочном рендере страницы
+   (include из catalog.html) узел инертен и не дублирует объявление. #}
+<span hidden aria-hidden="true" hx-swap-oob="innerHTML:#results-status">{{ total }} {{ 'квартира' if total == 1 else 'квартир' }}</span>

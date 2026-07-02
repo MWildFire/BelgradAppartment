@@ -88,6 +88,7 @@ _APPLIED = {
 }
 
 # Every full page rendered through base.html, with the context each one needs.
+_TG = "https://t.me/Darya_kralj"
 _PAGES: list[tuple[str, dict[str, object]]] = [
     ("base.html", {"csrf_token": _CSRF}),
     ("index.html", {"featured": [FakeView()], "stats": _STATS, "csrf_token": _CSRF}),
@@ -98,6 +99,9 @@ _PAGES: list[tuple[str, dict[str, object]]] = [
     ("apt.html", {"item": FakeView(), "similar": [FakeView(id=200)], "csrf_token": _CSRF}),
     ("map.html", {"csrf_token": _CSRF}),
     ("calculator.html", {"csrf_token": _CSRF}),
+    ("how.html", {"csrf_token": _CSRF, "telegram_url": _TG}),
+    ("vnj.html", {"csrf_token": _CSRF, "telegram_url": _TG}),
+    ("unsubscribe.html", {"csrf_token": _CSRF, "ok": True, "telegram_url": _TG}),
 ]
 
 # Img-bearing fragments rendered standalone, with context.
@@ -122,12 +126,14 @@ def test_base_html_lang_ru() -> None:
 
 
 @pytest.mark.parametrize(("template", "ctx"), _PAGES)
-def test_pages_have_single_h1_at_most(template: str, ctx: dict[str, object]) -> None:
-    """Logical heading order: a content page has at most one <h1> (the page title)."""
+def test_pages_have_exactly_one_h1(template: str, ctx: dict[str, object]) -> None:
+    """W5-27: every content page carries EXACTLY one <h1> (the page title) — «at most one»
+    let catalog/map/calculator/how/vnj/unsubscribe ship with an outline starting at <h2>,
+    weakening SR heading navigation and SEO."""
     if template == "base.html":
         pytest.skip("base shell has no content <h1> by itself")
     html = _render(template, **ctx)
-    assert len(re.findall(r"<h1[ >]", html)) <= 1
+    assert len(re.findall(r"<h1[ >]", html)) == 1
 
 
 def test_footer_headings_no_level_skip() -> None:
@@ -193,6 +199,87 @@ def test_apt_opengraph_no_photo_falls_back_gracefully() -> None:
     m_img = re.search(r'<meta property="og:image" content="([^"]*)"', html)
     if m_img:  # if present it must still be absolute (no bare relative path)
         assert m_img.group(1).startswith("http")
+
+
+# ==================================== HTMX swap: no nested #results + stable aria-live counter
+_PAGER = {
+    "page": 1, "page_size": 24, "total_pages": 2,
+    "has_prev": False, "has_next": True,
+    "qs_prev": "page=0", "qs_next": "page=2",
+}
+
+
+def test_results_swaps_replace_node_not_nest() -> None:
+    """W5-22: сервер на HX-Request отдаёт _results.html ЦЕЛИКОМ (вместе с <div id="results">),
+    а дефолтный swap=innerHTML ВКЛАДЫВАЛ дубликат #results при каждом свопе (дубликат id,
+    невалидный DOM). Каждый hx-элемент, целящий #results, обязан свопать outerHTML."""
+    filters = _render("partials/_filters.html", facets=_FACETS, applied=_APPLIED)
+    results = _render(
+        "partials/_results.html",
+        items=[FakeView()], facets=_FACETS, applied=_APPLIED, total=30, pager=_PAGER,
+    )
+    tags = []
+    for html in (filters, results):
+        tags += re.findall(r'<[^>]+hx-target="#results"[^>]*>', html)
+    assert tags, "expected hx-target=#results hooks in filters/results partials"
+    for tag in tags:
+        assert 'hx-swap="outerHTML"' in tag, f"hx-target=#results without outerHTML swap: {tag}"
+
+
+def test_results_counter_live_region_is_stable_outside_swap() -> None:
+    """W5-22: aria-live-регион, который пересоздаётся каждым свопом, объявляется SR ненадёжно.
+    Контракт: стабильный sr-only узел #results-status живёт в catalog.html ВНЕ #results;
+    _results.html обновляет его текст через hx-swap-oob (innerHTML — узел персистирует);
+    .count внутри свопаемого узла остаётся чисто визуальным (без role/aria-live)."""
+    catalog = _render(
+        "catalog.html",
+        items=[FakeView()], facets=_FACETS, applied=_APPLIED, total=1, csrf_token=_CSRF,
+    )
+    status_pos = catalog.find('id="results-status"')
+    results_pos = catalog.find('<div id="results"')
+    assert status_pos != -1, "stable #results-status live region missing on catalog.html"
+    assert status_pos < results_pos, "#results-status must live OUTSIDE (before) the swap target"
+    status_tag = re.search(r"<[^>]+id=\"results-status\"[^>]*>", catalog)
+    assert status_tag and 'aria-live="polite"' in status_tag.group(0)
+    assert "sr-only" in status_tag.group(0)  # visually hidden, the visible count stays in .results-head
+
+    results = _render(
+        "partials/_results.html",
+        items=[FakeView()], facets=_FACETS, applied=_APPLIED, total=1,
+    )
+    # oob-своп меняет ТЕКСТ персистентного региона (innerHTML), не пересоздаёт узел
+    assert 'hx-swap-oob="innerHTML:#results-status"' in results
+    count_tag = re.search(r'<div class="count"[^>]*>', results)
+    assert count_tag, ".count missing in results head"
+    assert "aria-live" not in count_tag.group(0)
+    assert "role=" not in count_tag.group(0)
+    # sr-only утилита существует в site.css (клип-паттерн, не display:none)
+    css = SITE_CSS.read_text(encoding="utf-8")
+    m = re.search(r"\.sr-only\s*{([^}]*)}", css)
+    assert m and "clip" in m.group(1) and "display:none" not in m.group(1).replace(" ", "")
+
+
+# =========================================================== rooms pills keyboard operability
+def test_pill_inputs_are_visually_hidden_not_display_none() -> None:
+    """W5-21: `.pill input{display:none}` выкидывал чекбоксы «Комнат» из tab-порядка И из
+    accessibility tree (WCAG 2.1.1 / 4.1.2). Инпут должен прятаться sr-only-клипом (паттерн
+    .combobox-native) — остаётся фокусируемым, Tab доходит, Space переключает."""
+    css = SITE_CSS.read_text(encoding="utf-8")
+    m = re.search(r"\.pill input\s*{([^}]*)}", css)
+    assert m, ".pill input rule not found in site.css"
+    compact = m.group(1).replace(" ", "")
+    assert "display:none" not in compact, ".pill input must stay focusable (no display:none)"
+    # visually hidden via the clip pattern, not removed from the a11y tree
+    assert "position:absolute" in compact
+    assert "clip" in compact or "opacity:0" in compact
+
+
+def test_pill_focus_ring_lands_on_label() -> None:
+    """W5-21: клавиатурный фокус на скрытом чекбоксе рисует кольцо на самой .pill —
+    :has(input:focus-visible) (кольцо только с клавиатуры) + :focus-within как фолбэк."""
+    css = SITE_CSS.read_text(encoding="utf-8").replace(" ", "")
+    assert ".pill:has(input:focus-visible)" in css
+    assert ".pill:focus-within" in css  # fallback for engines without :has()
 
 
 # ============================================================================ focus-visible

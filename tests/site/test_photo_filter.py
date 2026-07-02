@@ -152,7 +152,8 @@ def test_card_img_uses_card_variant_with_srcset(root: Path) -> None:
 
     assert 'src="/photos/a.jpg.card.webp"' in html
     assert 'srcset="/photos/a.jpg.card.webp 640w, /photos/a.jpg.detail.webp 1280w"' in html
-    assert 'sizes="(max-width:700px) 100vw, 33vw"' in html
+    # W5-12: sizes по РЕАЛЬНЫМ брейкпоинтам сетки .cards (620/980, site.css), не 700px/33vw
+    assert 'sizes="(max-width:620px) 100vw, (max-width:980px) 50vw, 33vw"' in html
     assert 'loading="lazy"' in html
     assert 'decoding="async"' in html
     assert 'width="800"' in html and 'height="600"' in html

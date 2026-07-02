@@ -6,10 +6,18 @@
   <div class="sec-head">
     <div>
       <div class="idx">каталог</div>
-      <h2>Квартиры в Белграде</h2>
+      {# W5-27: титул страницы — семантический h1 (outline начинался с h2); стиль прежнего
+         h2 сохраняет .sec-head h1 в site.css — типографика не меняется. #}
+      <h1>Квартиры в Белграде</h1>
     </div>
     <p style="max-width:34ch;color:var(--ink-2);font-size:var(--step--1)">ВНЖ и белый картон — сразу в фильтрах. Снятые квартиры скрыты по умолчанию — включите «показать снятые», чтобы увидеть их.</p>
   </div>
+
+  {# W5-22: СТАБИЛЬНЫЙ live-регион счётчика — ВНЕ hx-свопа. #results заменяется целиком
+     (outerHTML), а вставку нового узла с role=status SR озвучивают непоследовательно; этот
+     узел персистирует, его текст обновляет hx-swap-oob из _results.html. sr-only: визуальный
+     счётчик остаётся в .results-head. #}
+  <p id="results-status" class="sr-only" role="status" aria-live="polite">{{ total }} {{ 'квартира' if total == 1 else 'квартир' }}</p>
 
   <div class="catalog-grid">
     {# filter rail — ВНЖ + белый картон prominent on top #}

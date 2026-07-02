@@ -28,7 +28,10 @@
         {% set detail_src = ([orig]|map('photo_v', 'detail')|first) if has_pv else orig %}
         {% set dims = ([orig]|map('photo_dims')|first) if has_pv else none %}
         <img src="{{ card_src }}"
-             {%- if card_src != orig %} srcset="{{ card_src }} 640w{% if detail_src != orig %}, {{ detail_src }} 1280w{% endif %}" sizes="(max-width:700px) 100vw, 33vw"{% endif %}
+             {#- W5-12: sizes по РЕАЛЬНЫМ брейкпоинтам .cards (site.css: 1 кол ≤620, 2 кол ≤980,
+                 дальше 3): прежний «700px/33vw» на 620-700px тянул detail (2× ширины, ~3-4×
+                 байтов), а на 701-980px недо-резолвил (33vw при фактических ~50vw). -#}
+             {%- if card_src != orig %} srcset="{{ card_src }} 640w{% if detail_src != orig %}, {{ detail_src }} 1280w{% endif %}" sizes="(max-width:620px) 100vw, (max-width:980px) 50vw, 33vw"{% endif %}
              alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" decoding="async" width="{{ dims[0] if dims else 600 }}" height="{{ dims[1] if dims else 400 }}">
       {% endif %}
       <div class="flag">

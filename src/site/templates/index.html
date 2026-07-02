@@ -50,7 +50,20 @@
       {% if week %}
       <a class="hero-photo" href="/apt/{{ week.id }}">
         {% if week.photos %}
-          <img src="{{ week.photos[0] }}" alt="Квартира недели — {{ week.rooms }} в районе {{ week.district }}" width="640" height="800" loading="lazy">
+          {# W5-10 (§P.2-паттерн из apt.html-галереи): hero-фото — вероятный LCP мобильной
+             главной (.hero-side{order:-1} ≤780px), сырой оригинал (p95 ~1.4 MB) с loading=lazy
+             депприоритизировал LCP-элемент. detail-вариант + srcset ПРИ варианте (объявлять
+             640w на оригинале — врать браузеру) + width/height оригинала из манифеста (CLS→0)
+             + eager/fetchpriority=high. Динамика map + `is filter` вместо `|photo_v` — как в
+             _card.html: plain-env render-тесты собирают Environment без наших фильтров. #}
+          {% set orig = week.photos[0] %}
+          {% set has_pv = 'photo_v' is filter %}
+          {% set card_src = ([orig]|map('photo_v', 'card')|first) if has_pv else orig %}
+          {% set detail_src = ([orig]|map('photo_v', 'detail')|first) if has_pv else orig %}
+          {% set dims = ([orig]|map('photo_dims')|first) if has_pv else none %}
+          <img src="{{ detail_src }}"
+               {%- if detail_src != orig %} srcset="{% if card_src != orig %}{{ card_src }} 640w, {% endif %}{{ detail_src }} 1280w" sizes="(max-width:780px) 100vw, 45vw"{% endif %}
+               alt="Квартира недели — {{ week.rooms }} в районе {{ week.district }}" width="{{ dims[0] if dims else 640 }}" height="{{ dims[1] if dims else 800 }}" loading="eager" fetchpriority="high" decoding="async">
         {% endif %}
         <span class="ph-note">квартира недели</span>
         <div class="tagline">
