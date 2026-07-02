@@ -10,7 +10,7 @@ Notes on portability:
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import (
@@ -18,6 +18,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -330,6 +331,12 @@ class Lead(Base):
     )
     source: Mapped[str] = mapped_column(Text, default="site", server_default="site", nullable=False)
     status: Mapped[str] = mapped_column(Text, default="new", server_default="new", nullable=False)
+    # Stage T attribution — снимок первого касания (persisted UTM/referrer из sessionStorage)
+    # на момент отправки формы; NULL для прямых заходов и всех leads, созданных до 0010.
+    utm_source: Mapped[str | None] = mapped_column(Text, nullable=True)
+    utm_medium: Mapped[str | None] = mapped_column(Text, nullable=True)
+    utm_campaign: Mapped[str | None] = mapped_column(Text, nullable=True)
+    referrer: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class Subscription(Base):
@@ -409,3 +416,57 @@ class SubscriptionMatch(Base):
     )
 
     subscription: Mapped[Subscription] = relationship(back_populates="matches")
+
+
+class SiteEvent(Base):
+    """Stage T — append-only телеметрия публичного сайта (DATA_CONTRACT-T §A.1/§A.3).
+
+    Единственная write-таблица аналитики: сайт пишет pageview/lead_submit/subscribe_submit
+    через scoped writer и НИКОГДА не читает её в request-цикле. Приватность — в самой схеме:
+    `visitor` = sha256(daily_salt ‖ ip ‖ ua)[:16], сырые IP/UA не хранятся никогда, а суточная
+    соль делает уников несвязываемыми между днями по построению.
+    """
+
+    __tablename__ = "site_events"
+    __table_args__ = (
+        # §A.1: (ts) — retention/окна, (type, ts) — счётчики по типу, (apt_id, ts) — per-квартира.
+        Index("ix_site_events_ts", "ts"),
+        Index("ix_site_events_type_ts", "type", "ts"),
+        Index("ix_site_events_apt_id_ts", "apt_id", "ts"),
+        # Строгий AUTOINCREMENT: retention удаляет старые строки — id не переиспользуются.
+        {"sqlite_autoincrement": True},
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    type: Mapped[str] = mapped_column(Text, nullable=False)  # 'pageview'|'lead_submit'|'subscribe_submit'
+    # Нормализованный путь: '/apt/{id}' хранится как path='/apt' + apt_id (кардинальность путей — O(1)).
+    path: Mapped[str] = mapped_column(Text, nullable=False)
+    # Намеренно БЕЗ FK на site_listings: событие — исторический факт; снятие квартиры с сайта
+    # не должно ни трогать телеметрию, ни блокироваться ею.
+    apt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visitor: Mapped[str] = mapped_column(String(16), nullable=False)
+    referrer: Mapped[str | None] = mapped_column(Text, nullable=True)  # только внешний, ≤200
+    utm_source: Mapped[str | None] = mapped_column(Text, nullable=True)  # ≤100, [A-Za-z0-9._-]
+    utm_medium: Mapped[str | None] = mapped_column(Text, nullable=True)  # ≤100
+    utm_campaign: Mapped[str | None] = mapped_column(Text, nullable=True)  # ≤100
+    # Ботов пишем (дёшево), а исключают их агрегаты — так эвристику можно менять задним числом.
+    is_bot: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=False
+    )
+
+
+class SiteStatsDaily(Base):
+    """Stage T — nightly-агрегат (DATA_CONTRACT-T §A.2): одна строка на (day, metric, key).
+
+    Композитный PK — таргет идемпотентного upsert-а: nightly-rollup пересчитывает вчера+сегодня
+    сколько угодно раз без дублей. `key` = измерение метрики ('' если не применимо — SQLite
+    не сравнивает NULL-ы в PK так, как нам нужно). Агрегаты живут вечно; raw ротируется.
+    """
+
+    __tablename__ = "site_stats_daily"
+
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    metric: Mapped[str] = mapped_column(Text, primary_key=True)  # см. §A.2 (views_path, uniques, …)
+    key: Mapped[str] = mapped_column(Text, primary_key=True, default="")
+    value: Mapped[int] = mapped_column(Integer, nullable=False)
