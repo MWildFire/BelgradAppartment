@@ -185,11 +185,13 @@
   <div class="an-tables">
     <div>
       <div class="an-block-head">
-        <h2>Топ-квартиры</h2>
+        {# id + aria-labelledby: SR-имя таблицы — без связи скринридер объявляет
+           безымянную «table, 6 columns» #}
+        <h2 id="an-h-top-apts">Топ-квартиры</h2>
         <span class="an-range">по просмотрам · ссылка — на публичную страницу</span>
       </div>
       {% if top_apts %}
-      <table>
+      <table aria-labelledby="an-h-top-apts">
         <thead>
           <tr>
             <th scope="col">Квартира</th>
@@ -220,11 +222,11 @@
 
     <div>
       <div class="an-block-head">
-        <h2>Источники</h2>
+        <h2 id="an-h-sources">Источники</h2>
         <span class="an-range">utm_source и домены referrer</span>
       </div>
       {% if sources %}
-      <table>
+      <table aria-labelledby="an-h-sources">
         <thead>
           <tr>
             <th scope="col">Тип</th>

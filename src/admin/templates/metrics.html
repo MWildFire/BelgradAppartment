@@ -35,7 +35,14 @@
   </tbody>
 </table>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
+{# SRI: компрометация CDN не должна исполняться в аутентифицированной админ-сессии
+   (см. комментарий у htmx в base.html). Именно chart.umd.js, НЕ .min.js: пакет npm
+   минифицированного файла не содержит — .min.js у jsdelivr генерируется на лету
+   (сам jsdelivr запрещает SRI для таких), а chart.umd.js уже минифицирован; sha384
+   от фактического файла, sha256 сверен с хэшом npm-тарбола из API data.jsdelivr.com. #}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.js"
+        integrity="sha384-4W8gMhOYqk0FPg9sAMkb3g/P2fXtzbUyDUUgMlA1EEig8z/U/13EYUjErc1H382b"
+        crossorigin="anonymous"></script>
 <script>
   const chartData = {{ chart | tojson }};
   new Chart(document.getElementById('metrics-chart'), {

@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from src.admin.analytics import TOP_LIMIT, build_analytics
 from src.admin.app import create_app
 from src.db.models import (
+    DailyMetrics,
     InboundPost,
     Listing,
     Match,
@@ -433,3 +434,89 @@ def test_analytics_focus_visible_and_today_dot_polish(client, db):
     # точка «сегодня»: circle в svg c preserveAspectRatio="none" эллипсится —
     # должен быть нуль-длинный path с non-scaling-stroke
     assert "<circle" not in r.text
+
+
+# --------------------------------------------------- wave-5 review fixes (SRI / имена таблиц / контраст)
+
+
+async def test_admin_cdn_scripts_pin_sri(client, db):
+    # Компрометация CDN (unpkg/jsdelivr) не должна давать исполняемый JS в аутентифицированной
+    # админ-сессии: CSRF-токен отрендерен прямо в DOM (hx-headers на <body>). Каждый внешний
+    # <script> обязан пиннить integrity + crossorigin — как Leaflet на публичном сайте.
+    # chart.js рендерится только в непустой ветке /metrics — сеем снапшот.
+    async with db() as s:
+        s.add(
+            DailyMetrics(
+                snapshot_date="2026-07-01",
+                platform="nekretnine",
+                active_count=1,
+                no_photo_count=0,
+            )
+        )
+        await s.commit()
+    for path in ("/analytics", "/metrics"):
+        r = client.get(path, headers=AUTH)
+        assert r.status_code == 200
+        ext = re.findall(r'<script\b[^>]*\bsrc="https?://[^>]*>', r.text)
+        assert ext, f"{path}: внешних <script src> не найдено — тест не проверяет то, что должен"
+        for tag in ext:
+            assert re.search(r'integrity="sha384-[A-Za-z0-9+/]+=*"', tag), (path, tag)
+            assert 'crossorigin="anonymous"' in tag, (path, tag)
+
+
+async def test_analytics_tables_have_programmatic_names(client, db):
+    # SR-имя таблиц: без caption/aria-labelledby скринридер объявляет «table, 6 columns»
+    # без имени. Связываем таблицы с их существующими h2 через aria-labelledby.
+    apt = await _seed_apt(db)
+    await _seed_event(db, path="/apt", apt_id=apt)
+    await _seed_event(db, visitor="z", utm_source="tg")
+    r = client.get("/analytics", headers=AUTH)
+    assert r.status_code == 200
+    tables = re.findall(r"<table\b[^>]*>", r.text)
+    assert len(tables) == 2  # «Топ-квартиры» и «Источники»
+    for tag in tables:
+        m = re.search(r'aria-labelledby="([^"]+)"', tag)
+        assert m, f"таблица без aria-labelledby: {tag}"
+        # ссылка обязана вести на реально существующий id (иначе имя молча теряется)
+        assert f'id="{m.group(1)}"' in r.text
+
+
+# ---- WCAG-контраст бейджей base.html — та же формула, что в tests/site/test_a11y.py
+
+
+def _wcag_ratio(fg: str, bg: str) -> float:
+    def lum(hexs: str) -> float:
+        def lin(c: int) -> float:
+            x = c / 255
+            return x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4
+
+        h = hexs.lstrip("#")
+        r, g, b = (int(h[i : i + 2], 16) for i in (0, 2, 4))
+        return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+
+    la, lb = lum(fg), lum(bg)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_admin_status_badges_meet_aa_contrast():
+    # Бейджи 12px («на сайте», «пора убрать», платформа) — смысловой текст списков
+    # /published и /queue: пары текст/фон обязаны давать AA 4.5:1. Пиним вычисленный
+    # контраст, чтобы регрессия палитры ловилась тестом, а не глазами.
+    css = (
+        Path(__file__).resolve().parents[1] / "src" / "admin" / "templates" / "base.html"
+    ).read_text(encoding="utf-8")
+    tokens = dict(re.findall(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})", css))
+
+    def resolve(value: str) -> str:
+        m = re.match(r"var\(--([a-z0-9-]+)\)", value.strip())
+        return tokens[m.group(1)] if m else value.strip()
+
+    for name in ("green", "yellow", "red"):
+        rule = re.search(
+            rf"\.badge-{name}\s*\{{\s*background:\s*([^;]+);\s*color:\s*([^;}}]+)", css
+        )
+        assert rule, f".badge-{name} не найден в base.html"
+        bg, fg = resolve(rule.group(1)), resolve(rule.group(2))
+        ratio = _wcag_ratio(fg, bg)
+        assert ratio >= 4.5, f"badge-{name}: {fg} на {bg} = {ratio:.2f}:1 < 4.5 (AA, 12px)"

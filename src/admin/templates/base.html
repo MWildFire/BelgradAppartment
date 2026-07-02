@@ -4,7 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}otz-rent-finder{% endblock %}</title>
-  <script src="https://unpkg.com/htmx.org@2.0.3" defer></script>
+  <!-- SRI: CSRF-токен лежит прямо в DOM (hx-headers на body), поэтому компрометация CDN =
+       произвольные мутации от имени админа; пиним sha384 фактического файла (прямой dist-URL
+       вместо редиректа unpkg). CDN compromise must fail closed, not run in the admin session. -->
+  <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"
+          integrity="sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq"
+          crossorigin="anonymous" defer></script>
   <script>
     function copyPost(matchId) {
       const ta = document.getElementById('post-text-' + matchId);
@@ -29,6 +34,13 @@
       --green: #1aa066;
       --red: #c63a3a;
       --yellow: #d68a06;
+      /* производные ТОЛЬКО для текста 12px-бейджей: базовые тона на светлых подложках дают
+         2.50–4.22:1 (< AA 4.5:1); тот же оттенок (hue/sat сохранены), темнее до ≥4.5:1.
+         Derived badge inks — same hue darkened to clear WCAG AA on the light badge fills:
+         #966104/#fff1cc 4.67:1, #147b4f/#dff5e9 4.62:1, #bb3636/#fde2e2 4.64:1. */
+      --green-ink: #147b4f;
+      --red-ink: #bb3636;
+      --yellow-ink: #966104;
       --shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
     * { box-sizing: border-box; }
@@ -49,9 +61,9 @@
     .card-row { display: grid; grid-template-columns: 320px 1fr; gap: 20px; }
     @media (max-width: 720px) { .card-row { grid-template-columns: 1fr; } }
     .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; background: #eef1f5; color: var(--muted); }
-    .badge-green { background: #dff5e9; color: var(--green); }
-    .badge-yellow { background: #fff1cc; color: var(--yellow); }
-    .badge-red { background: #fde2e2; color: var(--red); }
+    .badge-green { background: #dff5e9; color: var(--green-ink); }
+    .badge-yellow { background: #fff1cc; color: var(--yellow-ink); }
+    .badge-red { background: #fde2e2; color: var(--red-ink); }
     .meta { color: var(--muted); font-size: 12px; margin-bottom: 8px; display: flex; gap: 14px; flex-wrap: wrap; }
     .photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; max-width: 320px; }
     .photos img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: #eaeaea; }
