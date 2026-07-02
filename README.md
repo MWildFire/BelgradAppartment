@@ -82,7 +82,7 @@ otz stats                   # текущее состояние БД
 otz admin                   # запустить веб-просмотр (FastAPI)
 ```
 
-## Публичный веб-каталог (этапы W / W2 / S)
+## Публичный веб-каталог (этапы W / W2 / S / T)
 
 Второе FastAPI+Jinja-приложение (`src/site/`) — публичный каталог для клиентов @RentBelgrad. Читает
 **ту же SQLite read-only** и показывает только **отобранные Дарьей** квартиры (опубличенные в канале),
@@ -98,6 +98,19 @@ repo подготовлен (`deploy/cloudflare/RUNBOOK.md`, `scripts/cf_ufw_all
 live-выкатка по раннбуку. Ноль миграций (head остаётся 0009). На проде слушает `127.0.0.1:8001` за Caddy (авто-TLS);
 фото отдаёт сам Caddy из `data/inbound` (см. [`deploy/`](deploy/): `otz-site.service`, `Caddyfile`,
 `env.additions.txt`). Обоснование архитектуры — [`docs/web/ARCHITECTURE.md`](docs/web/ARCHITECTURE.md).
+
+**Stage T «Insight & Integrity»** (`docs/web/SESSION_HANDOFF_2026-07-02.md`; ✅ код готов+отревьюен,
+⏳ деплой ждёт joint-go): **первопартийная аналитика без cookies** (server-side в той же SQLite —
+события `site_events`, ночной rollup в `site_stats_daily`, visitor-хэш из суточной соли, ни IP ни UA
+сырьём; дашборд `/admin/analytics` со спарклайнами, топ-квартирами по CTR и источниками; kill-switch
+`SITE_ANALYTICS_ENABLED`). **Приватность карты:** `/api/map.json` теперь снэпает координаты через
+`fuzz_coords` (~100 м) — точный адрес здания не покидает БД ни на одной публичной поверхности
+(постоянный e2e-гард). **webp-фото:** варианты `card`/`detail` + `<picture>`/srcset + `photo_manifest.json`
+(CLS→0, LCP на мобиле), `otz photos-backfill`. **Гигиена данных:** гард `_heal_urls`, `otz purge-inactive`
+с архивом (в этапе — только dry-run), честный `otz stats` (active/inactive), `dupes-report` в nightly.
+Миграция **0010** (`site_events`, `site_stats_daily`, `leads.utm_*`). Новые env — `SITE_ANALYTICS_*`
+(см. [`docs/web/env.additions-t.txt`](docs/web/env.additions-t.txt)). Ноль новых зависимостей.
+План: [`docs/superpowers/plans/2026-07-02-insight-and-integrity.md`](docs/superpowers/plans/2026-07-02-insight-and-integrity.md).
 
 ```bash
 # применить миграции (head 0006 заводит site_listings + leads)

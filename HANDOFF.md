@@ -10,9 +10,69 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.-6 Stage T «Insight & Integrity» (02.07.2026) — ✅ КОД ГОТОВ + ОТРЕВЬЮЕН · ⏳ ДЕПЛОЙ ЖДЁТ joint-go
+
+> **⭐ САМЫЙ СВЕЖИЙ handoff — начни отсюда.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-07-02.md`](docs/web/SESSION_HANDOFF_2026-07-02.md).
+> Ветка **`feature/insight-and-integrity`** от `main` @ **`009d229`**. **29 коммитов** (`ce21ea5..5c2b42f`),
+> **79 файлов, +8828 / −139**. Гейт зелёный: **юниты 1055 / e2e 52** (гоняются **раздельно** — комбинированный
+> прогон невозможен by design, playwright оставляет running-loop). Alembic head **0010** (одна миграция).
+> Ноль новых зависимостей. Ревью Wave 5 (10 линз, состязательная верификация): вердикт **SHIP**
+> (`docs/review/stage-t/REVIEW_FINDINGS.md`). План: `docs/superpowers/plans/2026-07-02-insight-and-integrity.md`.
+
+Stage T = аналитика + приватность + фото + гигиена данных поверх Stage S. Пять рычагов «летим вслепую /
+дыра приватности карты / фото-мегабайты / трупы в БД / большое ревью»:
+
+- **Wave 1 · Privacy & Hygiene.** Фуззи `/api/map.json` (`readmodel.map_points` снэпает `lat/lon` через
+  `fuzz_coords` ~100 м **до** сериализации; кластеры по снэпнутым точкам) + постоянный e2e-гард
+  `_assert_no_precise_coords`. Гард `_heal_urls` (только `is_active=1` + canonical-resolves; escape-hatch
+  `--include-inactive`). `otz purge-inactive --older-than N [--dry-run]` (архив `data/archive/*.jsonl.gz`,
+  FK-отказ для строк из `matches`/`site_listings`, TOCTOU-гард; **в этапе — только dry-run**, D5). Честный
+  `otz stats` (разбивка active/inactive). `dupes-report` как fault-isolated nightly-шаг (report-only).
+- **Wave 2 · Analytics core.** Миграция **0010** (`site_events`, `site_stats_daily`,
+  `leads.utm_source/medium/campaign/referrer`). `src/site/analytics.py::record_event` — хуки в 7 GET-роутах
+  аллоулиста (`/`, `/catalog`, `/apt/{id}`, `/map`, `/calculator`, `/vnj`, `/how`) через `BackgroundTasks`;
+  `visitor = sha256(daily_salt‖ip‖ua)[:16]`, **сырые IP/UA не пишутся никогда**; бот-эвристика по UA;
+  HX-Request/не-2xx скип; **fail-closed** на пустой соли (события не пишутся + один warn); kill-switch
+  `SITE_ANALYTICS_ENABLED`; **любая ошибка глотается — страница не 5xx-ит** (тест). Rollup/retention в
+  nightly (идемпотентный upsert, `_rolled` только финальным дням `< today`, догон `unrolled_days()`,
+  retention raw 90д только для помеченных дней). First-touch utm-атрибуция (`static/js/utm.js` + hidden-поля
+  форм lead/subscribe + серверный фоллбэк; события `lead_submit`/`subscribe_submit` после коммита).
+- **Wave 3 · Admin dashboard.** `GET /admin/analytics?days=7|30` — карточки (views/uniques/leads/conv%),
+  inline-SVG спарклайны, топ-квартиры с CTR, источники (utm/referrer); токены Belgrade Editorial, SRI для
+  CDN-скриптов, AA-контраст. Колонка «просмотров 7д» в admin-списке публичных листингов (T3-2).
+- **Wave 4 · Photo pipeline.** `src/site/photos.py` — webp `card` (640w) / `detail` (1280w) q82,
+  `photo_manifest.json` в **РОДИТЕЛЕ** `photos_root` (вне публичного `/photos`, скрыт Caddy `hide`),
+  EXIF-transpose + RGBA/LA/P/CMYK, кросс-процессный `flock`, инкрементальный флаш каждые 100. `otz
+  photos-backfill` (`--dry-run`, `--limit`, идемпотентен), publish-hook. Jinja `photo_v`/`photo_dims` +
+  `<picture>`/srcset (CLS→0, фоллбэк на оригинал без манифеста); `img-fallback.js` (вынос onerror).
+  Caddyfile: immutable `/photos/*` + hide манифеста + готовность снять `unsafe-inline` из `script-src`.
+- **Wave 5 · Большое ревью.** 10 линз read-only по всему репо → 54 находки → 40 подтверждено / 5 опровергнуто
+  (0 blocker, 14 major) → TDD-фиксы (6 fix-коммитов) → **SHIP**. 8 minor докс-дрейфа синхронизированы в Wave 6,
+  3 minor — в бэклог.
+
+**Новая поверхность (для деплоя):**
+- **Миграция 0010** (`20260702_0010_analytics.py`) — единственная новая; downgrade полноценный.
+- **Новые модули:** `src/site/analytics.py`, `src/site/photos.py`, `src/admin/analytics.py`.
+- **Новый роут:** `GET /admin/analytics` (админ-app; карточки/спарклайны/топ/источники).
+- **Новые статики:** `static/js/{utm,img-fallback,subscribe-form}.js`; `src/admin/templates/analytics.html`.
+- **Новые env-ключи:** `SITE_ANALYTICS_ENABLED=true`, `SITE_ANALYTICS_SALT=` (⚠️ пустая при enabled → fail-closed
+  no-op; генерить на сервере `openssl rand -hex 32`, только `/opt/otz/.env`), `SITE_ANALYTICS_RAW_RETENTION_DAYS=90`
+  (см. `docs/web/env.additions-t.txt`).
+- **Derived data на VPS:** webp-варианты + `photo_manifest.json` в git/rsync НЕ участвуют (`data/` исключена) —
+  раннбук Wave 6 гоняет `otz photos-backfill` **на сервере** (в фоне/tmux), манифест на проде =
+  `/opt/otz/data/photo_manifest.json`.
+
+**⚠️ Что ещё НЕ сделано (совместные шаги Дмитрия):**
+- **Деплой (Wave 6)** — по раннбуку плана §2 Wave 6; каждый ssh-шаг подтверждается. Ждёт `go`.
+- **Боевой `purge-inactive`** — только после чтения dry-run отчёта (**26 400** inactive, не ~8442 из плана);
+  в этапе — только dry-run (D5), бэклог `docs/BACKLOG.md` #3.
+- **Cloudflare Wave 3b** остаётся в бэклоге #1 (в этап T не входит, решение 02.07).
+
+---
+
 ### 0.-5 Stage S «Showcase & Shield» (24.06.2026) — 🚀 КОД В ПРОДЕ · ⏳ CF-выкатка ждёт
 
-> **⭐ САМЫЙ СВЕЖИЙ handoff — начни отсюда.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-24.md`](docs/web/SESSION_HANDOFF_2026-06-24.md).
+> Полная сессия: [`docs/web/SESSION_HANDOFF_2026-06-24.md`](docs/web/SESSION_HANDOFF_2026-06-24.md).
 > `main` @ **`8626e1a`** (Stage R + Stage S смёржены, ff), в синхроне с `origin`. Прод @ alembic **`0009`**.
 > **Проверено вживую 2026-07-01** (стабильно ~неделю): `otz-monitor NRestarts=0`, ночной прогон чистый,
 > **cityexpert live — 1231 активных**, site 58 публичных (X1 автопубликует), listings 43k→49.5k.

@@ -448,6 +448,36 @@ ADR + контракты: `docs/web/ARCHITECTURE.md`, `docs/web/DATA_CONTRACT.md
 - [x] Новые env: `SITE_TELEGRAM_URL`, `SITE_LEAD_EMAIL_TO`, `SITE_SMTP_HOST/PORT/USER/PASSWORD/FROM/STARTTLS`.
 - [x] Тесты 506 passed + 19 skipped; e2e 18. Деплой 21.06 (бэкап `otz-2026-06-21-1245-pre-stagew2.db`), smoke зелёный, боевая заявка дошла (e-mail без ошибок).
 
+### Этап T — «Insight & Integrity» (02.07.2026) — ✅ код готов + отревьюен, ⏳ деплой ждёт joint-go
+План: `docs/superpowers/plans/2026-07-02-insight-and-integrity.md`; решения: `docs/web/DECISIONS-T.md`;
+дельта контракта: `docs/web/DATA_CONTRACT-T.md` (влита в `docs/web/DATA_CONTRACT.md` §9); ревью:
+`docs/review/stage-t/REVIEW_FINDINGS.md` (вердикт **SHIP**); итоги: `HANDOFF.md` §0.-6,
+`docs/web/SESSION_HANDOFF_2026-07-02.md`. Кратко:
+- [x] **Wave 1 · Privacy & Hygiene:** фуззи `/api/map.json` (`readmodel.map_points` снэпает координаты
+      `fuzz_coords` ~100 м до сериализации) + постоянный e2e-гард `_assert_no_precise_coords`; гард
+      `_heal_urls` (только `is_active=1` + canonical-resolves, escape-hatch `--include-inactive`);
+      `otz purge-inactive --older-than N [--dry-run]` (архив `data/archive/*.jsonl.gz`, FK-отказ, TOCTOU-гард;
+      **в этапе — только dry-run**, D5); честный `otz stats` (active/inactive); `dupes-report` fault-isolated в nightly.
+- [x] **Wave 2 · Analytics:** `src/site/analytics.py::record_event` — хуки в 7 GET-роутах аллоулиста через
+      `BackgroundTasks`; `visitor=sha256(daily_salt‖ip‖ua)[:16]`, **сырые IP/UA не пишутся**; бот-эвристика,
+      HX-скип, **fail-closed** на пустой соли, kill-switch `SITE_ANALYTICS_ENABLED`, **сбой аналитики ≠ 5xx**.
+      Rollup/retention nightly (идемпотентный upsert, `_rolled` только финальным дням, догон `unrolled_days`,
+      retention raw 90д). First-touch utm-атрибуция (`static/js/utm.js` + hidden-поля + серверный фоллбэк;
+      события `lead_submit`/`subscribe_submit` после коммита).
+- [x] **Миграция 0010** (`20260702_0010_analytics`): `site_events`, `site_stats_daily`,
+      `leads.utm_source/utm_medium/utm_campaign/referrer` (nullable). Единственная миграция этапа; downgrade полноценный.
+- [x] **Wave 3 · Admin:** `GET /admin/analytics?days=7|30` — карточки (views/uniques/leads/conv%), inline-SVG
+      спарклайны, топ-квартиры с CTR, источники; токены Belgrade Editorial, SRI CDN-скриптов, AA-контраст;
+      колонка «просмотров 7д» в admin-списке публичных листингов.
+- [x] **Wave 4 · Photo:** `src/site/photos.py` — webp `card`(640w)/`detail`(1280w) q82, `photo_manifest.json`
+      в **родителе** `photos_root` (скрыт Caddy `hide`), EXIF-transpose, кросс-процессный `flock`, инкрементальный
+      флаш; `otz photos-backfill` + publish-hook; Jinja `photo_v`/`photo_dims` + `<picture>`/srcset (CLS→0,
+      фоллбэк без манифеста); `img-fallback.js`; Caddyfile immutable `/photos/*` + CSP-готовность снять `unsafe-inline`.
+- [x] **Wave 5 · Ревью:** 10 линз по всему репо → 40 подтв. находок (0 blocker, 14 major) → TDD-фиксы (6 коммитов)
+      → вердикт **SHIP**. Гейт: **юниты 1055 / e2e 52** (раздельно), **ноль новых зависимостей**.
+- [ ] **Wave 6 · Деплой** — по раннбуку плана §2 (backup → rsync → миграция 0010 → `photos-backfill` на сервере
+      → nightly-подвес → рестарт → smoke); совместно с Дмитрием, ждёт `go`. Боевой purge и Cloudflare — в бэклоге.
+
 ---
 
 ## 8. Риски и открытые вопросы
