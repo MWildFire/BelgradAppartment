@@ -152,7 +152,9 @@ def test_subscription_matches_unique_guard(tmp_path: Path) -> None:
 def test_downgrade_0009_drops_tables(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    # Pin to 0009 (not "head"): 0010+ add new heads, so "head" + "-1" would no longer land
+    # on 0008. Same convention as the 0005/0007/0008 downgrade tests.
+    command.upgrade(cfg, "0009_subscriptions")
     command.downgrade(cfg, "-1")
 
     con = sqlite3.connect(db_path)

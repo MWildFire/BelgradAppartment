@@ -12,6 +12,7 @@ Two readmodel styles, both exercised per the plan:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -446,7 +447,8 @@ def test_lead_valid_hx_returns_lead_ok_partial(client, monkeypatch):
     async def fake_create(payload, *, database_url=None):
         received["payload"] = payload
         received["database_url"] = database_url
-        return object()  # stand-in for a saved Lead
+        # stand-in for a saved Lead — T2-3: роут читает validated site_listing_id для события
+        return SimpleNamespace(site_listing_id=None)
 
     monkeypatch.setattr(routes, "create_lead", fake_create)
     r = client.post(
@@ -465,7 +467,7 @@ def test_lead_valid_hx_returns_lead_ok_partial(client, monkeypatch):
 
 def test_lead_valid_non_hx_redirects(client, monkeypatch):
     async def fake_create(payload, *, database_url=None):
-        return object()
+        return SimpleNamespace(site_listing_id=None)  # stand-in for a saved Lead (T2-3)
 
     monkeypatch.setattr(routes, "create_lead", fake_create)
     r = client.post("/lead", data=_csrf_form(name="A", contact="tg"), follow_redirects=False)
@@ -478,7 +480,7 @@ def test_lead_forwards_site_listing_id_to_create_lead(client, monkeypatch):
 
     async def fake_create(payload, *, database_url=None):
         received["payload"] = payload
-        return object()
+        return SimpleNamespace(site_listing_id=None)  # stand-in for a saved Lead (T2-3)
 
     monkeypatch.setattr(routes, "create_lead", fake_create)
     r = client.post(
@@ -495,7 +497,7 @@ def test_lead_blank_site_listing_id_is_none(client, monkeypatch):
 
     async def fake_create(payload, *, database_url=None):
         received["payload"] = payload
-        return object()
+        return SimpleNamespace(site_listing_id=None)  # stand-in for a saved Lead (T2-3)
 
     monkeypatch.setattr(routes, "create_lead", fake_create)
     # general form (homepage) submits an empty hidden field — must not break, id stays None.
@@ -508,7 +510,7 @@ def test_lead_non_int_site_listing_id_is_none(client, monkeypatch):
 
     async def fake_create(payload, *, database_url=None):
         received["payload"] = payload
-        return object()
+        return SimpleNamespace(site_listing_id=None)  # stand-in for a saved Lead (T2-3)
 
     monkeypatch.setattr(routes, "create_lead", fake_create)
     client.post("/lead", data=_csrf_form(name="A", contact="t", site_listing_id="abc"))
@@ -568,7 +570,7 @@ def test_lead_validation_error_is_400(client, monkeypatch):
 
 def test_lead_rate_limit_blocks_after_max(client, monkeypatch):
     async def fake_create(payload, *, database_url=None):
-        return object()
+        return SimpleNamespace(site_listing_id=None)  # stand-in for a saved Lead (T2-3)
 
     monkeypatch.setattr(routes, "create_lead", fake_create)
     from src.config import get_settings
