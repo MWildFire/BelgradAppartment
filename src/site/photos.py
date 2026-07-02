@@ -1,10 +1,12 @@
 """Photo variants + manifest for the public site (Stage T, contract §P.1/§P.2).
 
 WRITE side: webp-варианты card (640w) / detail (1280w) рядом с оригиналом
-(`<orig>.card.webp`) + `photo_manifest.json` в корне photos_root. Всё это —
-derived data на VPS: в git/rsync не участвует (`data/` исключена), недостающее
-добирается `otz photos-backfill`. Точки генерации: publish-hook админки
-(src/admin/publish.py) и CLI backfill (src/cli.py).
+(`<orig>.card.webp`) + `photo_manifest.json` в РОДИТЕЛЕ photos_root (сам root
+целиком раздаётся Caddy, а манифест индексирует ВСЕ inbound-фото — публичным
+быть не должен; ревью Wave 5). Всё это — derived data на VPS: в git/rsync не
+участвует (`data/` исключена), недостающее добирается `otz photos-backfill`.
+Точки генерации: publish-hook админки (src/admin/publish.py) и CLI backfill
+(src/cli.py).
 
 READ side (для Jinja-фильтра T4-2): `variant_for()` / `dims_for()` поверх ленивого
 кэша манифеста с mtime-инвалидацией — backfill на живом сервере подхватывается без
@@ -14,6 +16,7 @@ READ side (для Jinja-фильтра T4-2): `variant_for()` / `dims_for()` п�
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -24,7 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from src.config import PROJECT_ROOT, get_settings
 
@@ -51,6 +54,21 @@ _GENERATED_SUFFIXES = tuple(f".{kind}.webp" for kind in VARIANT_WIDTHS)
 # перечисляем явно (гигапиксельная бомба в inbound не должна валить backfill).
 _BROKEN_IMAGE_ERRORS = (OSError, UnidentifiedImageError, ValueError, Image.DecompressionBombError)
 
+# EXIF-тег Orientation (274/0x0112): телефонные фото хранят «сырые» пиксели + флаг поворота.
+_EXIF_ORIENTATION = 0x0112
+# Значения 5-8 — transpose-семейство (повороты на 90°): визуальные стороны меняются местами.
+_EXIF_SWAPS_DIMS = frozenset({5, 6, 7, 8})
+
+
+def _webp_encodable(im: Image.Image) -> Image.Image:
+    """Режим, который webp-энкодер понимает (ревью Wave 5). Альфа (RGBA/LA/P-с-transparency)
+    сохраняется — webp её умеет; CMYK/YCbCr и прочая экзотика без альфы → RGB."""
+    if im.mode in ("RGB", "RGBA"):
+        return im
+    if im.mode in ("LA", "PA") or (im.mode == "P" and "transparency" in im.info):
+        return im.convert("RGBA")
+    return im.convert("RGB")
+
 
 def photos_root() -> Path:
     """Резолвленный SITE_PHOTOS_ROOT — единая точка для write- и read-стороны."""
@@ -58,7 +76,11 @@ def photos_root() -> Path:
 
 
 def manifest_path(root: Path) -> Path:
-    return root / MANIFEST_NAME
+    """РОДИТЕЛЬ root, не сам root: photos_root целиком раздаётся Caddy (/photos/*), а манифест —
+    машинночитаемый индекс ВСЕХ inbound-фото (включая неопубликованные квартиры), публиковать
+    его нельзя (ревью Wave 5). На проде: /opt/otz/data/photo_manifest.json при
+    root=/opt/otz/data/inbound — Caddy этот каталог не раздаёт."""
+    return root.parent / MANIFEST_NAME
 
 
 # --------------------------------------------------------------------------- generation (§P.1)
@@ -93,7 +115,8 @@ def iter_originals(root: Path) -> Iterator[Path]:
 
 
 def _entry(rel: str, w: int, h: int) -> ManifestEntry:
-    """Манифест-запись (§P.1): w/h — размеры ОРИГИНАЛА (для width/height-атрибутов)."""
+    """Манифест-запись (§P.1): w/h — ВИЗУАЛЬНЫЕ размеры оригинала (после EXIF-transpose;
+    именно их браузер показывает, и именно они нужны width/height-атрибутам для CLS→0)."""
     return {"w": w, "h": h, "card": f"{rel}.card.webp", "detail": f"{rel}.detail.webp"}
 
 
@@ -111,7 +134,12 @@ def process_photo(
             w, h = im.size
             if w <= 0 or h <= 0:
                 raise ValueError(f"degenerate size {im.size}")
-            rgb: Image.Image | None = None  # декодируем лениво: full-skip не читает пиксели
+            # Браузер поворачивает оригинал по EXIF, webp-вариант EXIF не несёт — пиксели
+            # транспонируем сами (ревью Wave 5), а w/h манифеста считаем ВИЗУАЛЬНЫМИ.
+            # Тег читается без декода пикселей: full-skip остаётся дешёвым.
+            if im.getexif().get(_EXIF_ORIENTATION) in _EXIF_SWAPS_DIMS:
+                w, h = h, w
+            decoded: Image.Image | None = None  # декодируем лениво: full-skip не читает пиксели
             for kind, width in VARIANT_WIDTHS.items():
                 target = root / f"{rel}.{kind}.webp"
                 if target.exists():
@@ -120,14 +148,16 @@ def process_photo(
                 generated += 1
                 if dry_run:
                     continue
-                if rgb is None:
-                    rgb = im.convert("RGB")  # заодно фейлит рано на обрезанном payload'е
+                if decoded is None:
+                    # exif_transpose «запекает» ориентацию в пиксели (и заодно фейлит рано
+                    # на обрезанном payload'е); размер после него == (w, h) выше.
+                    decoded = _webp_encodable(ImageOps.exif_transpose(im))
                 tw = min(width, w)  # апскейла нет (§P.1): узкий оригинал → вариант его размера
                 th = max(1, round(h * tw / w))
                 if (tw, th) == (w, h):
-                    variant = rgb
+                    variant = decoded
                 else:
-                    variant = rgb.resize((tw, th), Image.Resampling.LANCZOS)
+                    variant = decoded.resize((tw, th), Image.Resampling.LANCZOS)
                 # tmp + rename: Caddy никогда не отдаст полузаписанный webp, а упавший
                 # процесс не оставит «существующий» огрызок, который скип бы увековечил.
                 tmp = target.with_name(target.name + ".tmp")
@@ -173,14 +203,24 @@ def _save_manifest(manifest: Manifest, root: Path) -> None:
 def _merge_manifest(entries: Manifest, root: Path) -> None:
     """Read-modify-write мердж. Записей о пропавших оригиналах не чистим: они безвредны
     (variant_for проверяет файл на диске), а полный обход их всё равно перезапишет.
-    Same-process писатели сериализуются локом (два publish-хука через asyncio.to_thread —
-    реальный кейс админки); КРОСС-процессный писатель ровно один в каждый момент
-    (hook или ручной backfill) — файловый лок не заводим (YAGNI)."""
-    with _manifest_write_lock:
+    Same-process писатели сериализуются threading.Lock (два publish-хука через
+    asyncio.to_thread — реальный кейс админки). КРОСС-процессных писателей несколько
+    (publish-hook зовут admin, monitor-delivery и nightly-оркестратор — разные процессы,
+    плюс ручной backfill), их сериализует fcntl.flock на lock-файле рядом с манифестом
+    (ревью Wave 5; один хост без NFS — flock достаточно, лок-файл не удаляем: unlink
+    под конкуренцией сам создаёт гонку)."""
+    lock_path = manifest_path(root).with_name(MANIFEST_NAME + ".lock")
+    with _manifest_write_lock, open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)  # снимается закрытием файла на выходе из with
         current = _read_manifest_file(manifest_path(root))
         merged = {**current, **entries}
         if merged != current:  # no-op мердж не трогает mtime → mtime-кэш читателей не сбрасывается
             _save_manifest(merged, root)
+
+
+# Каданс инкрементального мерджа манифеста в backfill_variants (ревью Wave 5): достаточно
+# редко, чтобы не молотить json на тысячах фото, достаточно часто, чтобы обрыв терял ≤100.
+_BACKFILL_FLUSH_EVERY = 100
 
 
 def backfill_variants(
@@ -190,7 +230,8 @@ def backfill_variants(
     dry_run: bool = False,
     progress: Callable[[int, int], None] | None = None,
 ) -> BackfillStats:
-    """Идемпотентный обход photos_root: варианты для каждого оригинала + мердж манифеста.
+    """Идемпотентный обход photos_root: варианты для каждого оригинала + мердж манифеста
+    (инкрементально, каждые _BACKFILL_FLUSH_EVERY обработанных + финальный добор).
 
     `progress(done, total)` дёргается после каждого оригинала (кадансом рулит вызывающий).
     dry_run: только счётчики, ноль записей (ни вариантов, ни манифеста).
@@ -216,6 +257,12 @@ def backfill_variants(
             stats.broken += 1
         else:
             entries[rel] = entry
+        # Инкрементальный флаш (ревью Wave 5): прогон на VPS — многочасовой, обрыв ssh не
+        # должен оставить уже сгенерённые варианты без манифеста. Мердж ДО progress-колбэка:
+        # «N обработано» в логе означает «N уже в манифесте».
+        if not dry_run and entries and done % _BACKFILL_FLUSH_EVERY == 0:
+            _merge_manifest(entries, root)
+            entries = {}
         if progress is not None:
             progress(done, stats.total)
 

@@ -82,17 +82,24 @@ def _run_site(tmp_path_factory: pytest.TempPathFactory, photos_root: Path) -> It
 
 @pytest.fixture(scope="module")
 def variants_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """Сервер с настоящими вариантами: 00.jpg (800×600) + backfill → манифест + .webp на диске."""
+    """Сервер с настоящими вариантами: 00.jpg (800×600) + backfill → манифест + .webp на диске.
+
+    root вложен на уровень ниже mktemp: манифест пишется в РОДИТЕЛЯ root (ревью Wave 5),
+    и без вложенности оба фикстурных root'а делили бы одного родителя — bare_server увидел
+    бы чужой манифест."""
     if not os.getenv("RUN_E2E"):
         pytest.skip("e2e disabled; set RUN_E2E=1")
     from PIL import Image
 
     import src.site.photos as photos
 
-    root = tmp_path_factory.mktemp("photos_with_variants")
+    root = tmp_path_factory.mktemp("photos_with_variants") / "inbound"
+    root.mkdir()
     Image.new("RGB", (800, 600), (180, 140, 90)).save(root / "00.jpg", "JPEG")
     stats = photos.backfill_variants(root=root)
-    assert stats.generated == 2 and (root / "photo_manifest.json").is_file()
+    # Манифест — у родителя root, НЕ под публично раздаваемым корнем (ревью Wave 5).
+    assert stats.generated == 2 and photos.manifest_path(root).is_file()
+    assert not (root / "photo_manifest.json").exists()
     yield from _run_site(tmp_path_factory, root)
 
 
@@ -101,7 +108,9 @@ def bare_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Сервер БЕЗ манифеста/вариантов (пустой photos_root) — фоллбэк-путь прода до backfill."""
     if not os.getenv("RUN_E2E"):
         pytest.skip("e2e disabled; set RUN_E2E=1")
-    yield from _run_site(tmp_path_factory, tmp_path_factory.mktemp("photos_bare"))
+    root = tmp_path_factory.mktemp("photos_bare") / "inbound"  # см. variants_server про вложенность
+    root.mkdir()
+    yield from _run_site(tmp_path_factory, root)
 
 
 # --------------------------------------------------------------------- варианты есть
@@ -110,13 +119,39 @@ def bare_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 @requires_e2e
 def test_catalog_cards_reference_card_webp(variants_server: str) -> None:
     html = _fetch(f"{variants_server}/catalog")
-    # card-вариант в src + honest srcset (640w + retina 1280w) + sizes по контракту
+    # card-вариант в src + honest srcset (640w + retina 1280w) + sizes по РЕАЛЬНЫМ брейкпоинтам
+    # сетки .cards (W5-12): 1 колонка ≤620px, 2 колонки ≤980px, дальше 3 (site.css) — прежние
+    # 700px/33vw пере-загружали 620-700px (100vw→detail) и недо-резолвили 701-980px (33vw).
     assert 'src="/photos/00.jpg.card.webp"' in html
     assert 'srcset="/photos/00.jpg.card.webp 640w, /photos/00.jpg.detail.webp 1280w"' in html
-    assert 'sizes="(max-width:700px) 100vw, 33vw"' in html
+    assert 'sizes="(max-width:620px) 100vw, (max-width:980px) 50vw, 33vw"' in html
     # CLS→0: width/height ОРИГИНАЛА из манифеста; ленивая загрузка + async-декод
     assert 'width="800"' in html and 'height="600"' in html
     assert 'loading="lazy"' in html and 'decoding="async"' in html
+
+
+@requires_e2e
+def test_index_hero_week_photo_detail_variant_eager(variants_server: str) -> None:
+    """W5-10: «Квартира недели» — вероятный LCP мобильной главной (order:-1 ≤780px), но
+    отдавался сырой оригинал (до ~1.4 MB) c loading=lazy. Контракт: detail-вариант + честный
+    srcset при варианте + width/height оригинала из манифеста + eager/fetchpriority=high."""
+    html = _fetch(f"{variants_server}/")
+    hero = html.split('class="hero-photo"')[1].split("</a>")[0]  # скоуп: hero-карточка недели
+    assert 'src="/photos/00.jpg.detail.webp"' in hero
+    assert 'srcset="/photos/00.jpg.card.webp 640w, /photos/00.jpg.detail.webp 1280w"' in hero
+    assert 'width="800"' in hero and 'height="600"' in hero  # размеры ОРИГИНАЛА (CLS→0)
+    assert 'loading="eager"' in hero and 'fetchpriority="high"' in hero
+    assert 'loading="lazy"' not in hero
+
+
+@requires_e2e
+def test_index_hero_week_falls_back_without_manifest(bare_server: str) -> None:
+    """W5-10 фоллбэк: нет манифеста → оригинал, БЕЗ srcset (не врём про 640w); страница валидна."""
+    html = _fetch(f"{bare_server}/")
+    hero = html.split('class="hero-photo"')[1].split("</a>")[0]
+    assert 'src="/photos/00.jpg"' in hero
+    assert "srcset" not in hero
+    assert 'loading="eager"' in hero and 'fetchpriority="high"' in hero
 
 
 @requires_e2e

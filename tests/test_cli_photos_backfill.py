@@ -47,7 +47,9 @@ def test_backfill_generates_variants_and_manifest(root: Path) -> None:
     assert result.exit_code == 0, result.output
     assert (root / "1" / "10" / "00.jpg.card.webp").is_file()
     assert (root / "1" / "10" / "01.jpg.detail.webp").is_file()
-    assert (root / photos.MANIFEST_NAME).is_file()
+    # Манифест — в РОДИТЕЛЕ root: photos_root раздаётся Caddy целиком (ревью Wave 5).
+    assert photos.manifest_path(root).is_file()
+    assert not (root / photos.MANIFEST_NAME).exists()
     assert "originals=2" in result.output
     assert "generated=4" in result.output
 
@@ -62,6 +64,7 @@ def test_backfill_dry_run_reports_but_writes_nothing(root: Path) -> None:
     assert "would generate=2" in result.output
     leftovers = [p for p in root.rglob("*") if p.is_file() and p.suffix != ".jpg"]
     assert leftovers == [], "dry-run must not touch the filesystem"
+    assert not photos.manifest_path(root).exists(), "dry-run must not write the manifest"
 
 
 def test_backfill_limit(root: Path) -> None:
