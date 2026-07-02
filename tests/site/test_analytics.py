@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -204,7 +205,15 @@ def test_pageview_visitor_is_hash_not_raw_ip_ua(client):
         assert ua not in text
 
 
-def test_visitor_stable_within_day_and_differs_by_ua(client):
+def test_visitor_stable_within_day_and_differs_by_ua(client, monkeypatch):
+    # Полуночный флак: два GET по разные стороны 00:00 UTC получили бы РАЗНЫЕ daily_salt —
+    # морозим часы модуля, «одни сутки» гарантированы независимо от времени прогона.
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 7, 2, 12, 0, tzinfo=tz)
+
+    monkeypatch.setattr(analytics, "datetime", _FrozenDatetime)
     client.get("/", headers=_HUMAN_UA)
     client.get("/catalog", headers=_HUMAN_UA)
     client.get("/map", headers={"User-Agent": "Mozilla/5.0 (Macintosh) Firefox/126.0"})
@@ -258,6 +267,26 @@ def test_kill_switch_off_writes_nothing(client, monkeypatch):
     for path in ("/", "/catalog", "/apt/1", "/map", "/calculator", "/vnj", "/how"):
         assert client.get(path, headers=_HUMAN_UA).status_code == 200
     assert _fetch_events(client) == []  # все хуки no-op, ни одной записи
+
+
+# ============================================================== fail-closed: пустая соль (§A.1)
+
+
+def test_empty_salt_fail_closed_no_writes_single_warn(client, monkeypatch, caplog):
+    """Включённая аналитика БЕЗ SITE_ANALYTICS_SALT не пишет НИЧЕГО (fail-closed).
+
+    Пустая соль делает daily_salt публично вычислимым (sha256(''‖дата) — дата известна),
+    а visitor-хэш — брутфорсимой функцией (ip, ua): гарантия §A.1 «несвязываемость по
+    построению» рушится тихой мисконфигурацией. Паттерн — дефолтный admin_password в
+    src/admin/auth.py: no-op + ровно ОДИН warn-лог на процесс."""
+    monkeypatch.setattr(get_settings(), "site_analytics_salt", "")
+    monkeypatch.setattr(analytics, "_salt_missing_warned", False, raising=False)
+    with caplog.at_level(logging.WARNING, logger="src.site.analytics"):
+        for path in ("/", "/catalog"):  # два хита — warn обязан остаться одним
+            assert client.get(path, headers=_HUMAN_UA).status_code == 200
+    assert _fetch_events(client) == []  # ноль записей — слабые псевдонимы не попадают в БД
+    salt_warns = [r for r in caplog.records if "SITE_ANALYTICS_SALT" in r.getMessage()]
+    assert len(salt_warns) == 1
 
 
 # ============================================================== КЛЮЧЕВОЙ: сбой писателя ≠ 5xx

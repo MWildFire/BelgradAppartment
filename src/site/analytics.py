@@ -10,11 +10,15 @@ sha256(SITE_ANALYTICS_SALT‖YYYY-MM-DD) — сырые IP/UA не пишутс�
 Гарантия отказоустойчивости (§A.3, тест обязателен): ЛЮБАЯ ошибка внутри record_event глотается
 с warn-логом — страница не может 5xx-нуть из-за аналитики. Kill-switch SITE_ANALYTICS_ENABLED
 проверяется здесь же, так что все хуки становятся no-op одной настройкой (откат без деплоя).
+Fail-closed: пустая SITE_ANALYTICS_SALT при включённой аналитике тоже глушит запись (один
+warn на процесс) — без секрета visitor-хэш брутфорсится, слабые псевдонимы в БД недопустимы.
 
 Rollup/retention (nightly, §A.2/§N) — здесь же: rollup(day) пересчитывает агрегаты UTC-дня
-в site_stats_daily целиком (идемпотентно), retention() ротирует raw старше
-SITE_ANALYTICS_RAW_RETENTION_DAYS, но ТОЛЬКО для дней с маркером _rolled — несагрегированное
-не теряется никогда. Агрегаты живут вечно.
+в site_stats_daily целиком (идемпотентно); маркер _rolled ставится только ФИНАЛЬНЫМ дням
+(day < today) — партиал-«сегодня» получает агрегаты без маркера. retention() ротирует raw
+старше SITE_ANALYTICS_RAW_RETENTION_DAYS, но ТОЛЬКО для дней с маркером _rolled —
+несагрегированное (в т.ч. недосчитанный партиал) не теряется никогда. unrolled_days() даёт
+nightly план догона: пропущенные ночи самоизлечиваются следующим прогоном. Агрегаты живут вечно.
 """
 
 from __future__ import annotations
@@ -58,6 +62,11 @@ _BOT_UA_MARKERS = (
 _REFERRER_MAX = 200
 _UTM_MAX = 100
 _UTM_STRIP_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+# Fail-closed (§A.1): с пустой солью daily_salt = sha256(''‖дата) вычислим кем угодно, и
+# visitor-хэш брутфорсится перебором (ip, ua) — события не пишем вовсе. Один warn на процесс,
+# паттерн _default_password_warned из src/admin/auth.py (fail-closed на дефолтном пароле).
+_salt_missing_warned = False
 
 
 def visitor_hash(ip: str, ua: str, *, secret: str, day: str) -> str:
@@ -125,8 +134,18 @@ async def record_event(
     к которой прицеплен таск, уже отправлена и не должна знать о судьбе телеметрии.
     """
     try:
+        global _salt_missing_warned
         settings = get_settings()
         if not settings.site_analytics_enabled:  # kill-switch: все хуки no-op
+            return
+        if not settings.site_analytics_salt:  # fail-closed: без секрета хэш ≠ псевдоним
+            if not _salt_missing_warned:
+                logger.warning(
+                    "SITE_ANALYTICS_SALT is empty while analytics is enabled — dropping ALL "
+                    "site events (fail-closed). Set SITE_ANALYTICS_SALT in .env "
+                    "(openssl rand -hex 32).",
+                )
+                _salt_missing_warned = True
             return
         if "hx-request" in request.headers:  # HTMX-пагинация/фильтры ≠ pageview
             return
@@ -173,19 +192,33 @@ def _day_bounds(day: date) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def _ref_domain(referrer: str) -> str | None:
-    """Ключ src_ref = хост referrer-а lower-case; без хоста (не должен встречаться) — пропуск."""
-    return (urlsplit(referrer).hostname or "").lower() or None
+def ref_domain(referrer: str) -> str | None:
+    """Ключ src_ref = хост referrer-а lower-case — общий для rollup-а и live-топа админки.
+
+    Мусор → None (строка молча выпадает из агрегатов/топа, атрибуция best-effort):
+    write-side обрезает referrer до 200 символов и может сломать синтаксис URL — например,
+    IPv6-хост, потерявший закрывающую ']' — urlsplit на чтении кидает ValueError, а падать
+    не имеет права ни nightly-rollup (день навсегда остался бы без агрегатов и ротации raw),
+    ни дашборд.
+    """
+    try:
+        host = urlsplit(referrer).hostname
+    except ValueError:
+        return None
+    return (host or "").lower() or None
 
 
-async def rollup(day: date, *, database_url: str | None = None) -> int:
+async def rollup(day: date, *, database_url: str | None = None, today: date | None = None) -> int:
     """Пересчитать агрегаты §A.2 одного UTC-дня в site_stats_daily. Возвращает число строк.
 
     Идемпотентность — upsert дня ЦЕЛИКОМ: в одной транзакции старые строки дня удаляются и
     пишется свежий пересчёт. Это сильнее построчного ON CONFLICT: ключ, исчезнувший из raw
     (например, оператор вручную вычистил спам-события), не остаётся висеть в агрегатах.
     Маркер _rolled пишется той же транзакцией — упавший на середине rollup не «закроет» день
-    для retention. Пустой день закрывается одним маркером, иначе retention ждал бы его вечно.
+    для retention — и ТОЛЬКО финальным дням (day < today): партиал-«сегодня» получает
+    агрегаты без маркера (дашборд их игнорирует — у него live-подсчёт), поэтому retention
+    не может стереть недосчитанный день, а следующий nightly дороллапит его как прошлый.
+    `today` инжектится nightly-шагом/тестами; дефолт — текущая UTC-дата.
 
     Боты (is_bot=1) исключаются из views/uniques/src_* прямо по контракту §A.2; leads/subs
     считаются как есть — конверсия дороже ложного бота, а эвристика UA меняется задним числом.
@@ -250,24 +283,45 @@ async def rollup(day: date, *, database_url: str | None = None) -> int:
         )
         by_domain: dict[str, int] = {}
         for ref, n in res:
-            dom = _ref_domain(ref)
+            dom = ref_domain(ref)
             if dom:
                 by_domain[dom] = by_domain.get(dom, 0) + n
         rows += [("src_ref", dom, n) for dom, n in sorted(by_domain.items())]
 
-        rows.append((_ROLLED, "", 1))
+        # Честный маркер: только финальный (прошедший) день. Партиал-«сегодня» без маркера —
+        # его raw защищён от retention, а финализирует день следующий nightly-прогон.
+        if day < (today or datetime.now(UTC).date()):
+            rows.append((_ROLLED, "", 1))
 
         await s.execute(delete(SiteStatsDaily).where(SiteStatsDaily.day == day))
         s.add_all(SiteStatsDaily(day=day, metric=m, key=k, value=v) for m, k, v in rows)
         return len(rows)
 
 
+async def unrolled_days(*, database_url: str | None = None) -> list[date]:
+    """Дни (UTC), у которых есть raw-события, но нет маркера _rolled — план догона nightly.
+
+    Самоизлечение §N: nightly, пропустивший ≥1 ночь (VPS лежал, шаг падал), следующим
+    прогоном дороллапливает ВСЕ выпавшие дни — без догона они навсегда оставались бы
+    нулями в дашборде, а их raw никогда не ротировался бы (retention трогает только _rolled).
+    Сюда же попадает вчерашний партиал-«сегодня» (агрегаты без маркера) — он финализируется.
+    """
+    async with writer_session(database_url=database_url) as s:
+        # func.date режет naive-UTC текст SQLite до 'YYYY-MM-DD' — день события по UTC (§A.2).
+        raw_days = (await s.execute(select(func.date(SiteEvent.ts)).distinct())).scalars().all()
+        rolled = (
+            await s.execute(select(SiteStatsDaily.day).where(SiteStatsDaily.metric == _ROLLED))
+        ).scalars().all()
+    return sorted(date.fromisoformat(d) for d in set(raw_days) - {r.isoformat() for r in rolled})
+
+
 async def retention(*, now: datetime | None = None, database_url: str | None = None) -> int:
     """Удалить raw site_events старше SITE_ANALYTICS_RAW_RETENTION_DAYS. Возвращает число строк.
 
     Гард от потери данных: удаляются ТОЛЬКО дни с маркером _rolled — день, который nightly
-    так и не сагрегировал (rollup падал, деплой стоял), лежит в raw сколько угодно и будет
-    подобран будущим rollup-ом. Граница строгая: день ровно N-дневной давности ещё живёт.
+    так и не сагрегировал ФИНАЛЬНО (rollup падал, деплой стоял, остался партиал-«сегодня»
+    без маркера), лежит в raw сколько угодно и будет подобран будущим rollup-ом через
+    unrolled_days(). Граница строгая: день ровно N-дневной давности ещё живёт.
     `now` инжектится тестами; прод берёт текущий момент UTC.
     """
     keep_days = get_settings().site_analytics_raw_retention_days

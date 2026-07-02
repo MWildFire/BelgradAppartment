@@ -40,6 +40,26 @@ AUTH = {"Authorization": f"Basic {CREDS}"}
 # детерминированные tg_id для сид-каналов (hash() зависит от PYTHONHASHSEED — не годится)
 _TG_IDS = itertools.count(900_000_001)
 
+# Полуночный флак: сид «сегодняшних» событий и build_analytics читали wall-clock ПОРОЗНЬ —
+# прогон через 00:00 UTC рассинхронизировал live-день и окно (ложное красное). Морозим одну
+# дату и для сидов (_today/_seed_event), и для SUT (datetime модуля src.admin.analytics) —
+# паттерн инжекции времени, как retention(now=...) в tests/site/test_analytics_rollup.py.
+FROZEN_NOW = datetime(2026, 7, 2, 12, 0, tzinfo=UTC)
+
+
+class _FrozenDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW if tz else FROZEN_NOW.replace(tzinfo=None)
+
+
+@pytest.fixture(autouse=True)
+def _freeze_clock(monkeypatch):
+    import src.admin.analytics as admin_analytics
+
+    monkeypatch.setattr(admin_analytics, "datetime", _FrozenDatetime)
+    yield
+
 
 @pytest.fixture(autouse=True)
 def _force_admin_password(monkeypatch):
@@ -63,7 +83,7 @@ def client():
 
 
 def _today() -> date:
-    return datetime.now(UTC).date()
+    return FROZEN_NOW.date()  # та же замороженная дата, что видит build_analytics
 
 
 async def _seed_stat(db, day: date, metric: str, key: str = "", value: int = 0) -> None:
@@ -77,7 +97,7 @@ async def _seed_event(db, **kw) -> None:
     async with db() as s:
         s.add(
             SiteEvent(
-                ts=kw.pop("ts", datetime.now(UTC)),
+                ts=kw.pop("ts", FROZEN_NOW),
                 type=kw.pop("type", "pageview"),
                 path=kw.pop("path", "/"),
                 visitor=kw.pop("visitor", "v1"),
@@ -165,7 +185,7 @@ async def test_today_is_live_from_raw_events_not_stats(db):
     await _seed_event(db, visitor="bot", is_bot=True)  # боты пишутся, но не считаются
     await _seed_event(db, visitor="a", type="lead_submit")
     # вчерашнее raw-событие в live-подсчёт «сегодня» не входит (его закрывает rollup)
-    await _seed_event(db, visitor="c", ts=datetime.now(UTC) - timedelta(days=1))
+    await _seed_event(db, visitor="c", ts=FROZEN_NOW - timedelta(days=1))
 
     async with db() as s:
         ctx = await build_analytics(s, days=7)

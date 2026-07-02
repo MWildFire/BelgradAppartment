@@ -14,13 +14,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
-from urllib.parse import urlparse
 
 from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
 from src.db.models import Listing, Match, SiteEvent, SiteListing, SiteStatsDaily
+
+# Общий парсер домена (admin→site импорт допустим, обратный — нет): live-топ источников
+# обязан сводить referrer к тому же ключу src_ref и с той же терпимостью к мусору
+# (обрезка ≤200 на write-side может сломать синтаксис URL), что и nightly-rollup.
+from src.site.analytics import ref_domain
 
 # §A.5: ?days=7|30, всё прочее падает в дефолт (не в 500 — конвенция /published, /leads).
 ANALYTICS_WINDOWS = (7, 30)
@@ -29,22 +33,6 @@ DEFAULT_DAYS = 7
 TOP_LIMIT = 15
 # T3-2: окно бейджа «👁 7д» в /published.
 LISTING_VIEWS_DAYS = 7
-
-
-def _ref_domain(referrer: str) -> str | None:
-    """Домен из live-referrer'а — зеркалит ключ src_ref rollup-а («домен referrer»).
-
-    Мусор → None (строка выпадает из топа, дашборд не падает): атрибуция best-effort.
-    """
-    try:
-        # схемный фоллбек не нужен: write-side (_external_referrer) сохраняет referrer
-        # только с распарсенным хостом, т.е. строка в БД всегда содержит '//'
-        host = urlparse(referrer).hostname
-    except ValueError:
-        # write-side обрезает referrer до 200 символов и может сломать синтаксис URL
-        # (напр. IPv6-хост без закрывающей ']') — urlparse кидает ValueError на чтении
-        return None
-    return host.lower() if host else None
 
 
 async def _stats_by_key(
@@ -231,7 +219,7 @@ async def build_analytics(s: AsyncSession, days: int = DEFAULT_DAYS) -> dict[str
         s, SiteEvent.referrer, today_start, SiteEvent.type == "pageview", human
     )
     for ref, value in live_ref.items():
-        domain = _ref_domain(ref)
+        domain = ref_domain(ref)
         if domain:
             src[("ref", domain)] = src.get(("ref", domain), 0) + value
     sources = [

@@ -15,14 +15,14 @@ DB — file-backed site_db из conftest (общий writer/reader-стек с r
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
 
 from src.config import get_settings
 from src.db.models import SiteEvent, SiteStatsDaily
 from src.site import db as sitedb
-from src.site.analytics import retention, rollup
+from src.site.analytics import retention, rollup, unrolled_days
 
 # Целевой день фикстуры и его соседи — граница дня по UTC полуоткрыта: [00:00, 24:00).
 DAY = date(2026, 7, 1)
@@ -145,6 +145,27 @@ async def test_rollup_empty_day_writes_only_rolled_marker(site_db):
     assert await _stats(site_db, DAY) == {("_rolled", "", 1)}
 
 
+async def test_rollup_survives_truncated_ipv6_referrer(site_db):
+    """Крафтовый Referer 'http://<userinfo>@[ipv6]/…' проходит write-гард (полная строка
+    парсится в валидный внешний хост), но хранится обрезанным до 200 символов — без ']'.
+
+    Reader не имеет права падать: до фикса urlsplit кидал ValueError('Invalid IPv6 URL'),
+    rollup дня НАВСЕГДА оставался красным (нет агрегатов, retention не ротирует raw)."""
+    bad = ("http://" + "u" * 180 + "@[2001:db8::1]/path")[:200]
+    await _add(
+        site_db,
+        _ev(_ts(10), visitor="v1", referrer=bad),
+        _ev(_ts(11), visitor="v2", referrer="https://t.co/abc"),
+    )
+
+    await rollup(DAY, database_url=site_db)  # не должен бросить
+
+    stats = await _stats(site_db, DAY)
+    assert ("src_ref", "t.co", 1) in stats  # здоровый referrer посчитан
+    assert ("views_path", "/", 2) in stats  # сам pageview битой строки не потерян
+    assert not any(m == "src_ref" and "2001" in k for m, k, _ in stats)  # мусор молча выпал
+
+
 # ============================================================== rollup: идемпотентность
 
 
@@ -169,6 +190,65 @@ async def test_rollup_recomputes_after_new_events(site_db):
     assert ("views_path", "/", 4) in stats
     assert ("uniques", "", 4) in stats
     assert ("views_path", "/", 3) not in stats  # старое значение перезаписано, не задублировано
+
+
+# ============================================================== честный маркер + догон (§N)
+
+
+async def test_rollup_of_current_day_writes_aggregates_without_marker(site_db):
+    """Nightly в 03:00 UTC роллапит «сегодня» с партиалом данных: агрегаты пишутся (дашборд
+    их всё равно игнорирует — у него live-подсчёт), но маркер _rolled НЕ ставится — день
+    ещё не финален, retention не имеет права удалить его raw."""
+    await _seed_fixture_day(site_db)
+
+    await rollup(DAY, database_url=site_db, today=DAY)
+
+    assert await _stats(site_db, DAY) == EXPECTED - {("_rolled", "", 1)}
+
+
+async def test_rollup_rerun_as_past_day_finalizes_marker(site_db):
+    """Тот же день следующей ночью (уже «вчера») финализируется: маркер появляется,
+    числа не дублируются (пересчёт дня целиком)."""
+    await _seed_fixture_day(site_db)
+    await rollup(DAY, database_url=site_db, today=DAY)
+
+    await rollup(DAY, database_url=site_db, today=DAY + timedelta(days=1))
+
+    assert await _stats(site_db, DAY) == EXPECTED
+
+
+async def test_unrolled_days_lists_raw_days_without_marker(site_db):
+    d1, d2, d3 = date(2026, 6, 28), date(2026, 6, 29), date(2026, 6, 30)
+    await _add(
+        site_db,
+        _ev(_ts(10, day=d1), visitor="a"),
+        _ev(_ts(10, day=d2), visitor="b"),
+        _ev(_ts(10, day=d3), visitor="c"),
+    )
+    await rollup(d2, database_url=site_db, today=d3)  # d2 финализирован (есть маркер)
+
+    assert await unrolled_days(database_url=site_db) == [d1, d3]
+
+
+async def test_gap_days_selfheal_on_next_nightly_run(site_db):
+    """Гэп ≥2 суток (VPS лежал): следующий прогон дороллапливает ВСЕ пропущенные дни;
+    повторный прогон идемпотентен — те же строки, без дублей."""
+    d1, d2, d3 = date(2026, 6, 28), date(2026, 6, 29), date(2026, 6, 30)
+    today = date(2026, 7, 1)
+    for d, v in ((d1, "a"), (d2, "b"), (d3, "c")):
+        await _add(site_db, _ev(_ts(10, day=d), visitor=v))
+
+    for _ in range(2):  # второй прогон = «следующая ночь без новых событий»
+        days = [*await unrolled_days(database_url=site_db), today]
+        for day in days:
+            await rollup(day, database_url=site_db, today=today)
+
+    for d in (d1, d2, d3):  # все прошлые дни финализированы одним прогоном
+        assert await _stats(site_db, d) == {
+            ("views_path", "/", 1), ("uniques", "", 1), ("_rolled", "", 1),
+        }
+    assert await _stats(site_db, today) == set()  # пустое «сегодня»: ни строк, ни маркера
+    assert await unrolled_days(database_url=site_db) == []
 
 
 # ============================================================== retention (гард _rolled)
@@ -219,6 +299,18 @@ async def test_retention_idempotent_second_run_deletes_nothing(site_db):
 
     await retention(now=NOW, database_url=site_db)
     assert await retention(now=NOW, database_url=site_db) == 0
+
+
+async def test_retention_keeps_raw_of_day_rolled_only_as_today(site_db):
+    """Сценарий потери из ревью: день отроллаплен как «сегодня» (партиал), финальный re-rollup
+    так и не случился (nightly падал). Без маркера retention обязан оставить raw нетронутым —
+    день дороллапится будущим прогоном, недосчитанное не стирается."""
+    old = date(2026, 3, 1)
+    await _add(site_db, _ev(_ts(2, day=old), visitor="p1"), _ev(_ts(4, day=old), visitor="p2"))
+    await rollup(old, database_url=site_db, today=old)  # партиал-роллап в 03:00 того же дня
+
+    assert await retention(now=NOW, database_url=site_db) == 0
+    assert await _event_days(site_db) == [old]  # raw жив, ждёт финального rollup-а
 
 
 async def test_retention_respects_configured_window(site_db, monkeypatch):

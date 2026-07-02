@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -901,24 +901,38 @@ async def _write_dupes_report() -> tuple[Path, DedupStats]:
     return path, stats
 
 
-async def _analytics_nightly_line() -> str:
-    """T2-4 nightly step (§N): rollup(вчера) → rollup(сегодня) → retention() одной строкой summary.
+def _utc_today() -> date:
+    """Единственное чтение wall-clock analytics-шага — тесты инжектят фикс-дату, чтобы
+    прогон через UTC-полночь не давал ложных красных (двойное чтение часов SUT/ассертом)."""
+    return datetime.now(UTC).date()
 
-    Пересчёт «вчера+сегодня» покрывает события, догнавшие день после прошлого прогона (nightly
-    в 03:00 UTC закрывает вчера окончательно). Под-шаги изолированы ПО ОТДЕЛЬНОСТИ: retention
-    гоняем и после упавшего rollup — он безопасен по построению (трогает только дни с маркером
-    _rolled). Сбой любого под-шага → 🚨-фрагмент строки, исключение наружу не уходит —
-    fault-isolation по контракту price-drop/site-retention/dupes-report."""
+
+async def _analytics_nightly_line() -> str:
+    """T2-4 nightly step (§N): догон unrolled_days() + rollup(сегодня) → retention().
+
+    План дней — все дни с raw-событиями без маркера _rolled ПЛЮС «сегодня»: пропущенные
+    ночи (VPS лежал, шаг падал) самоизлечиваются следующим прогоном, а «сегодня» получает
+    партиал-агрегаты БЕЗ маркера (rollup ставит _rolled только дням < today) — финализирует
+    его следующий nightly. Kill-switch SITE_ANALYTICS_ENABLED=false глушит шаг ЦЕЛИКОМ
+    (rollback-раздел плана обещает полный откат одной настройкой): ни маркеров пустых дней,
+    ни ротации raw — честная строка «off» в summary. Под-шаги изолированы ПО ОТДЕЛЬНОСТИ:
+    retention гоняем и после упавшего rollup — он безопасен по построению (трогает только
+    дни с маркером _rolled). Сбой любого под-шага → 🚨-фрагмент строки, исключение наружу
+    не уходит — fault-isolation по контракту price-drop/site-retention/dupes-report."""
     from src.site import analytics
 
+    if not get_settings().site_analytics_enabled:
+        return "аналитика: off (SITE_ANALYTICS_ENABLED=false)"
+
     log = logging.getLogger(__name__)
-    today = datetime.now(UTC).date()
-    days = (today - timedelta(days=1), today)
+    today = _utc_today()
     parts: list[str] = []
     try:
+        days = [d for d in await analytics.unrolled_days() if d != today]
+        days.append(today)  # «сегодня» пересчитываем всегда (партиал без маркера)
         for day in days:
-            await analytics.rollup(day)
-        parts.append(f"rollup {days[0].isoformat()}+{days[1].isoformat()} ок")
+            await analytics.rollup(day, today=today)
+        parts.append("rollup " + "+".join(d.isoformat() for d in days) + " ок")
     except Exception:
         log.exception("nightly step failed: analytics-rollup")
         parts.append("🚨 rollup упал — см. логи")
@@ -1517,7 +1531,8 @@ async def _nightly_refresh(
     except Exception:
         logging.getLogger(__name__).exception("nightly step failed: site-retention")
 
-    # T2-4: site-аналитика — rollup вчера+сегодня → retention raw (§N, ПЕРЕД dupes-шагом).
+    # T2-4: site-аналитика — догон несагрегированных дней + сегодня → retention raw
+    # (§N, ПЕРЕД dupes-шагом); SITE_ANALYTICS_ENABLED=false глушит шаг целиком.
     # Fault isolation внутри хелпера: сбой под-шага → 🚨-фрагмент строки summary.
     click.echo("→ Site analytics rollup + retention…")
     analytics_line = await _analytics_nightly_line()
