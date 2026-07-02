@@ -1,7 +1,9 @@
 """Public catalog routes (DATA_CONTRACT §2 — exact template names + context keys).
 
-Every catalog/facets/map read goes through the in-process TTL cache (src/site/cache.py),
-keyed by the normalized query params. POST /lead and /healthz are never cached.
+Every catalog/facets/map read — плюс главная («index») и карточка /apt/{id} (Wave-5 #13) —
+goes through the in-process TTL cache (src/site/cache.py), keyed by the normalized query
+params (или фиксированным ключом без пользовательских данных). POST /lead and /healthz are
+never cached; /apt/{id}/og.png держит собственный ETag-механизм и через TTL-кэш не ходит.
 
 The DB url for reads is injected via Depends(catalog_db_url) — the test seam. Templates live
 on the module-level `templates` object so tests can swap it for a DictLoader stub and assert
@@ -255,6 +257,55 @@ async def _cached_catalog(
     return result
 
 
+async def _cached_index(
+    db_url: str,
+) -> tuple[list[readmodel.SiteListingView], readmodel.SiteListingView | None]:
+    """Wave-5 #13: данные главной (featured-подборка + «квартира недели») через TTL-кэш.
+
+    Раньше каждый GET / делал 2 полных _load_rows-гидрации (list_public + featured_one) —
+    стоимость линейна по каталогу и умножается краулерами. Ключ фиксированный (без
+    пользовательских данных); живёт в catalog_cache, чтобы invalidate_catalog_cache()
+    при publish/hide сбрасывал и его; кросс-процессно свежесть ограничивает тот же TTL.
+    """
+    key = ("index",)
+    cached = cache.catalog_cache.get(key)
+    if cached is not cache.MISS:
+        return cast(
+            "tuple[list[readmodel.SiteListingView], readmodel.SiteListingView | None]", cached
+        )
+    items, _total = await readmodel.list_public(
+        Filters(), sort="new", page=1, page_size=FEATURED_N, database_url=db_url
+    )
+    week = await readmodel.featured_one(database_url=db_url)
+    result = (items, week)
+    cache.catalog_cache.set(key, result)
+    return result
+
+
+async def _cached_apt(
+    site_listing_id: int, db_url: str
+) -> tuple[readmodel.SiteListingView | None, list[readmodel.SiteListingView]]:
+    """Wave-5 #13: карточка /apt/{id} + «похожие» через TTL-кэш (2 полных _load_rows на MISS).
+
+    Ключ — только id из пути (без пользовательских данных). None кэшируется тоже (404 для
+    приватного/несуществующего id): id-перебор краулером не гидрирует каталог на каждый
+    запрос, а maxsize кэша ограничивает память. og.png этот кэш сознательно НЕ использует.
+    """
+    key = ("apt", site_listing_id)
+    cached = cache.catalog_cache.get(key)
+    if cached is not cache.MISS:
+        return cast(
+            "tuple[readmodel.SiteListingView | None, list[readmodel.SiteListingView]]", cached
+        )
+    item = await readmodel.get_public(site_listing_id, database_url=db_url)
+    similar = (
+        await readmodel.similar(item, limit=4, database_url=db_url) if item is not None else []
+    )
+    result = (item, similar)
+    cache.catalog_cache.set(key, result)
+    return result
+
+
 async def _cached_facets(db_url: str) -> readmodel.Facets:
     key = ("facets",)
     cached = cache.facets_cache.get(key)
@@ -373,11 +424,8 @@ async def index(
     background_tasks: BackgroundTasks,
     db_url: str = Depends(catalog_db_url),
 ) -> HTMLResponse:
-    items, _total = await readmodel.list_public(
-        Filters(), sort="new", page=1, page_size=FEATURED_N, database_url=db_url
-    )
-    # «Квартира недели»: a single curated apartment for the hero side-card (W3-2).
-    week = await readmodel.featured_one(database_url=db_url)
+    # Featured-подборка + «квартира недели» (hero side-card, W3-2) — одной кэшируемой парой.
+    items, week = await _cached_index(db_url)
     facets = await _cached_facets(db_url)
     stats = {
         "active": facets.counts.get("total", 0),
@@ -422,10 +470,9 @@ async def apt(
     background_tasks: BackgroundTasks,
     db_url: str = Depends(catalog_db_url),
 ) -> HTMLResponse:
-    item = await readmodel.get_public(site_listing_id, database_url=db_url)
+    item, similar = await _cached_apt(site_listing_id, db_url)
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
-    similar = await readmodel.similar(item, limit=4, database_url=db_url)
     # Stage S Wave 2 (§M, FUZZY/D1): snap coords to the ~100m privacy grid BEFORE they reach the
     # page so the exact building never appears in the HTML source. The template renders the map
     # block only when coords exist; maps carries the fuzzy Yandex/Google deep-links (None if none).

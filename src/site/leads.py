@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 NAME_MAX = 120
 CONTACT_MAX = 200
 MESSAGE_MAX = 2000
+# Wave-5 #5: districts/rooms — свободный текст формы («Врачар, Дорћол…» / «студия, 1+1…»);
+# без лимита рукописный POST писал в leads блобы произвольного размера (и тащил их в ТГ-нотис).
+# Границы у писателя, консистентно с message: превышение → LeadValidationError (400), не обрезка.
+DISTRICTS_MAX = 500
+ROOMS_MAX = 100
 
 # T2-3 (§A.1): границы полей атрибуции — те же, что у site_events (единый контракт этапа T).
 UTM_MAX = 100
@@ -114,6 +119,13 @@ def _validate(payload: LeadPayload) -> None:
 
     if payload.message is not None and len(payload.message) > MESSAGE_MAX:
         raise LeadValidationError("message must be <= 2000 characters")
+
+    # Wave-5 #5: та же политика «границы у писателя», что и у message — см. константы выше.
+    if payload.districts is not None and len(payload.districts) > DISTRICTS_MAX:
+        raise LeadValidationError("districts must be <= 500 characters")
+
+    if payload.rooms is not None and len(payload.rooms) > ROOMS_MAX:
+        raise LeadValidationError("rooms must be <= 100 characters")
 
 
 def _format_notice(payload: LeadPayload, apartment: dict[str, object] | None = None) -> str:

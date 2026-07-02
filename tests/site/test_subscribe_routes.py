@@ -124,6 +124,34 @@ def test_subscribe_invalid_email_is_400(client):
     assert r.status_code == 400
 
 
+def test_subscribe_overlong_district_item_is_400(client):
+    # _validate режет только КОЛИЧЕСТВО districts/rooms (≤100/≤20), но не длину элементов —
+    # рукописный POST со строками-мегабайтами раздувает criteria-JSON (Wave-5 #6). Реальные
+    # районы ≤20 символов («Професорска колонија»), потолок 64 — щедрый.
+    r = client.post("/subscribe", data=_form(channel="email", email="a@b.com", district="x" * 65))
+    assert r.status_code == 400
+    assert _fetch_subs(client.app.dependency_overrides[catalog_db_url]()) == []
+
+
+def test_subscribe_district_item_at_limit_is_saved(client):
+    r = client.post(
+        "/subscribe",
+        data=_form(channel="email", email="a@b.com", district="д" * 64),
+        follow_redirects=False,
+    )
+    assert r.status_code in (200, 303)
+    subs = _fetch_subs(client.app.dependency_overrides[catalog_db_url]())
+    assert len(subs) == 1
+    assert subs[0]["criteria"]["district"] == ["д" * 64]
+
+
+def test_subscribe_overlong_rooms_item_is_400(client):
+    # Реальные значения rooms — «studio»/«1»/«2»/«3+»; 16 символов на элемент — с запасом.
+    r = client.post("/subscribe", data=_form(channel="email", email="a@b.com", rooms="x" * 17))
+    assert r.status_code == 400
+    assert _fetch_subs(client.app.dependency_overrides[catalog_db_url]()) == []
+
+
 def test_subscribe_rate_limited_after_max(client, monkeypatch):
     from src.config import get_settings
 

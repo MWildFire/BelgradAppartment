@@ -30,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 VALID_CHANNELS = ("email", "telegram")
 EMAIL_MAX = 254
+# Wave-5 #6: лимит длины ЭЛЕМЕНТА districts/rooms. Форма — фиксированные дропдауны (реальные
+# районы ≤20 символов, «Професорска колонија»; rooms — «studio»/«1»/«3+»), так что потолки
+# щедрые и стопорят только рукописный POST, раздувающий criteria-JSON строками-мегабайтами.
+DISTRICT_ITEM_MAX = 64
+ROOMS_ITEM_MAX = 16
 # Pragmatic e-mail shape check (defence against typos/garbage, not RFC-complete validation).
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -105,11 +110,16 @@ def _validate(payload: SubscriptionPayload) -> None:
         raise SubscriptionValidationError("выберите хотя бы один критерий поиска")
 
     # Cheap upper bounds — the form uses fixed dropdowns, so these only stop a hand-crafted POST
-    # from storing an oversized criteria blob.
+    # from storing an oversized criteria blob: и по количеству элементов, и по длине каждого
+    # (Wave-5 #6 — счётчики без per-элементных лимитов blob не останавливали).
     if len(payload.districts) > 100:
         raise SubscriptionValidationError("too many districts")
     if len(payload.rooms) > 20:
         raise SubscriptionValidationError("too many rooms")
+    if any(len(d) > DISTRICT_ITEM_MAX for d in payload.districts):
+        raise SubscriptionValidationError("district value too long")
+    if any(len(r) > ROOMS_ITEM_MAX for r in payload.rooms):
+        raise SubscriptionValidationError("rooms value too long")
 
     if payload.channel == "email":
         email = (payload.email or "").strip()

@@ -117,6 +117,39 @@ async def test_overlong_message_raises(site_db: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_overlong_districts_raises(site_db: str) -> None:
+    # districts/rooms — свободный текст формы; без лимита рукописный POST пишет в leads
+    # блоб произвольного размера (Wave-5 #5). Границы у писателя, как у message (≤2000 → 400).
+    payload = LeadPayload(name="Иван", contact="@ivan", districts="Врачар, " * 100)
+    with patch("src.site.leads.send_text_to_recipients", new=AsyncMock()):
+        with pytest.raises(LeadValidationError):
+            await create_lead(payload, database_url=site_db)
+    assert await _fetch_leads(site_db) == []
+
+
+@pytest.mark.asyncio
+async def test_overlong_rooms_raises(site_db: str) -> None:
+    payload = LeadPayload(name="Иван", contact="@ivan", rooms="x" * 101)
+    with patch("src.site.leads.send_text_to_recipients", new=AsyncMock()):
+        with pytest.raises(LeadValidationError):
+            await create_lead(payload, database_url=site_db)
+    assert await _fetch_leads(site_db) == []
+
+
+@pytest.mark.asyncio
+async def test_districts_and_rooms_at_limit_are_saved(site_db: str) -> None:
+    # Границы включительные: ровно 500/100 символов — валидная заявка (без off-by-one).
+    payload = LeadPayload(name="Иван", contact="@ivan", districts="д" * 500, rooms="к" * 100)
+    with patch("src.site.leads.send_text_to_recipients", new=AsyncMock()):
+        lead = await create_lead(payload, database_url=site_db)
+    assert lead is not None
+    rows = await _fetch_leads(site_db)
+    assert len(rows) == 1
+    assert rows[0].districts == "д" * 500
+    assert rows[0].rooms == "к" * 100
+
+
+@pytest.mark.asyncio
 async def test_notifier_failure_does_not_propagate_lead_still_saved(site_db: str) -> None:
     payload = LeadPayload(name="Иван", contact="@ivan", budget_eur=700)
     boom = AsyncMock(side_effect=RuntimeError("telegram down"))

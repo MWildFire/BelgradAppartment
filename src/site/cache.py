@@ -1,9 +1,14 @@
 """Tiny in-process TTL cache for catalog/facets/map reads (DATA_CONTRACT §2, ADR perf).
 
 The catalog changes a few times a day, so a 5-min process-local cache cuts the repeated
-read-model joins to near zero without any cross-process coordination. Deliberately small:
-no eviction policy beyond TTL expiry-on-read — the keyspace is bounded by the handful of
-filter combinations real visitors use.
+read-model joins to near zero without any cross-process coordination.
+
+Bounded (Wave-5 #9): ключи каталога строятся из СЫРЫХ query-параметров, т.е. атакующий с
+уникальными query-строками раньше растил _store без предела (expire-on-read чистил только
+повторно запрошенный ключ — memory-DoS публичного GET /catalog). Теперь у кэша есть maxsize:
+на set при переполнении сначала выкидываются истёкшие записи, затем старейшие по порядку
+вставки (обычный dict сохраняет insertion order; set пере-вставляет ключ, так что «старейший» =
+дольше всех не обновлявшийся). Живые горячие ключи переживают эвикцию истёкших.
 
 POST /lead and /healthz never go through here (the routes simply don't call it).
 
@@ -25,21 +30,32 @@ from src.config import get_settings
 MISS = object()
 _MISS = MISS  # back-compat alias used internally/in tests
 
+# Потолок записей на кэш. Размер подобран с запасом: реальный keyspace — десятки комбинаций
+# фильтров + страницы /apt; 512 записей каталога ≈ единицы MB (≈16.6 KB/страница из 24 view),
+# т.е. худший случай при атаке уникальными query — ограниченный и безопасный.
+CACHE_MAXSIZE = 512
+
 
 class TTLCache:
-    """Thread-safe TTL cache keyed by an opaque hashable key.
+    """Thread-safe TTL cache keyed by an opaque hashable key, bounded by `maxsize`.
 
     `ttl` defaults to settings.site_cache_ttl at call time. `clock` defaults to time.monotonic
     (monotonic so a wall-clock jump can't resurrect an expired entry); tests inject a fake.
+    `maxsize` — жёсткий потолок записей: на set при переполнении эвиктится истёкшее, затем
+    старейшее (см. module docstring).
     """
 
     def __init__(
-        self, ttl: int | None = None, clock: Callable[[], float] = time.monotonic
+        self,
+        ttl: int | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        maxsize: int = CACHE_MAXSIZE,
     ) -> None:
         self._ttl = ttl
         self._clock = clock
+        self._maxsize = max(int(maxsize), 1)  # 0/отрицательное не «безлимит», а минимум 1
         self._lock = threading.Lock()
-        # key -> (expires_at_monotonic, value)
+        # key -> (expires_at_monotonic, value); insertion order == set-recency (см. set()).
         self._store: dict[Any, tuple[float, Any]] = {}
 
     @property
@@ -58,16 +74,29 @@ class TTLCache:
                 return MISS
             expires_at, value = entry
             if now >= expires_at:
-                # Expire-on-read: drop the stale entry so the dict can't grow unbounded.
+                # Expire-on-read: сразу отдаём место (основную уборку делает эвикция в set()).
                 del self._store[key]
                 return MISS
             return value
 
     def set(self, key: Any, value: Any) -> None:
-        if self.ttl <= 0:
+        ttl = self.ttl
+        if ttl <= 0:
             return
+        now = self._clock()
         with self._lock:
-            self._store[key] = (self._clock() + self.ttl, value)
+            # Пере-вставка: обновлённый ключ уходит в конец dict, так insertion order всегда
+            # отражает «свежесть» set-а и старейший ключ — первый (дешёвый аналог OrderedDict).
+            self._store.pop(key, None)
+            if len(self._store) >= self._maxsize:
+                # Сначала мусор: истёкшие записи никому не нужны — живые ключи их переживают.
+                expired = [k for k, (exp, _) in self._store.items() if now >= exp]
+                for k in expired:
+                    del self._store[k]
+            while len(self._store) >= self._maxsize:
+                # Всё ещё полно (ничего не истекло) — жертвуем старейшими по порядку вставки.
+                del self._store[next(iter(self._store))]
+            self._store[key] = (now + ttl, value)
 
     def get_or_set(self, key: Any, producer: Callable[[], Any]) -> Any:
         """Return the cached value, else call `producer()`, store, and return it.
@@ -113,6 +142,8 @@ map_cache = TTLCache()
 def invalidate_catalog_cache() -> None:
     """Clear all three read-model caches in THIS process.
 
+    catalog_cache несёт не только страницы /catalog, но и ключи ("index",) / ("apt", id)
+    (Wave-5 #13) — publish/hide сбрасывает и их этим же вызовом.
     Called whenever a SiteListing's visibility changes (auto-publish / auto-hide) so the
     flip shows up immediately for same-process callers. NOTE the cross-process limitation:
     the site runs as a separate long-lived process from the nightly orchestrator / Telegram
