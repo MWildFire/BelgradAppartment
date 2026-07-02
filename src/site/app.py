@@ -28,6 +28,7 @@ from starlette.types import Scope
 
 from src.config import get_settings
 from src.post.hashtags import DISTRICTS_PATH  # reuse the canonical districts.yaml path
+from src.site import photos
 from src.site.db import dispose_engines
 from src.site.routes import router, templates
 
@@ -106,6 +107,18 @@ def _asset_version() -> str:
 
 # Cache-busting token appended to local /static asset URLs (see _asset_version).
 templates.env.globals["asset_v"] = _asset_version()
+
+
+# T4-2 (§P.2): фото-варианты в шаблонах — тонкие обёртки над read-API src/site/photos.py.
+# photo_v: существование через манифест; варианта нет (нет манифеста/записи/файла) → ОРИГИНАЛ
+# (фоллбэк — прод без backfill не ломается). photo_dims: (w, h) ОРИГИНАЛА для width/height (CLS→0).
+# Здесь ТОЛЬКО регистрация; логика/кэш манифеста — в photos.py (T4-1).
+def _photo_v(src: str, kind: str = "card") -> str:
+    return photos.variant_for(src, kind) or src
+
+
+templates.env.filters["photo_v"] = _photo_v
+templates.env.filters["photo_dims"] = photos.dims_for
 
 
 @asynccontextmanager

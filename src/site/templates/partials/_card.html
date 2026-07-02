@@ -14,7 +14,20 @@
       {% if item.photos %}
         {# C1 photo fallback: a 404'ing photo swaps to the committed placeholder; onerror clears
            itself first so a missing placeholder can't loop. lazy + explicit w/h for CLS (C3). #}
-        <img src="{{ item.photos[0] }}" alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" width="600" height="400" onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
+        {# T4-2 (§P.2): card-вариант + srcset/sizes и width/height ОРИГИНАЛА из манифеста; нет
+           манифеста/варианта → оригинал и прежние 600×400 (фоллбэк — прод без backfill не
+           ломается). srcset только при варианте: объявлять «640w» на оригинале — врать браузеру.
+           Фильтр применяем ДИНАМИЧЕСКИ (map + `is filter`), а не статикой `|photo_v`: render-smoke
+           тесты (test_render/test_card_cta/test_a11y…) собирают чистый Environment без наших
+           фильтров, и статическая ссылка на фильтр валила бы им компиляцию шаблона. #}
+        {% set orig = item.photos[0] %}
+        {% set has_pv = 'photo_v' is filter %}
+        {% set card_src = ([orig]|map('photo_v', 'card')|first) if has_pv else orig %}
+        {% set detail_src = ([orig]|map('photo_v', 'detail')|first) if has_pv else orig %}
+        {% set dims = ([orig]|map('photo_dims')|first) if has_pv else none %}
+        <img src="{{ card_src }}"
+             {%- if card_src != orig %} srcset="{{ card_src }} 640w{% if detail_src != orig %}, {{ detail_src }} 1280w{% endif %}" sizes="(max-width:700px) 100vw, 33vw"{% endif %}
+             alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" decoding="async" width="{{ dims[0] if dims else 600 }}" height="{{ dims[1] if dims else 400 }}" onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
       {% endif %}
       <div class="flag">
         {% if item.for_vnj %}<span class="badge vnj">✓ ВНЖ</span>{% endif %}

@@ -61,12 +61,23 @@
     <div>
       {# gallery #}
       {% if item.photos %}
+        {# T4-2 (§P.2): в галерее — detail-вариант (1280w), по клику на тайл — ПОЛНЫЙ оригинал
+           (новая вкладка). width/height ОРИГИНАЛА из манифеста (CLS→0); нет манифеста/варианта →
+           оригинал и прежние 800×600. LCP-элемент страницы — первое фото: остаётся eager +
+           fetchpriority=high (теперь это лёгкий 1280w-webp — главная цель волны, LCP /apt).
+           Динамика map + `is filter` вместо `|photo_v` — как в _card.html (render-smoke тесты
+           собирают чистый Environment без наших фильтров). #}
+        {% set has_pv = 'photo_v' is filter %}
         <div class="gallery{% if item.photos|length < 2 %} gallery-empty{% endif %}">
           {% for photo in item.photos[:5] %}
+            {% set shown = ([photo]|map('photo_v', 'detail')|first) if has_pv else photo %}
+            {% set dims = ([photo]|map('photo_dims')|first) if has_pv else none %}
             <div class="g{% if loop.first %} main{% endif %}{% if loop.last and item.photos|length > 5 %} more{% endif %}">
               {# C1 photo fallback: a 404'ing gallery photo swaps to the placeholder; onerror
                  clears itself first so a missing placeholder can't loop. #}
-              <img src="{{ photo }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" width="800" height="600" loading="{{ 'eager' if loop.first else 'lazy' }}"{% if loop.first %} fetchpriority="high"{% endif %} onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
+              <a href="{{ photo }}" target="_blank" rel="noopener">
+                <img src="{{ shown }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" width="{{ dims[0] if dims else 800 }}" height="{{ dims[1] if dims else 600 }}" loading="{{ 'eager' if loop.first else 'lazy' }}" decoding="async"{% if loop.first %} fetchpriority="high"{% endif %} onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
+              </a>
               {% if loop.last and item.photos|length > 5 %}<span class="mono">+{{ item.photos|length - 5 }} фото</span>{% endif %}
             </div>
           {% endfor %}
