@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import gzip
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from click.testing import CliRunner
 from sqlalchemy import select
 
+import src.db.session as db_session
 from src.cli import PurgeInactiveResult, _purge_inactive, _stats, cli
 from src.db.models import (
     InboundPost,
@@ -246,6 +248,90 @@ async def test_archive_roundtrip(db, archive_dir):
     assert restored.price_eur == 650
     assert restored.raw_payload == payload
     assert restored.photo_urls[1] == "https://cdn.example.com/2.webp"
+
+
+# ------------------------------------------------------ same-day re-run / TOCTOU guard
+
+
+async def test_same_day_rerun_appends_and_archive_reads_back_both_batches(db, archive_dir):
+    """Повторный боевой прогон в тот же день ДОПИСЫВАЕТ архив новым gzip-member'ом.
+
+    Anti-data-loss свойство из src/cli.py (комментарий у gzip.open(..., "at")):
+    перезапись 'wt' уничтожила бы уже заархивированные строки первого прогона ДО их
+    удаления. gzip читает сконкатенированные member'ы прозрачно — весь архив обязан
+    читаться одним gzip.open и содержать ОБЕ пачки.
+    """
+    day_before = datetime.now(timezone.utc).date()
+
+    await _seed_listing(external_id="first-batch")
+    res1 = await _purge_inactive(older_than_days=30, dry_run=False)
+    assert res1.deleted == 1
+
+    # Вторая пачка появляется ПОСЛЕ первого прогона — как при ручном повторе команды.
+    await _seed_listing(external_id="second-batch")
+    res2 = await _purge_inactive(older_than_days=30, dry_run=False)
+    assert res2.deleted == 1
+
+    # Имя архива берётся от wall-clock: если прогон пересёк UTC-полночь, пачки легли
+    # в разные файлы и same-day-свойство в этом запуске не воспроизвести (см. флак-семейство
+    # полуночных тестов в ревью Wave 5) — честный skip вместо ложного красного.
+    if datetime.now(timezone.utc).date() != day_before:
+        pytest.skip("прогон пересёк UTC-полночь — same-day re-run не воспроизводится")
+
+    assert res2.archive_path == res1.archive_path, "same-day re-run должен писать в тот же файл"
+    with gzip.open(res2.archive_path, "rt", encoding="utf-8") as fh:
+        records = [json.loads(line) for line in fh]
+    assert sorted(r["external_id"] for r in records) == ["first-batch", "second-batch"], (
+        "архив обязан содержать обе пачки: 'wt'-перезапись потеряла бы первую"
+    )
+
+
+async def test_toctou_match_created_between_archive_and_delete_spares_listing(
+    db, archive_dir, monkeypatch
+):
+    """TOCTOU-гард delete-фазы: Match, появившийся МЕЖДУ архивным проходом и delete
+    (nightly-матчер в соседнем процессе), спасает строку от удаления.
+
+    Шов: вторая get_session-сессия внутри _purge_inactive — ровно delete-фаза (архив уже
+    записан и закрыт); обёртка вставляет Match для victim прямо перед её открытием.
+    """
+    victim = await _seed_listing(external_id="victim")
+    bystander = await _seed_listing(external_id="bystander")
+
+    real_get_session = db_session.get_session
+    state = {"sessions": 0, "injected": False}
+
+    @asynccontextmanager
+    async def racing_get_session():
+        state["sessions"] += 1
+        if state["sessions"] == 2 and not state["injected"]:
+            # _protect_with_match идёт через НЕпатченный get_session (module-level
+            # импорт этого файла), так что рекурсии нет.
+            state["injected"] = True
+            await _protect_with_match(victim)
+        async with real_get_session() as s:
+            yield s
+
+    monkeypatch.setattr(db_session, "get_session", racing_get_session)
+
+    res = await _purge_inactive(older_than_days=30, dry_run=False)
+
+    assert state["injected"], "шов не сработал — delete-фаза (вторая сессия) не открывалась"
+    assert res.to_purge == 2  # обе строки успели лечь в архив ДО появления Match
+    assert res.deleted == 1, "удалиться должен только bystander"
+
+    async with real_get_session() as s:
+        left = set((await s.execute(select(Listing.id))).scalars().all())
+        match_targets = set((await s.execute(select(Match.listing_id))).scalars().all())
+    assert victim in left, "строка, получившая Match между проходами, должна быть пощажена"
+    assert bystander not in left
+    assert match_targets == {victim}, "история матчей victim обязана уцелеть"
+
+    # Архивная копия victim — норма (лишняя строка в архиве безвредна);
+    # гард запрещает именно удаление живой ссылки.
+    with gzip.open(res.archive_path, "rt", encoding="utf-8") as fh:
+        archived = {json.loads(line)["external_id"] for line in fh}
+    assert archived == {"victim", "bystander"}
 
 
 # ------------------------------------------------------------------ stats breakdown
