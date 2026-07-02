@@ -328,6 +328,11 @@ section.bay{padding-block:var(--bay)}
    кликабельна вся плитка, keyboard-фокус (:focus-visible ring) обводит её, а не нулевой
    inline-бокс; img внутри позиционируется от якоря — визуально ничего не меняется. */
 .gallery .g>a{position:absolute;inset:0;display:block}
+/* T4-2 a11y: тайлы и сама .gallery режут всё снаружи (overflow:hidden), а глобальный ring
+   рисуется НАРУЖУ (outline-offset:2px) → на Tab кольцо срезалось целиком. Inset-вариант:
+   отрицательный offset рисует кольцо ВНУТРИ тайла (-3px = 1px зазора от края), поверх фото —
+   oxblood@2px остаётся различим. Never removed: это замена глобального ring, не отключение. */
+.gallery .g>a:focus-visible{outline-offset:-3px}
 .gallery .g.more{display:grid;place-items:center;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
 .gallery.gallery-empty{grid-template-columns:1fr;grid-template-rows:1fr}
 .apt-title{font-size:var(--step-3);margin:1.6rem 0 .4rem;letter-spacing:-0.03em}

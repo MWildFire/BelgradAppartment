@@ -346,19 +346,45 @@ def test_filters_partial_has_show_rented_toggle() -> None:
     )
 
 
-def test_card_photo_has_onerror_fallback_to_placeholder() -> None:
-    """C1: a 404'ing photo must not break the grid — <img onerror> swaps to the committed
-    placeholder asset (and clears its own onerror so it can't loop)."""
+def test_card_photo_fallback_is_external_not_inline() -> None:
+    """C1 + T4-4 (CSP): the broken-photo fallback must NOT be an inline onerror= attribute —
+    CSP blocks inline on*-handlers once 'unsafe-inline' leaves script-src. The swap to the
+    committed placeholder lives in the external img-fallback.js (delegated capture-phase error
+    listener scoped to listing photos), loaded by every page that renders cards."""
     html = _render("partials/_card.html", item=FakeView())
-    assert "onerror=" in html
-    assert "/static/img/placeholder.svg" in html
+    # (a) no inline handler in the card markup
+    assert "onerror=" not in html
+    # (b-1) the card <img> stays inside the .ph scope the delegated listener targets
+    assert 'class="ph"' in html and "<img" in html
+    # (b-2) the external mechanism exists and knows the placeholder + the card scope
+    js = TEMPLATES_DIR.parent / "static" / "js" / "img-fallback.js"
+    assert js.exists(), "external C1 fallback (img-fallback.js) is missing"
+    js_src = js.read_text(encoding="utf-8")
+    assert "/static/img/placeholder.svg" in js_src
+    assert ".ph img" in js_src
+    # (b-3) the card-rendering pages load the script (cache-busted external file)
+    index = _render("index.html", featured=[FakeView()], stats=_STATS, csrf_token=_CSRF)
+    catalog = _render(
+        "catalog.html",
+        items=[FakeView()],
+        facets=_FACETS,
+        applied=_APPLIED,
+        total=1,
+        csrf_token=_CSRF,
+    )
+    assert "/static/js/img-fallback.js" in index
+    assert "/static/js/img-fallback.js" in catalog
 
 
-def test_apt_photo_has_onerror_fallback_to_placeholder() -> None:
-    """C1: same broken-photo guard on the detail-page gallery images."""
+def test_apt_photo_fallback_is_external_not_inline() -> None:
+    """C1 + T4-4 (CSP): same contract on the detail-page gallery — no inline onerror=;
+    apt.html loads img-fallback.js, whose scope covers '.gallery img'."""
     html = _render("apt.html", item=FakeView(), similar=[], csrf_token=_CSRF)
-    assert "onerror=" in html
-    assert "/static/img/placeholder.svg" in html
+    assert "onerror=" not in html
+    assert "/static/js/img-fallback.js" in html
+    js = TEMPLATES_DIR.parent / "static" / "js" / "img-fallback.js"
+    assert js.exists(), "external C1 fallback (img-fallback.js) is missing"
+    assert ".gallery img" in js.read_text(encoding="utf-8")
 
 
 def test_lead_ok_partial() -> None:

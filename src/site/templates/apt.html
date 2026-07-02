@@ -73,10 +73,11 @@
             {% set shown = ([photo]|map('photo_v', 'detail')|first) if has_pv else photo %}
             {% set dims = ([photo]|map('photo_dims')|first) if has_pv else none %}
             <div class="g{% if loop.first %} main{% endif %}{% if loop.last and item.photos|length > 5 %} more{% endif %}">
-              {# C1 photo fallback: a 404'ing gallery photo swaps to the placeholder; onerror
-                 clears itself first so a missing placeholder can't loop. #}
+              {# C1 photo fallback: a 404'ing gallery photo swaps to the placeholder — handled
+                 by img-fallback.js ('.gallery img' scope), NOT by an inline onerror= (T4-4:
+                 CSP blocks inline handlers once 'unsafe-inline' is dropped). #}
               <a href="{{ photo }}" target="_blank" rel="noopener">
-                <img src="{{ shown }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" width="{{ dims[0] if dims else 800 }}" height="{{ dims[1] if dims else 600 }}" loading="{{ 'eager' if loop.first else 'lazy' }}" decoding="async"{% if loop.first %} fetchpriority="high"{% endif %} onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
+                <img src="{{ shown }}" alt="{{ item.rooms }} в районе {{ item.district }} — фото {{ loop.index }}" width="{{ dims[0] if dims else 800 }}" height="{{ dims[1] if dims else 600 }}" loading="{{ 'eager' if loop.first else 'lazy' }}" decoding="async"{% if loop.first %} fetchpriority="high"{% endif %}>
               </a>
               {% if loop.last and item.photos|length > 5 %}<span class="mono">+{{ item.photos|length - 5 }} фото</span>{% endif %}
             </div>
@@ -204,6 +205,8 @@
 {% block scripts %}
 {# C4: wires the [data-share] button (Web Share API + copy-link fallback). defer + DOM-ready safe. #}
 <script src="/static/js/share.js?v={{ asset_v }}" defer></script>
+{# C1/T4-4: external broken-photo fallback (gallery + similar-cards) — replaces inline onerror=. #}
+<script src="/static/js/img-fallback.js?v={{ asset_v }}" defer></script>
 {% if coords %}
 {# Stage S Wave 2 (S2-2): Leaflet core (CDN, SRI-pinned — same as map.html; NO markercluster
    here) then the fuzzy-circle island. defer keeps order: L is defined before apt-map.js runs;

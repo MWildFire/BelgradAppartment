@@ -25,3 +25,9 @@
   {% include "partials/_subscribe_form.html" %}
 </section>
 {% endblock %}
+
+{% block scripts %}
+{# C1/T4-4: external broken-photo fallback for catalog cards — replaces inline onerror=.
+   Delegated on document (capture), so it survives every htmx swap of #results. #}
+<script src="/static/js/img-fallback.js?v={{ asset_v }}" defer></script>
+{% endblock %}

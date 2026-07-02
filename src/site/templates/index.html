@@ -145,4 +145,6 @@
 {% block scripts %}
 {# F2: progressive enhancement for the район dropdown. Native <select> works without it. #}
 <script src="/static/js/combobox.js?v={{ asset_v }}" defer></script>
+{# C1/T4-4: external broken-photo fallback for featured cards — replaces inline onerror=. #}
+<script src="/static/js/img-fallback.js?v={{ asset_v }}" defer></script>
 {% endblock %}

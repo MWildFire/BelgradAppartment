@@ -12,8 +12,10 @@
   <a href="/apt/{{ item.id }}">
     <div class="ph">
       {% if item.photos %}
-        {# C1 photo fallback: a 404'ing photo swaps to the committed placeholder; onerror clears
-           itself first so a missing placeholder can't loop. lazy + explicit w/h for CLS (C3). #}
+        {# C1 photo fallback: a 404'ing photo swaps to the committed placeholder — handled by
+           img-fallback.js ('.ph img' scope, delegated capture-phase error listener), NOT by an
+           inline onerror= (T4-4: CSP blocks inline handlers once 'unsafe-inline' is dropped).
+           lazy + explicit w/h for CLS (C3). #}
         {# T4-2 (§P.2): card-вариант + srcset/sizes и width/height ОРИГИНАЛА из манифеста; нет
            манифеста/варианта → оригинал и прежние 600×400 (фоллбэк — прод без backfill не
            ломается). srcset только при варианте: объявлять «640w» на оригинале — врать браузеру.
@@ -27,7 +29,7 @@
         {% set dims = ([orig]|map('photo_dims')|first) if has_pv else none %}
         <img src="{{ card_src }}"
              {%- if card_src != orig %} srcset="{{ card_src }} 640w{% if detail_src != orig %}, {{ detail_src }} 1280w{% endif %}" sizes="(max-width:700px) 100vw, 33vw"{% endif %}
-             alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" decoding="async" width="{{ dims[0] if dims else 600 }}" height="{{ dims[1] if dims else 400 }}" onerror="this.onerror=null;this.src='/static/img/placeholder.svg'">
+             alt="Квартира {{ item.rooms }} в районе {{ item.district }}" loading="lazy" decoding="async" width="{{ dims[0] if dims else 600 }}" height="{{ dims[1] if dims else 400 }}">
       {% endif %}
       <div class="flag">
         {% if item.for_vnj %}<span class="badge vnj">✓ ВНЖ</span>{% endif %}

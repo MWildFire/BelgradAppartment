@@ -156,8 +156,9 @@ def test_card_img_uses_card_variant_with_srcset(root: Path) -> None:
     assert 'loading="lazy"' in html
     assert 'decoding="async"' in html
     assert 'width="800"' in html and 'height="600"' in html
-    # C1-фоллбэк битого фото не потерян
-    assert "/static/img/placeholder.svg" in html
+    # C1-фоллбэк битого фото теперь внешний (img-fallback.js, T4-4/CSP) — inline-обработчиков нет;
+    # сам контракт фоллбэка покрывает test_render.py::test_card_photo_fallback_is_external_not_inline
+    assert "onerror=" not in html
 
 
 def test_card_img_falls_back_to_original_without_manifest(root: Path) -> None:
