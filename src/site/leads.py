@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from urllib.parse import urlsplit
 
 from sqlalchemy.exc import OperationalError
 
@@ -25,6 +28,11 @@ logger = logging.getLogger(__name__)
 NAME_MAX = 120
 CONTACT_MAX = 200
 MESSAGE_MAX = 2000
+
+# T2-3 (§A.1): границы полей атрибуции — те же, что у site_events (единый контракт этапа T).
+UTM_MAX = 100
+REFERRER_MAX = 200
+_UTM_STRIP_RE = re.compile(r"[^A-Za-z0-9._-]+")
 
 # busy_timeout (5000ms) already waits out the matcher's writes; these retries cover the rare
 # case where the lock outlives the timeout. Small + bounded — this is a visitor-facing path.
@@ -51,6 +59,45 @@ class LeadPayload:
     # validated away in create_lead (apartment_summary returns None) and never persisted.
     site_listing_id: int | None = None
     kind: str = "general"  # general | listing — set to 'listing' once the apartment resolves
+    # T2-3 attribution (§A.4): first-touch снимок из hidden-полей utm.js (или no-JS фоллбэка
+    # роута). Значения могут быть «сырыми» — писатель добивает их до §A.1 (мусор → NULL).
+    utm_source: str | None = None
+    utm_medium: str | None = None
+    utm_campaign: str | None = None
+    referrer: str | None = None
+
+
+def clean_utm(value: str | None) -> str | None:
+    """Санитайз utm_* по §A.1: только [A-Za-z0-9._-], обрезка ≤100; пусто/мусор → NULL.
+
+    Best-effort по контракту: атрибуция никогда не превращается в 400 — грязное значение
+    молча деградирует, заявка живёт.
+    """
+    if not value:
+        return None
+    cleaned = _UTM_STRIP_RE.sub("", value)[:UTM_MAX]
+    return cleaned or None
+
+
+def clean_referrer(value: str | None, *, own_hosts: Iterable[str] = ()) -> str | None:
+    """Referrer по §A.1/§A.4: только внешний абсолютный URL, обрезка ≤200; иначе NULL.
+
+    own_hosts передаёт роут (хост запроса + публичный base_url) — внутренние переходы это
+    навигация по сайту, не источник трафика. Писатель зовёт без own_hosts: хост-политика —
+    забота роута, здесь остаются длина и «URL вообще». Кривой URL глотаем (best-effort).
+    """
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        host = (urlsplit(value).hostname or "").lower()
+    except ValueError:  # напр. 'http://[broken' — мусор от рукописного POST
+        return None
+    if not host:
+        return None
+    if host in {h.lower() for h in own_hosts if h}:
+        return None
+    return value[:REFERRER_MAX]
 
 
 def _validate(payload: LeadPayload) -> None:
@@ -104,6 +151,12 @@ async def _insert_lead(payload: LeadPayload, database_url: str | None) -> Lead:
                     kind=payload.kind,
                     source="site",
                     status="new",
+                    # T2-3: последний рубеж §A.1 — длины/charset добиваются у писателя, чтобы
+                    # НИКАКОЙ вызов create_lead не мог записать в БД сырое значение.
+                    utm_source=clean_utm(payload.utm_source),
+                    utm_medium=clean_utm(payload.utm_medium),
+                    utm_campaign=clean_utm(payload.utm_campaign),
+                    referrer=clean_referrer(payload.referrer),
                 )
                 s.add(lead)
                 await s.flush()

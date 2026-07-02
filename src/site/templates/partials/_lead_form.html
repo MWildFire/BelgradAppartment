@@ -22,6 +22,13 @@
     <input type="text" id="company" name="company" tabindex="-1" autocomplete="off">
   </div>
 
+  {# T2-3 attribution (§A.4): utm.js fills these from the sessionStorage first-touch snapshot.
+     Empty without JS — the server then falls back to the Referer page's query (best-effort). #}
+  <input type="hidden" name="utm_source" value="">
+  <input type="hidden" name="utm_medium" value="">
+  <input type="hidden" name="utm_campaign" value="">
+  <input type="hidden" name="referrer" value="">
+
   {# form-level error slot — lead.js fills it on a server 400 (e.g. CSRF/length). #}
   <p class="field-error" data-error-for="_form" role="alert"></p>
 
@@ -70,3 +77,5 @@
 </style>
 {# inline validation + server-400 surfacing; no-JS form still POSTs natively. #}
 <script src="/static/js/lead.js?v={{ asset_v }}" defer></script>
+{# T2-3: first-touch атрибуция → hidden-поля (подключение в base.html запрещено, §A.4). #}
+<script src="/static/js/utm.js?v={{ asset_v }}" defer></script>

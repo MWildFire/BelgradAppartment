@@ -14,7 +14,7 @@ import hashlib
 import logging
 from pathlib import Path
 from typing import cast
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
 import anyio
 from fastapi import (
@@ -37,7 +37,12 @@ from src.site.deps import (
     enforce_lead_ratelimit,
     require_site_csrf,
 )
-from src.site.leads import LeadPayload, LeadValidationError, create_lead
+from src.site.leads import (
+    LeadPayload,
+    LeadValidationError,
+    clean_referrer,
+    create_lead,
+)
 from src.site.maps import fuzz_coords, maps_links
 from src.site.readmodel import Filters
 from src.site.subscriptions import (
@@ -112,6 +117,72 @@ def _as_int(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+# --------------------------------------------------- T2-3: атрибуция сабмитов (§A.3/§A.4)
+
+_UTM_KEYS = ("utm_source", "utm_medium", "utm_campaign")
+
+
+def _referer_query_utm(request: Request) -> dict[str, str]:
+    """No-JS фоллбэк (§A.4): utm_* из query страницы-источника (заголовок Referer).
+
+    Без JS hidden-поля пусты, но браузер шлёт Referer = страницу формы; если посетитель
+    пришёл на неё по ссылке с ?utm_source=…, метки ещё живут в её query. Санитайз не здесь:
+    значения всё равно проходят clean_utm у писателя (мусор → NULL, никогда не 400).
+    """
+    try:
+        query = urlsplit(request.headers.get("referer", "")).query
+    except ValueError:  # кривой Referer от рукописного клиента — фоллбэка просто нет
+        return {}
+    if not query:
+        return {}
+    params = parse_qs(query)
+    return {k: params[k][0] for k in _UTM_KEYS if k in params and params[k][0]}
+
+
+def _form_attribution(
+    request: Request, utm_source: str, utm_medium: str, utm_campaign: str, referrer: str
+) -> dict[str, str | None]:
+    """Атрибуция сабмита: hidden-поля utm.js (first-touch) с per-полевым no-JS фоллбэком.
+
+    referrer фильтруется от «своих» хостов здесь — только роут знает хост запроса (за
+    прокси он может отличаться от публичного base_url, проверяем оба). Длины/charset
+    добивает писатель (§A.1).
+    """
+    fallback = _referer_query_utm(request)
+    own_hosts = (
+        request.url.hostname or "",
+        urlsplit(get_settings().site_public_base_url).hostname or "",
+    )
+    form_utm = {"utm_source": utm_source, "utm_medium": utm_medium, "utm_campaign": utm_campaign}
+    return {
+        **{k: (form_utm[k].strip() or fallback.get(k)) for k in _UTM_KEYS},
+        "referrer": clean_referrer(referrer, own_hosts=own_hosts),
+    }
+
+
+def _submit_event_request(request: Request, attribution: dict[str, str | None]) -> Request:
+    """Синтетический Request для record_event('lead_submit'/'subscribe_submit').
+
+    record_event — единственный писатель site_events, и он читает атрибуцию из запроса
+    (query + Referer), а скип HX-Request у него — про pageview-пагинацию. У POST-сабмита же
+    utm в query нет, Referer — своя страница, а реальная форма шлёт hx-post. Поэтому событию
+    отдаём копию scope, где: (а) HX-заголовок снят — submit пишется и для HTMX; (б) query =
+    first-touch utm ИЗ ФОРМЫ; (в) Referer = внешний referrer формы. ip/ua/host исходного
+    запроса сохраняются — visitor-хэш и бот-эвристика считаются как обычно.
+    """
+    scope = dict(request.scope)
+    headers = [(k, v) for (k, v) in scope["headers"] if k not in (b"hx-request", b"referer")]
+    ref = attribution.get("referrer")
+    if ref:
+        # заголовок должен быть ASCII: не-ASCII части URL процентуем (IRI→URI), ASCII не трогаем
+        headers.append((b"referer", quote(ref, safe=":/?#[]@!$&'()*+,;=%~").encode("ascii")))
+    scope["headers"] = headers
+    scope["query_string"] = urlencode(
+        {k: v for k in _UTM_KEYS if (v := attribution.get(k))}
+    ).encode("ascii")
+    return Request(scope)
 
 
 def _static_page(request: Request, template: str) -> Response:
@@ -519,6 +590,7 @@ async def how(
 @router.post("/lead")
 async def lead(
     request: Request,
+    background_tasks: BackgroundTasks,
     name: str = Form(""),
     contact: str = Form(""),
     budget_eur: str = Form(""),
@@ -527,12 +599,17 @@ async def lead(
     message: str = Form(""),
     company: str = Form(""),  # honeypot — real users never see/fill it
     site_listing_id: str = Form(""),  # set when the form is opened for a specific apartment
+    utm_source: str = Form(""),  # T2-3: hidden-поля атрибуции — utm.js (first-touch)
+    utm_medium: str = Form(""),
+    utm_campaign: str = Form(""),
+    referrer: str = Form(""),
     _csrf: None = Depends(require_site_csrf),
     _rl: None = Depends(enforce_lead_ratelimit),
     db_url: str = Depends(catalog_db_url),
 ) -> Response:
     # The id is just a hint here — public/existence validation (and degradation to a general
     # lead for a private/missing id) happens in create_lead via apartment_summary.
+    attribution = _form_attribution(request, utm_source, utm_medium, utm_campaign, referrer)
     payload = LeadPayload(
         name=name,
         contact=contact,
@@ -542,11 +619,28 @@ async def lead(
         message=message or None,
         company=company or None,
         site_listing_id=_as_int(site_listing_id),
+        utm_source=attribution["utm_source"],
+        utm_medium=attribution["utm_medium"],
+        utm_campaign=attribution["utm_campaign"],
+        referrer=attribution["referrer"],
     )
     try:
-        await create_lead(payload, database_url=db_url)
+        saved = await create_lead(payload, database_url=db_url)
     except LeadValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    # T2-3 (§A.3): lead_submit — ПОСЛЕ коммита заявки, фоном, некритично для ответа. Honeypot
+    # (saved is None) события не пишет: коммита не было, счётчик заявок боты не надувают.
+    # apt_id — уже ПРОВЕРЕННЫЙ create_lead id (приватная/битая квартира деградировала в None).
+    if saved is not None:
+        background_tasks.add_task(
+            analytics.record_event,
+            _submit_event_request(request, attribution),
+            path="/lead",
+            event_type="lead_submit",
+            apt_id=saved.site_listing_id,
+            database_url=db_url,
+        )
 
     # honeypot trip returns None from create_lead → still respond OK (silent to the bot).
     if "hx-request" in request.headers:
@@ -557,6 +651,7 @@ async def lead(
 @router.post("/subscribe")
 async def subscribe(
     request: Request,
+    background_tasks: BackgroundTasks,
     channel: str = Form("email"),
     email: str = Form(""),
     district: list[str] = Form(default=[]),  # multivalued, like the catalog filter
@@ -566,6 +661,10 @@ async def subscribe(
     vnj: str = Form(""),
     wc: str = Form(""),
     company: str = Form(""),  # honeypot — real users never see/fill it
+    utm_source: str = Form(""),  # T2-3: hidden-поля атрибуции — utm.js (first-touch)
+    utm_medium: str = Form(""),
+    utm_campaign: str = Form(""),
+    referrer: str = Form(""),
     _csrf: None = Depends(require_site_csrf),
     _rl: None = Depends(enforce_lead_ratelimit),  # C2 reuses the lead per-IP sliding window
     db_url: str = Depends(catalog_db_url),
@@ -590,6 +689,20 @@ async def subscribe(
         result = await create_subscription(payload, database_url=db_url)
     except SubscriptionValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+
+    # T2-3 (§A.3): subscribe_submit — ПОСЛЕ коммита подписки, фоном, некритично для ответа.
+    # У subscriptions нет utm-колонок (§A.1) — first-touch атрибуция живёт в самом событии.
+    if result is not None:
+        background_tasks.add_task(
+            analytics.record_event,
+            _submit_event_request(
+                request,
+                _form_attribution(request, utm_source, utm_medium, utm_campaign, referrer),
+            ),
+            path="/subscribe",
+            event_type="subscribe_submit",
+            database_url=db_url,
+        )
 
     # honeypot trip returns None → still respond OK (silent), with no deep-link.
     deep_link = result.telegram_deep_link if result is not None else None

@@ -18,6 +18,13 @@
     <input type="text" id="sub-company" name="company" tabindex="-1" autocomplete="off">
   </div>
 
+  {# T2-3 attribution (§A.4): utm.js fills these from the sessionStorage first-touch snapshot.
+     Empty without JS — the server then falls back to the Referer page's query (best-effort). #}
+  <input type="hidden" name="utm_source" value="">
+  <input type="hidden" name="utm_medium" value="">
+  <input type="hidden" name="utm_campaign" value="">
+  <input type="hidden" name="referrer" value="">
+
   <p class="field-error" data-error-for="_form" role="alert"></p>
 
   <div class="subscribe-grid">
@@ -96,3 +103,5 @@
 
   <button type="submit" class="btn primary">Подписаться</button>
 </form>
+{# T2-3: first-touch атрибуция → hidden-поля (подключение в base.html запрещено, §A.4). #}
+<script src="/static/js/utm.js?v={{ asset_v }}" defer></script>
