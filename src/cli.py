@@ -6,6 +6,7 @@ import asyncio
 import logging
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, NamedTuple
 
 import click
@@ -214,8 +215,14 @@ async def _stats() -> None:
     async with get_session() as s:
         click.echo("=== Listings ===")
         for p in Platform:
-            total = (
-                await s.execute(select(func.count(Listing.id)).where(Listing.platform == p))
+            # T1-3: active/inactive вместо одного раздутого total — с десятками тысяч
+            # корпусов «total» ничего не говорил о живом рынке; сумма и так очевидна.
+            inactive = (
+                await s.execute(
+                    select(func.count(Listing.id)).where(
+                        Listing.platform == p, Listing.is_active.is_(False)
+                    )
+                )
             ).scalar_one()
             with_ph = (
                 await s.execute(
@@ -232,8 +239,8 @@ async def _stats() -> None:
                 )
             ).scalar_one()
             click.echo(
-                f"  {p.value:14}  {total:4d} total  "
-                f"{active:4d} active  {with_ph:4d} with pHash"
+                f"  {p.value:14}  {active:5d} active  "
+                f"{inactive:5d} inactive  {with_ph:5d} with pHash"
             )
 
         click.echo("\n=== Inbound posts ===")
@@ -2801,6 +2808,224 @@ async def _heal_urls(
             await client.aclose()
 
     return healed
+
+
+# ------------------------------------------------------------------ T1-3 purge-inactive
+
+
+class PurgeInactiveResult(NamedTuple):
+    """_purge_inactive outcome — a NamedTuple so tests assert the report, not stdout."""
+
+    candidates: int  # inactive & older than cutoff, BEFORE the FK protection
+    protected: list[tuple[int, str, str]]  # (id, platform, external_id) — FK-referenced, refused
+    protected_on_site: int  # of protected: exposed via site_listings (visible on the site)
+    to_purge: int  # candidates minus protected — what the real run archives+deletes
+    by_platform: dict[str, int]  # purge-set breakdown by source platform
+    by_date: dict[str, int]  # purge-set breakdown by last_seen_at date (YYYY-MM-DD)
+    archive_bytes: int  # uncompressed JSONL volume (dry-run: what WOULD be written)
+    archive_path: Path | None  # None on dry-run or when the purge set is empty
+    deleted: int  # rows actually deleted (always 0 on dry-run)
+
+
+def _listing_archive_record(mapping: Any) -> dict[str, Any]:
+    """One listings row (column mapping) → JSON-serializable dict, ALL columns present.
+
+    photo_embeddings НАМЕРЕННО обнулены (ключ есть, значение None): это derived-данные
+    (CLIP по фото, восстановимы `otz embed-all`), base64 раздул бы архив в разы и почти
+    не жмётся gzip'ом. Пометка об исключении печатается в отчёте команды.
+    """
+    import enum as _enum
+
+    rec: dict[str, Any] = {}
+    for key, value in mapping.items():
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        elif isinstance(value, _enum.Enum):
+            value = value.value
+        rec[key] = value
+    rec["photo_embeddings"] = None
+    return rec
+
+
+async def _purge_inactive(*, older_than_days: int, dry_run: bool) -> PurgeInactiveResult:
+    """Archive-then-delete for long-inactive listings; dry-run = same report, ZERO mutations.
+
+    FK-защита: строки, на которые ссылаются matches (а через matches.id — site_listings),
+    не удаляются НИКОГДА — с PRAGMA foreign_keys=ON такой delete каскадом снёс бы историю
+    матчей и карточки сайта. Защищённые перечисляются в отчёте поимённо.
+
+    Порядок боевого прогона: полностью записать и закрыть архив → удалить РОВНО те id,
+    что легли в архив. Падение между шагами оставляет строки на месте — повторный прогон
+    безопасен (архив дописывается новым gzip-member'ом, не перетирается).
+    """
+    import gzip
+    import json
+    from datetime import timedelta
+
+    from sqlalchemy import delete, func
+
+    from src.db.models import Match, SiteListing
+    from src.db.session import get_session
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    age_where = (Listing.is_active.is_(False), Listing.last_seen_at < cutoff)
+    referenced = select(Match.listing_id)  # listings pinned by match history
+
+    archive_bytes = 0
+    purged_ids: list[int] = []
+    archive_path: Path | None = None
+    fh = None
+
+    async with get_session() as s:
+        candidates = (
+            await s.execute(select(func.count(Listing.id)).where(*age_where))
+        ).scalar_one()
+        protected = [
+            (int(lid), plat.value, ext)
+            for lid, plat, ext in (
+                await s.execute(
+                    select(Listing.id, Listing.platform, Listing.external_id)
+                    .where(*age_where, Listing.id.in_(referenced))
+                    .order_by(Listing.id)
+                )
+            ).all()
+        ]
+        protected_on_site = (
+            await s.execute(
+                select(func.count(func.distinct(Match.listing_id)))
+                .select_from(Match)
+                .join(SiteListing, SiteListing.match_id == Match.id)
+                .where(Match.listing_id.in_(select(Listing.id).where(*age_where)))
+            )
+        ).scalar_one()
+
+        purge_where = (*age_where, Listing.id.not_in(referenced))
+        by_platform = {
+            plat.value: int(n)
+            for plat, n in (
+                await s.execute(
+                    select(Listing.platform, func.count(Listing.id))
+                    .where(*purge_where)
+                    .group_by(Listing.platform)
+                )
+            ).all()
+        }
+        by_date = {
+            str(d): int(n)
+            for d, n in (
+                await s.execute(
+                    select(func.date(Listing.last_seen_at), func.count(Listing.id))
+                    .where(*purge_where)
+                    .group_by(func.date(Listing.last_seen_at))
+                    .order_by(func.date(Listing.last_seen_at))
+                )
+            ).all()
+        }
+
+        # Column-only select minus the BLOB, streamed: full ORM rows would drag every
+        # photo_embeddings (hundreds of MB on a prod-sized purge) into memory to discard it,
+        # and .all() would hold every description/raw_payload at once.
+        archive_cols = [c for c in Listing.__table__.columns if c.name != "photo_embeddings"]
+        stream = await s.stream(select(*archive_cols).where(*purge_where).order_by(Listing.id))
+        try:
+            async for row in stream:
+                line = json.dumps(_listing_archive_record(row._mapping), ensure_ascii=False) + "\n"
+                archive_bytes += len(line.encode("utf-8"))
+                purged_ids.append(int(row.id))
+                if dry_run:
+                    continue  # dry-run walks the same rows for an honest volume — writes nothing
+                if fh is None:
+                    archive_dir = get_settings().data_dir / "archive"
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    archive_path = (
+                        archive_dir / f"listings-{datetime.now(timezone.utc):%Y%m%d}.jsonl.gz"
+                    )
+                    # "at" appends a new gzip member — a same-day re-run must not overwrite
+                    # the earlier archive (gzip reads concatenated members transparently).
+                    fh = gzip.open(archive_path, "at", encoding="utf-8")
+                fh.write(line)
+        finally:
+            if fh is not None:
+                fh.close()
+
+    deleted = 0
+    if not dry_run and purged_ids:
+        # Fresh session AFTER the archive file is closed; delete only archived ids,
+        # chunked to stay under SQLite's bound-parameter cap.
+        async with get_session() as s:
+            for i in range(0, len(purged_ids), 500):
+                chunk = purged_ids[i : i + 500]
+                result = await s.execute(delete(Listing).where(Listing.id.in_(chunk)))
+                deleted += result.rowcount or 0
+
+    return PurgeInactiveResult(
+        candidates=int(candidates),
+        protected=protected,
+        protected_on_site=int(protected_on_site),
+        to_purge=len(purged_ids),
+        by_platform=by_platform,
+        by_date=by_date,
+        archive_bytes=archive_bytes,
+        archive_path=archive_path,
+        deleted=deleted,
+    )
+
+
+def _echo_purge_report(
+    res: PurgeInactiveResult, *, older_than_days: int, dry_run: bool
+) -> None:
+    mode = "DRY-RUN (ноль мутаций)" if dry_run else "архив → delete"
+    click.echo(f"=== purge-inactive — {mode} ===")
+    click.echo(f"порог: inactive, last_seen_at старше {older_than_days} дн")
+    click.echo(f"кандидатов: {res.candidates}")
+    click.echo(
+        f"защищено FK (matches/site_listings): {len(res.protected)} — удалять ОТКАЗ"
+        + (f", из них видимы на сайте: {res.protected_on_site}" if res.protected else "")
+    )
+    for lid, plat, ext in res.protected:
+        click.echo(f"  · #{lid}  {plat}  {ext}")
+    click.echo(f"к удалению: {res.to_purge}")
+    if res.by_platform:
+        click.echo("по площадкам:")
+        for plat, n in sorted(res.by_platform.items()):
+            click.echo(f"  {plat:14}  {n}")
+    if res.by_date:
+        click.echo("по датам last_seen_at:")
+        for day, n in res.by_date.items():
+            click.echo(f"  {day}  {n}")
+    click.echo(
+        f"объём: {res.to_purge} строк, ~{res.archive_bytes / 1024 / 1024:.1f} MB JSONL "
+        "(photo_embeddings исключены: derived-данные, восстановимы `otz embed-all`)"
+    )
+    if dry_run:
+        click.echo("(dry-run: БД не изменена, архив не записан)")
+    else:
+        click.echo(f"архив: {res.archive_path or '— (нечего архивировать)'}")
+        click.echo(f"удалено: {res.deleted}")
+
+
+@cli.command("purge-inactive")
+@click.option(
+    "--older-than",
+    "older_than_days",
+    type=int,
+    required=True,
+    help="Purge inactive listings whose last_seen_at is older than N days.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Full report (sources/dates/volume/FK-protected) with ZERO mutations.",
+)
+def purge_inactive(older_than_days: int, dry_run: bool) -> None:
+    """T1-3: archive long-inactive listings to data/archive/*.jsonl.gz, then delete them.
+
+    Rows referenced by matches/site_listings are REFUSED and listed in the report —
+    deleting them would cascade-wipe match history and public site cards. On this stage
+    prod runs dry-run ONLY (decision D5); the real run is coded and tested for a later go.
+    """
+    result = asyncio.run(_purge_inactive(older_than_days=older_than_days, dry_run=dry_run))
+    _echo_purge_report(result, older_than_days=older_than_days, dry_run=dry_run)
 
 
 @cli.command("scrape-smoke")
