@@ -3019,7 +3019,13 @@ async def _purge_inactive(*, older_than_days: int, dry_run: bool) -> PurgeInacti
         async with get_session() as s:
             for i in range(0, len(purged_ids), 500):
                 chunk = purged_ids[i : i + 500]
-                result = await s.execute(delete(Listing).where(Listing.id.in_(chunk)))
+                result = await s.execute(
+                    delete(Listing)
+                    .where(Listing.id.in_(chunk))
+                    # TOCTOU-гард: между архивным проходом и delete мог появиться Match
+                    # (nightly-матчер) — cascade снёс бы его историю. Такие строки щадим.
+                    .where(~Listing.id.in_(select(Match.listing_id)))
+                )
                 deleted += result.rowcount or 0
 
     return PurgeInactiveResult(
@@ -3072,7 +3078,8 @@ def _echo_purge_report(
 @click.option(
     "--older-than",
     "older_than_days",
-    type=int,
+    # min=1: N<=0 сдвигает cutoff в будущее — боевой прогон снёс бы все inactive-строки.
+    type=click.IntRange(min=1),
     required=True,
     help="Purge inactive listings whose last_seen_at is older than N days.",
 )

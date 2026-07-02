@@ -201,7 +201,9 @@ async def test_heal_urls_rewrites_slug_rows(factory):
         ])
         await s.commit()
 
-    healed = await _heal_urls(platform="nekretnine", dry_run=False)
+    # include_inactive=True = старый охват без сетевой resolve-проверки (T1-2): интент теста —
+    # платформо-скоупный rewrite слагов, а не гард активности; без флага тест ходил бы в реальную сеть.
+    healed = await _heal_urls(platform="nekretnine", dry_run=False, include_inactive=True)
     assert healed == 2
 
     async with factory() as s:

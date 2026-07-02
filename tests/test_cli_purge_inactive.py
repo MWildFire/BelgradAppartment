@@ -307,3 +307,19 @@ def test_cli_older_than_is_required(monkeypatch):
     result = runner.invoke(cli, ["purge-inactive", "--dry-run"])
     assert result.exit_code != 0
     assert called["n"] == 0
+
+
+def test_cli_rejects_non_positive_older_than(monkeypatch):
+    """--older-than <= 0 сдвигает cutoff в будущее — боевой прогон снёс бы ВСЕ inactive-строки
+    независимо от возраста. Для необратимой команды это отклоняется на границе CLI."""
+    called = {"n": 0}
+
+    async def fake_purge(**_kwargs):
+        called["n"] += 1
+
+    monkeypatch.setattr("src.cli._purge_inactive", fake_purge)
+    runner = CliRunner()
+    for bad in ("0", "-5"):
+        result = runner.invoke(cli, ["purge-inactive", "--older-than", bad])
+        assert result.exit_code == 2, f"--older-than {bad} должен отклоняться"
+    assert called["n"] == 0
