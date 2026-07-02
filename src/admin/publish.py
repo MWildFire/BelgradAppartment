@@ -7,6 +7,8 @@ overrides the parse, so this is only a first-guess default at publish time.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 import unicodedata
 
@@ -14,6 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import InboundPost, Match, SiteListing
+
+logger = logging.getLogger(__name__)
 
 # Raw keyword lists exactly as DECISIONS.md #2. Both the text and these keywords go
 # through _normalise before substring-matching, so diacritics/case/script line up
@@ -122,4 +126,18 @@ async def auto_publish_site_listing(
         from src.site.cache import invalidate_catalog_cache
 
         invalidate_catalog_cache()
+        # T4-1 hook (§P.1 а): webp-варианты фото новой карточки, в thread'е — Pillow-ресайз
+        # не должен блокировать event loop доставки. Best-effort: сбой НИКОГДА не валит
+        # публикацию (сайт живёт на оригиналах, недостающее добирает `otz photos-backfill`).
+        if inbound is not None and inbound.photo_paths:
+            try:
+                from src.site.photos import generate_for_stored_paths
+
+                await asyncio.to_thread(generate_for_stored_paths, list(inbound.photo_paths))
+            except Exception:
+                logger.warning(
+                    "photo variant generation failed for match %s (publish unaffected)",
+                    match_id,
+                    exc_info=True,
+                )
     return row, created

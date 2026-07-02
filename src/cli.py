@@ -1297,6 +1297,34 @@ async def _photo_stats(since_str: str, platform: str | None) -> None:
         click.echo(f"{'TOTAL':14s}  {grand['ok']:>8d}  {grand['failed']:>8d}  {grand['total']:>8d}  {pct:>6.1f}%")
 
 
+@cli.command("photos-backfill")
+@click.option("--dry-run", is_flag=True, help="Count the work; write no variants, no manifest.")
+@click.option("--limit", type=int, default=None, help="Cap number of originals processed.")
+def photos_backfill(dry_run: bool, limit: int | None) -> None:
+    """Generate card/detail webp variants + photo_manifest.json under SITE_PHOTOS_ROOT (§P.1).
+
+    Идемпотентен: существующие варианты скипаются, битые оригиналы — скип+warn (не падение).
+    Варианты и манифест — derived data: в git/rsync не участвуют, команда гоняется НА VPS
+    (раннбук Wave 6; publish-hook покрывает только новые публикации).
+    """
+    from src.site.photos import backfill_variants, photos_root
+
+    root = photos_root()
+    click.echo(f"→ photos-backfill: root={root}{' [DRY-RUN]' if dry_run else ''}")
+
+    def _progress(done: int, total: int) -> None:
+        # Каданс: не чаще раза на 50 файлов — на VPS тысячи фото, лог не должен тонуть.
+        if done % 50 == 0 or done == total:
+            click.echo(f"  … {done}/{total}")
+
+    stats = backfill_variants(root=root, limit=limit, dry_run=dry_run, progress=_progress)
+    verb = "would generate" if dry_run else "generated"
+    click.echo(
+        f"=== DONE: originals={stats.total} {verb}={stats.generated} "
+        f"skipped={stats.skipped} broken={stats.broken} ==="
+    )
+
+
 @cli.command("admin")
 @click.option("--host", default=None, help="Override ADMIN_HOST.")
 @click.option("--port", default=None, type=int, help="Override ADMIN_PORT.")
