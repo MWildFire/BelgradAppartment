@@ -15,7 +15,8 @@
       {% for r in applied.rooms %}<input type="hidden" name="rooms" value="{{ r }}">{% endfor %}
       {% if applied.show_rented %}<input type="hidden" name="show_rented" value="1">{% endif %}
       <label for="sort" class="mono" style="color:var(--ink-2);font-size:.7rem;text-transform:uppercase;letter-spacing:.12em;margin-right:8px">сортировка</label>
-      <select id="sort" name="sort" onchange="this.form.requestSubmit()">
+      {# T4-4: submit-on-change живёт в filters.js (delegated change на #sort) — не inline (CSP). #}
+      <select id="sort" name="sort">
         <option value="new"{% if applied.sort == 'new' %} selected{% endif %}>сначала свежие</option>
         <option value="price_asc"{% if applied.sort == 'price_asc' %} selected{% endif %}>сначала дешевле</option>
         <option value="price_desc"{% if applied.sort == 'price_desc' %} selected{% endif %}>сначала дороже</option>

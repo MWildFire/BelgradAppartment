@@ -73,17 +73,15 @@
   {# — канал: e-mail или Telegram — #}
   <fieldset class="subscribe-channel">
     <legend>Куда присылать</legend>
-    {# onchange (not onclick): keyboard users switching radios with arrow keys fire `change`, not
-       `click`, so the email field's show/hide + required toggle stays in sync for them too. #}
+    {# T4-4: show/hide + required e-mail поля — subscribe-form.js (delegated `change`, НЕ inline:
+       CSP). `change`, не `click` — чтобы клавиатурные стрелки по radio тоже срабатывали. #}
     <label class="channel-opt">
-      <input type="radio" name="channel" value="email" checked
-             onchange="var f=document.getElementById('sub-email-field'),e=document.getElementById('sub-email');f.hidden=false;e.required=true">
+      <input type="radio" name="channel" value="email" checked>
       E-mail
     </label>
     {% if site_telegram_bot_username %}
       <label class="channel-opt">
-        <input type="radio" name="channel" value="telegram"
-               onchange="var f=document.getElementById('sub-email-field'),e=document.getElementById('sub-email');f.hidden=true;e.required=false">
+        <input type="radio" name="channel" value="telegram">
         Telegram
       </label>
     {% endif %}
@@ -105,3 +103,5 @@
 </form>
 {# T2-3: first-touch атрибуция → hidden-поля (подключение в base.html запрещено, §A.4). #}
 <script src="/static/js/utm.js?v={{ asset_v }}" defer></script>
+{# T4-4: канал-переключатель формы без inline-JS (CSP) — грузится там же, где форма. #}
+<script src="/static/js/subscribe-form.js?v={{ asset_v }}" defer></script>

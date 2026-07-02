@@ -5,6 +5,8 @@
 // This file adds nicety on top; if it never loads, nothing breaks.
 //
 // What it does:
+//   0. submit the sort <select>'s form on change (T4-4: was inline onchange — moved here so
+//      CSP script-src can drop 'unsafe-inline'; sorting always needed JS, no-JS is unchanged);
 //   1. debounce the price <input> change → htmx swap (avoid a request per keystroke);
 //   2. mirror the .on visual state on toggles/pills when their checkbox flips (no-JS uses
 //      :has() in CSS, but older engines fall back to this);
@@ -14,6 +16,20 @@
 
 (function () {
   "use strict";
+
+  // --- 0. sort <select> submit (T4-4: CSP) --------------------------------------------
+  // Раньше жило inline (onchange="this.form.requestSubmit()") — вынесено сюда, чтобы снять
+  // 'unsafe-inline' из script-src. Delegated on document, NOT bound to the node: #results is
+  // an htmx swap target, a fresh <select id="sort"> arrives with every filter change, and a
+  // document-level listener survives every swap. requestSubmit (not submit) so htmx's submit
+  // handler fires — same path as the no-JS GET form.
+  document.addEventListener("change", function (e) {
+    var el = e.target;
+    if (!el || el.id !== "sort" || !el.form) return;
+    if (el.form.requestSubmit) el.form.requestSubmit();
+    else el.form.submit();
+  });
+
   var form = document.querySelector("form.filters");
   if (!form) return;
 
