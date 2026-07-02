@@ -49,7 +49,7 @@ leads (ALTER, nullable):
 
 `daily_salt = sha256(SITE_ANALYTICS_SALT ‖ 'YYYY-MM-DD')` — уники не связываемы между днями по построению.
 
-### §A.2 Метрики rollup (nightly, идемпотентный upsert; пересчитывает вчера+сегодня)
+### §A.2 Метрики rollup (nightly, идемпотентный upsert; догон несагрегированных дней + сегодня)
 
 | metric | key | value |
 |---|---|---|
@@ -61,7 +61,15 @@ leads (ALTER, nullable):
 | `subs` | `''` | события `subscribe_submit` |
 | `src_utm` | `utm_source` | pageview с utm_source |
 | `src_ref` | домен referrer | pageview с внешним referrer |
-| `_rolled` | `''` | `1` — маркер «день сагрегирован» |
+| `_rolled` | `''` | `1` — маркер «день сагрегирован **финально**» |
+
+**Маркер `_rolled` ставится ТОЛЬКО дням `day < today`** (`src/site/analytics.py::rollup`): партиал-«сегодня»
+получает агрегаты **без** маркера (дашборд его игнорирует — у него live-подсчёт из raw), поэтому retention
+не может стереть недосчитанный день, а следующий nightly финализирует его как прошлый.
+
+**Nightly-план дней** (`_analytics_nightly_line`): `unrolled_days()` (все дни с raw-событиями без маркера)
+**плюс сегодня** — пропущенные ночи (VPS лежал, шаг падал) самоизлечиваются следующим прогоном (не жёсткая
+пара «вчера+сегодня»).
 
 **Retention:** raw-события старше `SITE_ANALYTICS_RAW_RETENTION_DAYS` (дефолт 90) удаляются nightly
 **только** для дней с маркером `_rolled` (гард от потери несагрегированного). Агрегаты хранятся вечно.
@@ -131,13 +139,20 @@ leads (ALTER, nullable):
 
 - Варианты: `card` — ширина 640, `detail` — ширина 1280 (высота пропорционально; апскейла нет —
   если оригинал уже, вариант = оригинал-размер), webp quality 82, `method=6`.
-- Нейминг: `<orig-relpath>.card.webp`, `<orig-relpath>.detail.webp` — рядом с оригиналом (маппинг
-  тривиален, коллизий нет, Caddy отдаёт как обычную статику из того же photos_root).
-- Манифест `photo_manifest.json` в корне photos_root:
-  `{"<orig-relpath>": {"w": int, "h": int, "card": "<relpath>", "detail": "<relpath>"}, …}`
-  (w/h — размеры **оригинала**, для `width/height`-атрибутов и расчёта соотношения).
+- Нейминг: `<orig-relpath>.card.webp`, `<orig-relpath>.detail.webp` — **рядом с оригиналами** внутри
+  photos_root (в т.ч. для непубличных оригиналов — backfill обходит весь корень; маппинг тривиален,
+  коллизий нет, Caddy отдаёт как обычную статику из того же photos_root).
+- Манифест `photo_manifest.json` — **в РОДИТЕЛЕ photos_root, не в самом корне** (ревью Wave 5): весь
+  photos_root раздаётся Caddy как `/photos/*`, а манифест — машинночитаемый индекс ВСЕХ inbound-фото
+  (включая неопубликованные квартиры), публиковать его нельзя. Прод: `/opt/otz/data/photo_manifest.json`
+  при `root=/opt/otz/data/inbound` (этот каталог Caddy не раздаёт; в Caddyfile дополнительно `hide`).
+  Формат: `{"<orig-relpath>": {"w": int, "h": int, "card": "<relpath>", "detail": "<relpath>"}, …}`
+  (w/h — **визуальные** размеры оригинала **после EXIF-transpose**, для `width/height` и соотношения).
 - Точки генерации: (а) publish-action админки (для новых публикаций), (б) CLI `otz photos-backfill`
-  (`--dry-run`, `--limit N`, идемпотентен — скипает существующие, битые файлы скип+лог).
+  (`--dry-run`, `--limit N`, идемпотентен — скипает существующие, битые файлы скип+лог). Backfill пишет
+  манифест **инкрементально — флаш каждые 100 оригиналов** (`_BACKFILL_FLUSH_EVERY`, ревью Wave 5),
+  плюс финальный мердж: обрыв прогона теряет ≤100 записей манифеста, добор идемпотентен. Кросс-процессный
+  мердж манифеста сериализуется `fcntl.flock` на lock-файле рядом с манифестом.
 - ⚠️ **Derived data:** варианты+манифест живут на VPS, в git/rsync не участвуют (`data/` исключена).
   Раннбук Wave 6 гоняет backfill на сервере.
 
@@ -166,7 +181,10 @@ photo_dims(src: str) -> tuple[int, int] | None   # (w, h) оригинала и�
   нерезолвящийся → скип + warn. Флаг `--include-inactive` возвращает старый охват.
 - `otz purge-inactive --older-than N [--dry-run]`:
   - dry-run: полный отчёт (кол-во по источникам/датам, объём, сколько защищено FK), **ноль мутаций**;
-  - боевой: архив `data/archive/listings-YYYYMMDD.jsonl.gz` (полные строки, roundtrip-читаемый) → delete;
+  - боевой: архив `data/archive/listings-YYYYMMDD.jsonl.gz` (все колонки, roundtrip-читаемый) → delete.
+    **`photo_embeddings` исключены из архива** (ключ присутствует, значение `None`): это derived-данные
+    (CLIP по фото, восстановимы `otz embed-all`), base64-BLOB раздул бы архив в разы и почти не жмётся
+    gzip'ом. Пометка об исключении печатается в отчёте команды (`src/cli.py::_listing_archive_record`);
   - **отказ** удалять строки, на которые ссылаются `matches`/`site_listings` (перечислить в отчёте);
   - Stage T исполняет **только dry-run** (D5).
 - `otz stats`: total → разбивка `active / inactive` (+ прежние счётчики).
@@ -176,10 +194,16 @@ photo_dims(src: str) -> tuple[int, int] | None   # (w, h) оригинала и�
 
 ## §N — Nightly (точка подвеса из T0-2)
 
-Порядок джобов: `analytics.rollup(вчера, сегодня)` → `analytics.retention()` → `dupes-report`
+Порядок джобов: `analytics` (rollup догон `unrolled_days()`+сегодня → `retention()`) → `dupes-report`
 (артефакт `data/reports/dupes-YYYY-MM-DD.txt`, report-only). Каждый джоб изолирован (сбой одного не
-валит остальные, warn-лог). Если в проекте нет пригодного раннера — systemd `otz-nightly.timer`+`.service`
-(юниты в `deploy/`, User=otz, 04:30 Europe/Belgrade).
+валит остальные, warn-лог); под-шаги rollup/retention изолированы **по отдельности** (retention гоняется
+и после упавшего rollup — он безопасен по построению, трогает только дни с маркером `_rolled`).
+
+**Kill-switch `SITE_ANALYTICS_ENABLED=false` глушит и nightly-шаг** (`_analytics_nightly_line` выходит
+ранним «off» до rollup/retention): ни маркеров пустых дней, ни ротации raw — полный откат одной настройкой.
+
+Реализовано как fault-isolated шаги внутри существующего `otz-nightly-refresh` (T0-2.4) — отдельный
+`otz-nightly.timer` из первоначального плана **не создаётся**.
 
 ---
 

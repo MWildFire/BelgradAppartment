@@ -108,7 +108,7 @@
 
 | ID | Задача | Суть | TDD |
 |---|---|---|---|
-| **T4-1** | Генератор вариантов + манифест | `src/site/photos.py`: webp-варианты `card` (640w) и `detail` (1280w), quality 82, нейминг `<orig>.card.webp` рядом с оригиналом; `photo_manifest.json` в корне photos_root (`relpath → {w, h, card, detail}`). Генерация: (а) hook в publish-action админки, (б) `otz photos-backfill` — идемпотентный (скип существующих), `--dry-run`, `--limit`, прогресс. ⚠️ Варианты и манифест — **derived data на VPS**: в git не попадают, `deploy_sync` их не возит (исключает `data/`) → в раннбуке Wave 6 backfill гоняется **на сервере**. Pillow уже прямая зависимость. | Вариант ≤ оригинала по весу и с точным именованием; идемпотентность; dry-run без записи; манифест-roundtrip; битое фото — скип+лог, не падение. |
+| **T4-1** | Генератор вариантов + манифест | `src/site/photos.py`: webp-варианты `card` (640w) и `detail` (1280w), quality 82, нейминг `<orig>.card.webp` рядом с оригиналом; `photo_manifest.json` в **РОДИТЕЛЕ** photos_root (`relpath → {w, h, card, detail}`). Генерация: (а) hook в publish-action админки, (б) `otz photos-backfill` — идемпотентный (скип существующих), `--dry-run`, `--limit`, прогресс. ⚠️ Варианты и манифест — **derived data на VPS**: в git не попадают, `deploy_sync` их не возит (исключает `data/`) → в раннбуке Wave 6 backfill гоняется **на сервере**. Pillow уже прямая зависимость. | Вариант ≤ оригинала по весу и с точным именованием; идемпотентность; dry-run без записи; манифест-roundtrip; битое фото — скип+лог, не падение. |
 | **T4-2** | `<picture>`/srcset в шаблонах | Jinja-фильтр `photo_v(src, kind)` (contract §P.2; existence через манифест, **фоллбэк на оригинал** — прод без backfill не ломается). `_card.html`: card-вариант + `srcset/sizes`; `apt.html`: detail в галерее, полный оригинал по клику. Везде `loading=lazy decoding=async` + `width/height` из манифеста (**CLS→0**). | Юнит фильтра (вариант есть/нет/манифест отсутствует). E2e: карточки ссылаются на `.card.webp` при наличии; без манифеста — оригиналы, страница валидна. |
 | **T4-3** | Кэш-заголовки фото | `deploy/Caddyfile`: far-future + `immutable` для `/photos/*` (проверить текущее, добавить при отсутствии). Изменение применяется на деплое (Wave 6). | Ручная проверка в smoke (заголовки в ответе). |
 | **T4-4** | *(stretch, security)* Убрать inline-JS | Вынести inline `onchange` из фильтров в `static/js/filters.js` → в Caddyfile комментарий-готовность снять `'unsafe-inline'` из `script-src` (само снятие — на деплое, при зелёном smoke). Семя S-handoff §4. | E2e: фильтры работают без inline-обработчиков. |
@@ -145,7 +145,7 @@ Read-only ревью **всего репозитория** (не только д
 3. **Код:** `scripts/deploy_sync.sh` (rsync; `.venv`/`data`/`.env` исключены).
 4. **Env:** дописать в `/opt/otz/.env` блок из `env.additions-t.txt`; `SITE_ANALYTICS_SALT` сгенерить на сервере: `openssl rand -hex 32`. Никогда не коммитить.
 5. **Миграция:** `.venv/bin/alembic upgrade head` → **0010** (только после шага 2).
-6. **Фото-варианты на сервере:** `otz photos-backfill` (сначала `--dry-run` → цифры, затем боевой; прогресс в лог). Проверить `photo_manifest.json` создан.
+6. **Фото-варианты на сервере:** `otz photos-backfill` (сначала `--dry-run` → цифры, затем боевой; прогресс в лог). **Запускать в фоне** (`otz-bg`/`tmux`/`nohup` — паттерн `deploy_sync.sh`): при ~2535 оригиналах × 2 варианта × webp `method=6` прогон занимает десятки минут, обрыв ssh убьёт процесс. Манифест пишется инкрементально (флаш каждые 100 оригиналов), поэтому обрыв теряет **≤100 записей манифеста**, а повторный прогон идемпотентен (добор без потери уже сгенерённых webp). Проверить `photo_manifest.json` создан **в родителе** `SITE_PHOTOS_ROOT` (`/opt/otz/data/photo_manifest.json`, не в `/opt/otz/data/inbound`).
 7. **Nightly:** подвесить rollup/retention/dupes по механизму из T0-2 (если новый timer — юнит из `deploy/` + `systemctl enable --now`).
 8. **Рестарт** `otz-site`/`otz-admin`; чистые логи; `asset_v` пересчитался (новые js/css) → SW-кэш инвалидировался.
 9. **Smoke-матрица:**
@@ -161,8 +161,10 @@ Read-only ревью **всего репозитория** (не только д
 11. **Merge:** `finishing-a-development-branch` — ff → `main`, **`git push origin main`** (закрыть stale-remote навсегда), снос worktree.
 
 **Rollback:** код — `git revert` + `deploy_sync.sh`; схема — `alembic downgrade -1` (0010 аддитивна);
-аналитика — `SITE_ANALYTICS_ENABLED=false` (полный kill-switch, хуки no-op); фото — `photo_v` фоллбэчит
-на оригиналы (варианты можно просто удалить, манифест стереть); nightly-джобы — disable timer/флаг.
+аналитика — `SITE_ANALYTICS_ENABLED=false` (полный kill-switch: хуки записи no-op **и** nightly-шаг
+rollup/retention глохнет целиком — `_analytics_nightly_line` выходит ранним «off»); фото — `photo_v`
+фоллбэчит на оригиналы (варианты можно просто удалить, манифест стереть); nightly-джобы — фиксятся
+per-step флагами (`NIGHTLY_*=0`) в рамках `otz-nightly-refresh` (отдельного `otz-nightly.timer` нет, T0-2.4).
 
 ---
 

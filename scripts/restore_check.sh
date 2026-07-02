@@ -131,12 +131,22 @@ LISTINGS=$(safe_count listings)
 LISTINGS_ACTIVE=$(safe_count listings "is_active=1")
 MATCHES=$(safe_count matches)
 LEADS=$(safe_count leads)
+# Stage W2 / Stage T tables — a selective (non-full-file) backup could silently drop these;
+# safe_count prints "-" for tables a pre-migration backup predates, so the drill never fails on age.
+LEADS_ATTRIBUTED=$(safe_count leads "utm_source IS NOT NULL OR referrer IS NOT NULL")
+SUBSCRIPTIONS=$(safe_count subscriptions)
+SITE_EVENTS=$(safe_count site_events)
+SITE_STATS=$(safe_count site_stats_daily)
 
 log "smoke counts:"
 log "  listings           = $LISTINGS"
 log "  listings(is_active)= $LISTINGS_ACTIVE"
 log "  matches            = $MATCHES"
 log "  leads              = $LEADS"
+log "  leads(attributed)  = $LEADS_ATTRIBUTED"
+log "  subscriptions      = $SUBSCRIPTIONS"
+log "  site_events        = $SITE_EVENTS"
+log "  site_stats_daily   = $SITE_STATS"
 
 # `listings` is a core table — its absence means a bad/wrong backup, hard-fail.
 table_exists listings || fail "core table 'listings' missing from restored db"
@@ -151,4 +161,5 @@ log "─────────────────────────
 log "PASS — backup restored & integrity_check == ok"
 log "  source: ${RESTORE_CHECK_LOCAL_TARBALL:-b2://$B2_BUCKET/${LATEST:-?}}"
 log "  listings=$LISTINGS active=$LISTINGS_ACTIVE matches=$MATCHES leads=$LEADS"
+log "  subscriptions=$SUBSCRIPTIONS site_events=$SITE_EVENTS site_stats_daily=$SITE_STATS"
 log "──────────────────────────────────────────"

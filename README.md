@@ -8,11 +8,11 @@
 
 Сервис, который:
 1. Читает Дарьин архив **@OtzRentBelgrad** через Telethon-userbot (туда она копит посты с понравившимися квартирами из других каналов).
-2. На каждый новый пост в @OtzRentBelgrad — автоматически обновляет listings на трёх площадках (nekretnine.rs, 4zida.rs, halooglasi.com) с throttle 15 мин.
+2. На каждый новый пост в @OtzRentBelgrad — автоматически обновляет listings на четырёх площадках (nekretnine.rs, 4zida.rs, halooglasi.com, cityexpert.rs) с throttle 15 мин.
 3. Матчит фото inbound-поста с объявлениями на площадках по pHash.
 4. Если нашлось совпадение — присылает получателям в Telegram-бот (`TG_DELIVERY_MODE=bot`) готовый шаблон поста + фото + ссылку на listing на площадке.
 5. Дарья проверяет, копирует и сама постит в **@RentBelgrad** (бот в канал НЕ публикует — она контролирует процесс).
-6. Веб-админка read-only: просмотр очереди, истории доставки, источников, listings.
+6. Веб-админка: просмотр очереди, истории доставки, источников, listings + управляющие действия (publish-to-site, mark-posted, статусы заявок — POST с CSRF-защитой).
 
 Отдельно от пайплайна есть **публичный веб-каталог** (этап W) — см. ниже.
 
@@ -50,7 +50,7 @@ uv run uvicorn src.admin.app:app --host 127.0.0.1 --port 8000
 src/
 ├── config.py          # pydantic-settings
 ├── db/                # SQLAlchemy 2.x async + session
-├── scrapers/          # nekretnine, 4zida, halooglasi
+├── scrapers/          # nekretnine, 4zida, halooglasi, cityexpert
 ├── matching/          # pHash + CLIP fallback
 ├── telegram/          # monitor (Telethon) + publisher (Bot API)
 ├── post/              # генератор поста по шаблону

@@ -44,13 +44,14 @@
 127.0.0.1:8000  Admin (otz, read-only, basic auth) — НЕ проксируется, остаётся localhost-only
 SQLite WAL (/opt/otz/data/otz.db)
   ├─ публичный app: read-only engine (PRAGMA query_only) для каталога
-  └─ публичный app: узкий writer ТОЛЬКО для `leads` (busy_timeout=5000, retry)
+  └─ публичный app: узкий writer для write-аллоулиста `leads` + `subscriptions` + `site_events`
+     (append-only телеметрия, Stage T контракт §0; busy_timeout=5000, retry)
 otz-monitor / nightly / Outline VPN — без изменений, порты не пересекаются
 ```
 
 **Безопасность:**
 - Публичный app слушает `127.0.0.1:8001`; наружу — только через Caddy. Админка (:8000) наружу **не выставляется никогда**.
-- Публичный app не имеет write-доступа к пайплайн-таблицам: read-only engine для чтения + отдельный scoped-writer, чей ORM ограничен моделью `Lead`. (Опция строгой изоляции, если захотим: вынести `leads` в отдельный `data/site.db`. На MVP — единая БД + least-privilege engine.)
+- Публичный app не имеет write-доступа к пайплайн-таблицам: read-only engine для чтения + отдельный scoped-writer, чей write-аллоулист — `leads` + `subscriptions` + append-only `site_events`-телеметрия (Stage W2 добавил `subscriptions`, Stage T — `site_events`, осознанное решение D1/контракт §0). (Опция строгой изоляции, если захотим: вынести эти таблицы в отдельный `data/site.db`. На MVP — единая БД + least-privilege engine.)
 - ufw: открыть `80`, `443`. Outline (`50029`, `28395`) не трогаем — конфликта нет.
 - Никаких аккаунтов клиентов в MVP. Избранное — `localStorage`. Форма заявки — только запись в `leads` + нотис Дарье через существующий бот.
 

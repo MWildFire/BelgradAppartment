@@ -88,6 +88,34 @@ Worktree `feature/insight-and-integrity` создан от локального 
 
 ---
 
+## Дельты Wave 4/5 — файлы сверх ownership-матрицы §3 плана
+
+> Фактический набор изменённых файлов (`git diff --stat 009d229..HEAD --name-only`) вышел за
+> ownership-матрицу плана §3 / контракта §OWN. Матрица §3 в плане **не переписывается** (она —
+> Wave-0-снимок распараллеливания); эта таблица амендирует её фактом до Wave 6, чтобы следующий
+> этап не унаследовал ложную карту владения. Причина расширения — review-фиксы Wave 5 (10 линз,
+> состязательная верификация) и точечные правки, законно затронувшие соседние файлы.
+
+| Файл | Не был во владении | Почему затронут |
+|---|---|---|
+| `src/site/db.py` | § OWN | Docstring write-аллоулиста: writer обслуживает `leads`+`subscriptions`+`site_events` (c176f5a). |
+| `src/site/subscriptions.py` | § OWN | Лимиты длины элементов `districts`/`rooms` в `_validate` (F4, finding [6]). |
+| `src/site/cache.py` | § OWN | `TTLCache` maxsize=512 + эвикция (анти memory-DoS каталога, F4, finding [9]). |
+| `templates/partials/_subscribe_form.html` | § OWN (только `_lead_form.html`) | Hidden utm-поля (W2) + вёрстка формы по токенам, синк `.on` тумблера (F3, finding [28]). |
+| `templates/catalog.html` · `index.html` · `partials/_results.html` | § OWN | `h1` на контентных страницах, `outerHTML`-своп + стабильный `#results`-status, featured LCP-вариант (F3, findings [10][22][27]). |
+| `templates/partials/_filters.html` | W4 frontend (не перечислен явно) | pill visually-hidden — клавиатура/SR (F3, finding [21]). |
+| `templates/map.html` · `calculator.html` · `how.html` · `vnj.html` · `unsubscribe.html` | § OWN | `h1` на контентных страницах (F3, finding [27]). |
+| `static/js/img-fallback.js` · `static/js/subscribe-form.js` | § OWN | C1-фоллбэк фото (делегированный capture-error) и вынос inline subscribe-radio (T4-3/T4-4, готовность снять `unsafe-inline`). |
+| `src/admin/publish.py` · `admin/routes.py` · `admin/templates/{base,metrics,published}.html` | W3 (только analytics) | Pillow-хук вариантов в publish (T4-1), SRI для CDN-скриптов, AA-контраст бейджей, колонка просмотров 7д (F5, findings [2][24]; T3-2). |
+| `deploy/Caddyfile` | § OWN | far-future+immutable для `/photos/*`, CSP-готовность, `hide photo_manifest.json*` (T4-3, F2). |
+| `src/config.py` | § OWN | Ключи аналитики (§ENV) — миграция настроек этапа. |
+| `.env.example` · `docs/*` · `scripts/restore_check.sh` | § OWN | Синхрон доков/контрактов/скриптов с кодом (Wave 5 docs-линия F7). |
+
+Также §A.4 контракта обещал hidden-поля формам lead **и** subscribe, а §OWN числил только
+`_lead_form.html` — фактически правился и `_subscribe_form.html` (устранено выше).
+
+---
+
 ## Что нужно от Дмитрия (открыто)
 
 1. **Deploy `go`** на Wave 6 — каждый ssh-шаг раннбука подтверждается.
