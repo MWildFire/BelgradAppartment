@@ -7,7 +7,7 @@ import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import click
 import httpx
@@ -20,6 +20,9 @@ from src.db.models import InboundPost, Listing, Platform, SourceChannel
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
+
+if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
+    from src.matching.dedup import DedupStats
 
 
 def _setup_logging() -> None:
@@ -810,10 +813,6 @@ def dupes_report(write: bool, hamming: int | None, min_shared: int | None) -> No
 
 
 async def _dupes_report(write: bool, hamming: int | None, min_shared: int | None) -> None:
-    from sqlalchemy import select
-
-    from src.db.models import Listing
-    from src.db.session import get_session
     from src.matching.dedup import find_cross_platform_dupes
 
     stats = await find_cross_platform_dupes(
@@ -829,6 +828,18 @@ async def _dupes_report(write: bool, hamming: int | None, min_shared: int | None
     if not stats.groups:
         click.echo("(no duplicate groups found)")
         return
+    for line in await _render_dupes_groups(stats):
+        click.echo(line)
+
+
+async def _render_dupes_groups(stats: DedupStats) -> list[str]:
+    """Render one text block per dup group with the primary starred — shared by the
+    `dupes-report` CLI command and the T1-4 nightly artifact, so Дарья видит одну и ту же
+    курационную картинку (платформа / цена / #фото / URL) в консоли и в файле."""
+    from sqlalchemy import select
+
+    from src.db.models import Listing
+    from src.db.session import get_session
 
     # Hydrate member display fields (platform / price / #photos) for every group member.
     member_ids = [mid for g in stats.groups for mid in g.member_ids]
@@ -843,8 +854,10 @@ async def _dupes_report(write: bool, hamming: int | None, min_shared: int | None
         ).all()
     by_id = {r.id: r for r in rows}
 
+    lines: list[str] = []
     for g in sorted(stats.groups, key=lambda gg: gg.dup_group_id):
-        click.echo(f"\n— group {g.dup_group_id} ({len(g.member_ids)} listings) —")
+        lines.append("")
+        lines.append(f"— group {g.dup_group_id} ({len(g.member_ids)} listings) —")
         for mid in g.member_ids:
             r = by_id.get(mid)
             if r is None:
@@ -852,10 +865,54 @@ async def _dupes_report(write: bool, hamming: int | None, min_shared: int | None
             marker = "★ primary" if mid == g.primary_id else "  dup    "
             price = f"{r.price_eur}€" if r.price_eur else "?€"
             n_photos = len(r.photo_urls) if r.photo_urls else 0
-            click.echo(
+            lines.append(
                 f"  {marker}  id={mid:<7d} {r.platform.value:12s} {price:>7s} "
                 f"photos={n_photos:<3d} {r.url}"
             )
+    return lines
+
+
+async def _write_dupes_report() -> tuple[Path, DedupStats]:
+    """T1-4: compute cross-platform dupes READ-ONLY and persist data/reports/dupes-YYYY-MM-DD.txt.
+
+    Report-only по решению D6 — никакого авто-мержа, артефакт для ручной курации Дарьи.
+    Идемпотентно: write=False ничего не мутирует в БД, а повторный прогон за тот же день
+    просто перезаписывает тот же файл. Returns (report path, DedupStats).
+    """
+    from src.matching.dedup import find_cross_platform_dupes
+
+    stats = await find_cross_platform_dupes(write=False)
+
+    # data/ не в гите — на свежем деплое каталога reports/ ещё нет.
+    report_dir = get_settings().data_dir / "reports"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    path = report_dir / f"dupes-{datetime.now(timezone.utc).date().isoformat()}.txt"
+
+    lines = [
+        "Cross-platform dupes — report-only (no DB changes)",
+        f"active scanned: {stats.active_scanned}   groups: {stats.groups_found}   "
+        f"demoted (non-primary): {stats.listings_demoted}",
+    ]
+    if stats.groups:
+        lines.extend(await _render_dupes_groups(stats))
+    else:
+        lines.append("(no duplicate groups found)")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path, stats
+
+
+async def _dupes_report_nightly_line() -> str:
+    """T1-4 nightly step, fault-isolated по контракту price-drop/site-retention: сбой шага
+    становится 🚨-строкой summary, исключение наружу не уходит — nightly живёт дальше."""
+    try:
+        path, stats = await _write_dupes_report()
+        return (
+            f"дубли (report-only): групп {stats.groups_found}, "
+            f"объявлений {stats.listings_grouped} — {path.name}"
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("nightly step failed: dupes-report")
+        return "🚨 dupes-report шаг упал — см. логи"
 
 
 @cli.command("embed-all")
@@ -1402,6 +1459,12 @@ async def _nightly_refresh(
     except Exception:
         logging.getLogger(__name__).exception("nightly step failed: site-retention")
 
+    # T1-4: report-only дедуп-артефакт (data/reports/dupes-YYYY-MM-DD.txt) для курации Дарьи —
+    # авто-мержа НЕТ (решение D6). Fault isolation внутри хелпера: сбой → 🚨-строка summary.
+    click.echo("→ Cross-platform dupes report (report-only)…")
+    dupes_line = await _dupes_report_nightly_line()
+    click.echo(f"  {dupes_line}")
+
     elapsed = _time.monotonic() - started
     total_new = sum(r.inserted for r in results)
     total_refreshed = sum(r.updated for r in results)
@@ -1424,6 +1487,7 @@ async def _nightly_refresh(
     lines.extend(steps.summary_lines)
     if price_line:
         lines.append(price_line)
+    lines.append(dupes_line)  # T1-4: счётчик дублей — всегда в summary (0 тоже информативен)
     if total_errors:
         lines.append(f"⚠️ Ошибки: {total_errors}")
     lines.append(f"⏱ Время: {dur}")
