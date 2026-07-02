@@ -154,10 +154,15 @@ def _read_manifest_file(path: Path) -> Manifest:
     return cast(Manifest, data)
 
 
+_manifest_write_lock = threading.Lock()
+
+
 def _save_manifest(manifest: Manifest, root: Path) -> None:
-    """Atomic write (tmp + rename): читатели видят либо старый, либо новый манифест целиком."""
+    """Atomic write (tmp + rename): читатели видят либо старый, либо новый манифест целиком.
+    Имя tmp уникально per-write: два потока с общим fixed-именем затирали бы файлы друг друга
+    посреди записи (см. test_concurrent_manifest_merges_lose_nothing)."""
     path = manifest_path(root)
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(
         json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=1), encoding="utf-8"
     )
@@ -168,12 +173,14 @@ def _save_manifest(manifest: Manifest, root: Path) -> None:
 def _merge_manifest(entries: Manifest, root: Path) -> None:
     """Read-modify-write мердж. Записей о пропавших оригиналах не чистим: они безвредны
     (variant_for проверяет файл на диске), а полный обход их всё равно перезапишет.
-    Кросс-процессный писатель ровно один в каждый момент (hook или ручной backfill) —
-    файловый лок не заводим (YAGNI)."""
-    current = _read_manifest_file(manifest_path(root))
-    merged = {**current, **entries}
-    if merged != current:  # no-op мердж не трогает mtime → mtime-кэш читателей не сбрасывается
-        _save_manifest(merged, root)
+    Same-process писатели сериализуются локом (два publish-хука через asyncio.to_thread —
+    реальный кейс админки); КРОСС-процессный писатель ровно один в каждый момент
+    (hook или ручной backfill) — файловый лок не заводим (YAGNI)."""
+    with _manifest_write_lock:
+        current = _read_manifest_file(manifest_path(root))
+        merged = {**current, **entries}
+        if merged != current:  # no-op мердж не трогает mtime → mtime-кэш читателей не сбрасывается
+            _save_manifest(merged, root)
 
 
 def backfill_variants(

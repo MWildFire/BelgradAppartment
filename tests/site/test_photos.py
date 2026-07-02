@@ -136,6 +136,31 @@ def test_limit_caps_originals(root: Path) -> None:
     assert stats.total == 2 and stats.generated == 4
 
 
+def test_concurrent_manifest_merges_lose_nothing(root: Path) -> None:
+    """Хардениг ревью Wave 4: два публиш-хука в одном процессе (asyncio.to_thread) мерджат
+    манифест одновременно — read-modify-write под локом обязан сохранить записи ОБОИХ.
+    Без лока тест флаки-красный (потерянные записи/битый tmp), с локом — детерминирован."""
+    import threading as _threading
+
+    per_thread = 25
+    barrier = _threading.Barrier(2)
+
+    def _writer(prefix: str) -> None:
+        barrier.wait()
+        for i in range(per_thread):
+            rel = f"{prefix}/{i:02d}.jpg"
+            photos._merge_manifest({rel: photos._entry(rel, 100, 100)}, root)
+
+    threads = [_threading.Thread(target=_writer, args=(p,)) for p in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    data = _manifest(root)
+    assert len(data) == per_thread * 2, "конкурентный мердж потерял записи"
+
+
 def test_manifest_roundtrip(root: Path) -> None:
     """Manifest lands in the photos_root ROOT, keyed by relpath, w/h = ORIGINAL dims,
     and load_manifest() reads back exactly what was written."""
