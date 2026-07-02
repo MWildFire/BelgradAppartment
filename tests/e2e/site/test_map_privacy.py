@@ -17,18 +17,23 @@ fixture keeps this module runnable in any order without waking the session-scope
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import subprocess
 import sys
 import urllib.request
-from collections.abc import Coroutine, Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Iterator
 
 import pytest
 
-from tests.e2e.conftest import REPO_ROOT, _free_port, _seed, _wait_healthz, requires_e2e
+from tests.e2e.conftest import (
+    REPO_ROOT,
+    _free_port,
+    _seed,
+    _wait_healthz,
+    requires_e2e,
+    run_coro,
+)
 
 # Off-grid pair: fuzz_coords snaps it to (44.812, 20.468) — both digits-visibly different, so a
 # plain substring check on any public payload catches a leak of the exact DB value.
@@ -58,18 +63,6 @@ async def _reseed_listing1_precise(db_url: str) -> None:
     await engine.dispose()
 
 
-def _run_coro(coro: Coroutine[object, object, None]) -> None:
-    """asyncio.run in a worker thread — NOT the bare asyncio.run(...) the conftest uses.
-
-    If any browser-driven e2e ran earlier in the session, playwright's sync driver has left an
-    asyncio loop flagged «running» in the main thread, and asyncio.run() here would raise.
-    (site_server gets away with it only because session-scope ordering happens to build it
-    before `browser`.) A worker thread has no loop → deterministic in any test order.
-    """
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pool.submit(asyncio.run, coro).result()
-
-
 def _get(base_url: str, path: str) -> str:
     with urllib.request.urlopen(f"{base_url}{path}", timeout=10) as r:
         assert r.status == 200, f"GET {path} → {r.status}"
@@ -88,8 +81,8 @@ def privacy_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
     db_path = tmp_path_factory.mktemp("e2e_privacy_db") / "site.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
-    _run_coro(_seed(db_url))
-    _run_coro(_reseed_listing1_precise(db_url))
+    run_coro(_seed(db_url))
+    run_coro(_reseed_listing1_precise(db_url))
 
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"

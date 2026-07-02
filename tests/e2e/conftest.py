@@ -33,6 +33,21 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_DIR = Path(__file__).parent / "site" / "_artifacts"
 
+
+def run_coro(coro) -> None:
+    """asyncio.run в worker-треде — НЕ голый asyncio.run(...).
+
+    Если в сессии уже гонялся браузерный e2e, sync-драйвер playwright оставляет в главном
+    треде asyncio-loop с флагом «running», и голый asyncio.run() здесь падает RuntimeError-ом
+    («cannot be called from a running event loop») — порядок модулей в полном прогоне это
+    провоцирует. Worker-тред без loop'а детерминирован при любом порядке тестов.
+    Единый хелпер для всех фикстур-сидов (site_server, module-scoped серверы в test_*).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(asyncio.run, coro).result()
+
 # Single source for the RUN_E2E gate — applied per-test so the default suite skips fast.
 requires_e2e = pytest.mark.skipif(
     not os.getenv("RUN_E2E"),
@@ -165,7 +180,7 @@ def site_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
     db_path = tmp_path_factory.mktemp("e2e_db") / "site.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
-    asyncio.run(_seed(db_url))
+    run_coro(_seed(db_url))
 
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"

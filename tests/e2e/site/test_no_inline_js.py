@@ -29,6 +29,7 @@ from tests.e2e.conftest import (
     _seed,
     _wait_healthz,
     requires_e2e,
+    run_coro,
 )
 
 # Every public HTML page (routes.py GET + response_class=HTMLResponse, without auth/params-магии).
@@ -87,11 +88,11 @@ def tg_site_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     if not os.getenv("RUN_E2E"):
         pytest.skip("e2e disabled; set RUN_E2E=1")
 
-    import asyncio
-
     db_path = tmp_path_factory.mktemp("e2e_db_tg") / "site.db"
     db_url = f"sqlite+aiosqlite:///{db_path}"
-    asyncio.run(_seed(db_url))
+    # run_coro, не голый asyncio.run: в полном прогоне playwright уже оставил running-loop
+    # в главном треде (см. conftest.run_coro) — module-scoped фикстура строится ПОСЛЕ браузера.
+    run_coro(_seed(db_url))
 
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
