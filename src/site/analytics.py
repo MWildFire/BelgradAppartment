@@ -11,7 +11,10 @@ sha256(SITE_ANALYTICS_SALT‖YYYY-MM-DD) — сырые IP/UA не пишутс�
 с warn-логом — страница не может 5xx-нуть из-за аналитики. Kill-switch SITE_ANALYTICS_ENABLED
 проверяется здесь же, так что все хуки становятся no-op одной настройкой (откат без деплоя).
 
-Rollup/retention (nightly, §A.2) добавляет T2-4 — сюда же, отдельными функциями.
+Rollup/retention (nightly, §A.2/§N) — здесь же: rollup(day) пересчитывает агрегаты UTC-дня
+в site_stats_daily целиком (идемпотентно), retention() ротирует raw старше
+SITE_ANALYTICS_RAW_RETENTION_DAYS, но ТОЛЬКО для дней с маркером _rolled — несагрегированное
+не теряется никогда. Агрегаты живут вечно.
 """
 
 from __future__ import annotations
@@ -19,14 +22,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any, cast
 from urllib.parse import urlsplit
 
+from sqlalchemy import CursorResult, delete, func, select
 from starlette.requests import Request
 
 from src.clientip import client_ip
 from src.config import get_settings
-from src.db.models import SiteEvent
+from src.db.models import SiteEvent, SiteStatsDaily
 from src.site.db import writer_session
 
 logger = logging.getLogger(__name__)
@@ -154,3 +159,135 @@ async def record_event(
             path,
             exc_info=True,
         )
+
+
+# ============================================================== T2-4: rollup + retention (§A.2/§N)
+
+# Маркер «день сагрегирован» — единственное, что разрешает retention трогать raw этого дня.
+_ROLLED = "_rolled"
+
+
+def _day_bounds(day: date) -> tuple[datetime, datetime]:
+    """Полуоткрытая UTC-граница дня [00:00, +24h) — день события = дата его ts в UTC."""
+    start = datetime.combine(day, time.min, tzinfo=UTC)
+    return start, start + timedelta(days=1)
+
+
+def _ref_domain(referrer: str) -> str | None:
+    """Ключ src_ref = хост referrer-а lower-case; без хоста (не должен встречаться) — пропуск."""
+    return (urlsplit(referrer).hostname or "").lower() or None
+
+
+async def rollup(day: date, *, database_url: str | None = None) -> int:
+    """Пересчитать агрегаты §A.2 одного UTC-дня в site_stats_daily. Возвращает число строк.
+
+    Идемпотентность — upsert дня ЦЕЛИКОМ: в одной транзакции старые строки дня удаляются и
+    пишется свежий пересчёт. Это сильнее построчного ON CONFLICT: ключ, исчезнувший из raw
+    (например, оператор вручную вычистил спам-события), не остаётся висеть в агрегатах.
+    Маркер _rolled пишется той же транзакцией — упавший на середине rollup не «закроет» день
+    для retention. Пустой день закрывается одним маркером, иначе retention ждал бы его вечно.
+
+    Боты (is_bot=1) исключаются из views/uniques/src_* прямо по контракту §A.2; leads/subs
+    считаются как есть — конверсия дороже ложного бота, а эвристика UA меняется задним числом.
+    В отличие от record_event НЕ глотает ошибки: батч-джоб, изоляцией владеет nightly-обвязка.
+    """
+    start, end = _day_bounds(day)
+    in_day = (SiteEvent.ts >= start, SiteEvent.ts < end)
+    human = SiteEvent.is_bot.is_(False)
+    pv = SiteEvent.type == "pageview"
+
+    async with writer_session(database_url=database_url) as s:
+        rows: list[tuple[str, str, int]] = []
+
+        res = await s.execute(
+            select(SiteEvent.path, func.count()).where(*in_day, pv, human).group_by(SiteEvent.path)
+        )
+        rows += [("views_path", path, n) for path, n in res]
+
+        # key хранится строкой (Text в составном PK) — смешение типов ломало бы точечный lookup.
+        res = await s.execute(
+            select(SiteEvent.apt_id, func.count())
+            .where(*in_day, pv, human, SiteEvent.apt_id.is_not(None))
+            .group_by(SiteEvent.apt_id)
+        )
+        rows += [("views_apt", str(apt), n) for apt, n in res]
+
+        n_uniq = (
+            await s.execute(
+                select(func.count(func.distinct(SiteEvent.visitor))).where(*in_day, human)
+            )
+        ).scalar_one()
+        if n_uniq:
+            rows.append(("uniques", "", n_uniq))
+
+        for metric, etype in (("leads", "lead_submit"), ("subs", "subscribe_submit")):
+            n = (
+                await s.execute(select(func.count()).where(*in_day, SiteEvent.type == etype))
+            ).scalar_one()
+            if n:
+                rows.append((metric, "", n))
+
+        res = await s.execute(
+            select(SiteEvent.apt_id, func.count())
+            .where(*in_day, SiteEvent.type == "lead_submit", SiteEvent.apt_id.is_not(None))
+            .group_by(SiteEvent.apt_id)
+        )
+        rows += [("leads_apt", str(apt), n) for apt, n in res]
+
+        res = await s.execute(
+            select(SiteEvent.utm_source, func.count())
+            .where(*in_day, pv, human, SiteEvent.utm_source.is_not(None))
+            .group_by(SiteEvent.utm_source)
+        )
+        rows += [("src_utm", src, n) for src, n in res]
+
+        # Домен referrer-а SQLite не распарсит — доагрегируем в Python; кардинальность за
+        # день мала (referrer уже отфильтрован до «внешних с хостом» при записи).
+        res = await s.execute(
+            select(SiteEvent.referrer, func.count())
+            .where(*in_day, pv, human, SiteEvent.referrer.is_not(None))
+            .group_by(SiteEvent.referrer)
+        )
+        by_domain: dict[str, int] = {}
+        for ref, n in res:
+            dom = _ref_domain(ref)
+            if dom:
+                by_domain[dom] = by_domain.get(dom, 0) + n
+        rows += [("src_ref", dom, n) for dom, n in sorted(by_domain.items())]
+
+        rows.append((_ROLLED, "", 1))
+
+        await s.execute(delete(SiteStatsDaily).where(SiteStatsDaily.day == day))
+        s.add_all(SiteStatsDaily(day=day, metric=m, key=k, value=v) for m, k, v in rows)
+        return len(rows)
+
+
+async def retention(*, now: datetime | None = None, database_url: str | None = None) -> int:
+    """Удалить raw site_events старше SITE_ANALYTICS_RAW_RETENTION_DAYS. Возвращает число строк.
+
+    Гард от потери данных: удаляются ТОЛЬКО дни с маркером _rolled — день, который nightly
+    так и не сагрегировал (rollup падал, деплой стоял), лежит в raw сколько угодно и будет
+    подобран будущим rollup-ом. Граница строгая: день ровно N-дневной давности ещё живёт.
+    `now` инжектится тестами; прод берёт текущий момент UTC.
+    """
+    keep_days = get_settings().site_analytics_raw_retention_days
+    cutoff = (now or datetime.now(UTC)).date() - timedelta(days=keep_days)
+
+    async with writer_session(database_url=database_url) as s:
+        rolled_days = (
+            await s.execute(
+                select(SiteStatsDaily.day)
+                .where(SiteStatsDaily.metric == _ROLLED, SiteStatsDaily.day < cutoff)
+                .order_by(SiteStatsDaily.day)
+            )
+        ).scalars().all()
+        deleted = 0
+        for day in rolled_days:
+            start, end = _day_bounds(day)
+            # cast: execute() типизирован как Result, но DML всегда возвращает CursorResult.
+            res = cast(
+                "CursorResult[Any]",
+                await s.execute(delete(SiteEvent).where(SiteEvent.ts >= start, SiteEvent.ts < end)),
+            )
+            deleted += res.rowcount or 0
+        return deleted

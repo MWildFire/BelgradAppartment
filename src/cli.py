@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -901,6 +901,36 @@ async def _write_dupes_report() -> tuple[Path, DedupStats]:
     return path, stats
 
 
+async def _analytics_nightly_line() -> str:
+    """T2-4 nightly step (§N): rollup(вчера) → rollup(сегодня) → retention() одной строкой summary.
+
+    Пересчёт «вчера+сегодня» покрывает события, догнавшие день после прошлого прогона (nightly
+    в 03:00 UTC закрывает вчера окончательно). Под-шаги изолированы ПО ОТДЕЛЬНОСТИ: retention
+    гоняем и после упавшего rollup — он безопасен по построению (трогает только дни с маркером
+    _rolled). Сбой любого под-шага → 🚨-фрагмент строки, исключение наружу не уходит —
+    fault-isolation по контракту price-drop/site-retention/dupes-report."""
+    from src.site import analytics
+
+    log = logging.getLogger(__name__)
+    today = datetime.now(UTC).date()
+    days = (today - timedelta(days=1), today)
+    parts: list[str] = []
+    try:
+        for day in days:
+            await analytics.rollup(day)
+        parts.append(f"rollup {days[0].isoformat()}+{days[1].isoformat()} ок")
+    except Exception:
+        log.exception("nightly step failed: analytics-rollup")
+        parts.append("🚨 rollup упал — см. логи")
+    try:
+        deleted = await analytics.retention()
+        parts.append(f"raw удалено: {deleted}")
+    except Exception:
+        log.exception("nightly step failed: analytics-retention")
+        parts.append("🚨 retention упал — см. логи")
+    return "аналитика: " + ", ".join(parts)
+
+
 async def _dupes_report_nightly_line() -> str:
     """T1-4 nightly step, fault-isolated по контракту price-drop/site-retention: сбой шага
     становится 🚨-строкой summary, исключение наружу не уходит — nightly живёт дальше."""
@@ -1459,6 +1489,12 @@ async def _nightly_refresh(
     except Exception:
         logging.getLogger(__name__).exception("nightly step failed: site-retention")
 
+    # T2-4: site-аналитика — rollup вчера+сегодня → retention raw (§N, ПЕРЕД dupes-шагом).
+    # Fault isolation внутри хелпера: сбой под-шага → 🚨-фрагмент строки summary.
+    click.echo("→ Site analytics rollup + retention…")
+    analytics_line = await _analytics_nightly_line()
+    click.echo(f"  {analytics_line}")
+
     # T1-4: report-only дедуп-артефакт (data/reports/dupes-YYYY-MM-DD.txt) для курации Дарьи —
     # авто-мержа НЕТ (решение D6). Fault isolation внутри хелпера: сбой → 🚨-строка summary.
     click.echo("→ Cross-platform dupes report (report-only)…")
@@ -1487,6 +1523,7 @@ async def _nightly_refresh(
     lines.extend(steps.summary_lines)
     if price_line:
         lines.append(price_line)
+    lines.append(analytics_line)  # T2-4: rollup/retention — всегда в summary (в т.ч. «удалено 0»)
     lines.append(dupes_line)  # T1-4: счётчик дублей — всегда в summary (0 тоже информативен)
     if total_errors:
         lines.append(f"⚠️ Ошибки: {total_errors}")
