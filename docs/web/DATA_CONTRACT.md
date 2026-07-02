@@ -146,10 +146,12 @@ class Facets:
 **Resend** (`smtp.resend.com:587` STARTTLS, `FROM=no-reply@rentbelgrad.com`, домен `rentbelgrad.com` верифицирован:
 DKIM/SPF/DMARC). Креды (API-ключ `re_…`) — в серверном `/opt/otz/.env` руками, никогда не в коде/логах/гите.
 
-## 9. Дельта Stage T «Insight & Integrity» (код готов + отревьюен, ⏳ деплой ждёт joint-go)
+## 9. Дельта Stage T «Insight & Integrity» (🚀 задеплоено на прод 02.07.2026, smoke зелёный)
 
 > Влито из `DATA_CONTRACT-T.md` (оригинал оставлен на месте). Финальная семантика — **после фиксов Wave 5**
 > (fail-closed соль, `_rolled` только финальным дням, манифест в родителе `photos_root`). Одна миграция: **0010**.
+> ⚠️ Фактический путь дашборда — **`/analytics`** (admin.rentbelgrad.com/analytics); в §9.A он назван
+> `/admin/analytics` как логический адрес, но в admin-app префикса `/admin` нет (как и у `/metrics`, `/published`).
 
 ### 9.0 Расширение инварианта записи (D1)
 Публичный app пишет ТОЛЬКО `leads` + `subscriptions` + **`site_events`** (append-only телеметрия, ни одного

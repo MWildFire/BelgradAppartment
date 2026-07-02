@@ -10,7 +10,7 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
-### 0.-6 Stage T «Insight & Integrity» (02.07.2026) — ✅ КОД ГОТОВ + ОТРЕВЬЮЕН · ⏳ ДЕПЛОЙ ЖДЁТ joint-go
+### 0.-6 Stage T «Insight & Integrity» (02.07.2026) — 🚀 ЗАДЕПЛОЕНО НА ПРОД · smoke зелёный
 
 > **⭐ САМЫЙ СВЕЖИЙ handoff — начни отсюда.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-07-02.md`](docs/web/SESSION_HANDOFF_2026-07-02.md).
 > Ветка **`feature/insight-and-integrity`** от `main` @ **`009d229`**. **29 коммитов** (`ce21ea5..5c2b42f`),
@@ -62,10 +62,34 @@ Stage T = аналитика + приватность + фото + гигиен�
   раннбук Wave 6 гоняет `otz photos-backfill` **на сервере** (в фоне/tmux), манифест на проде =
   `/opt/otz/data/photo_manifest.json`.
 
+**✅ Деплой выполнен 02.07.2026 (Wave 6, раннбук плана §2):** бэкап `otz-pre-stageT-2026-07-02-1240.db`
+(1.4G, integrity ok, счётчики 4/0/23136/58); rsync кода; env-блок + `SITE_ANALYTICS_SALT` (64 hex, на сервере);
+`alembic upgrade head` → **0010** (integrity ok); `otz photos-backfill` на сервере → **2535 оригиналов →
+5070 webp-вариантов, 0 битых**, `photo_manifest.json` (2535 записей) в `/opt/otz/data/` (**вне** публичного
+`/photos`, отдача манифеста = 404); рестарт `otz-site`/`otz-admin`/`otz-monitor` + Caddy reload
+(`/etc/caddy/Caddyfile` ← `deploy/Caddyfile`, immutable `/photos/*`). Nightly-шаги — в `_run_nightly_steps`
+(отдельный timer не нужен, T0-2.4).
+
+**Smoke-матрица (02.07, зелёная):**
+- **Приватность:** `/api/map.json` — 53 точки, **все на 3-decimal сетке, 0 утечек** (Wave 0: `44.816884149726`
+  → теперь `44.817`). Постоянный e2e-гард `_assert_no_precise_coords` в suite.
+- **Аналитика:** pageview'ы пишутся (`utm_source=smoke`, `is_bot=0`, `/apt/1`→`path=/apt`), в схеме `site_events`
+  **только хэш `visitor`** (ни IP, ни UA); страницы 200, не замедлились.
+- **Дашборд:** `admin.rentbelgrad.com/analytics?days=7|30` → 200 (карточки/спарклайны/топ/источники), снаружи 401.
+  ⚠️ Публичный путь — **`/analytics`** (не `/admin/analytics` — в admin-app префикса `/admin` нет, как и у `/metrics`).
+- **Фото:** карточки → `.card.webp`+srcset, `/apt` → `.detail.webp` eager+fetchpriority (LCP), вариант ~38 KB
+  (`image/webp`, `Cache-Control: max-age=31536000, immutable`), `width/height` везде.
+- **Lighthouse mobile (дельта к baseline T0-2):** `/apt/1` **perf 0.63→0.81, LCP 16.0s→3.7s** (4.3×), CLS 0;
+  `/` perf 0.94, LCP 2.7s, **CLS 0.026→0**.
+- `otz stats` — active/inactive разбивка; `otz purge-inactive --older-than 90 --dry-run` — **0 кандидатов**
+  (inactive-строки имеют свежий `last_seen_at`; для боевого purge Дмитрий подберёт меньший порог), 0 мутаций.
+- `/healthz`=200, admin за basic-auth (401), `otz-monitor NRestarts=0`, все сервисы active.
+
 **⚠️ Что ещё НЕ сделано (совместные шаги Дмитрия):**
-- **Деплой (Wave 6)** — по раннбуку плана §2 Wave 6; каждый ssh-шаг подтверждается. Ждёт `go`.
-- **Боевой `purge-inactive`** — только после чтения dry-run отчёта (**26 400** inactive, не ~8442 из плана);
-  в этапе — только dry-run (D5), бэклог `docs/BACKLOG.md` #3.
+- **Боевой `purge-inactive`** — только после чтения dry-run отчёта (**26 400** inactive; при пороге 90д — 0
+  кандидатов, нужен меньший порог); в этапе — только dry-run (D5), бэклог `docs/BACKLOG.md` #3.
+- **Снятие `'unsafe-inline'` из `script-src`** — код готов (все inline-обработчики вынесены, e2e-гард держит 0),
+  но директива CSP в задеплоенном Caddyfile пока сохраняет `unsafe-inline` (безопасный дефолт); бэклог #5.
 - **Cloudflare Wave 3b** остаётся в бэклоге #1 (в этап T не входит, решение 02.07).
 
 ---

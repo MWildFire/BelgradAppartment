@@ -47,10 +47,20 @@
 - **Derived data на VPS:** webp-варианты + `photo_manifest.json` в git/rsync не участвуют (`data/` исключена).
 - **Ноль новых зависимостей** (Pillow уже прямая). Alembic head = **0010**.
 
-## 3. Деплой на прод — ⏳ ЖДЁТ joint-go (раннбук = план §2 Wave 6)
-> Раннбук **НЕ переписываем** — исполняется по `docs/superpowers/plans/2026-07-02-insight-and-integrity.md`
-> §2 Wave 6 (backup → rsync → env → миграция 0010 → photos-backfill → nightly-подвес → рестарт → smoke →
-> merge). Ниже — только **особенности после фиксов Wave 5**, которых нет в исходном раннбуке:
+## 3. Деплой на прод — 🚀 ВЫПОЛНЕН 02.07.2026 (раннбук = план §2 Wave 6)
+
+**Факт деплоя:** бэкап `otz-pre-stageT-2026-07-02-1240.db` (1.4G, integrity ok, счётчики 4/0/23136/58) →
+rsync кода (ноль удалений) → env-блок + `SITE_ANALYTICS_SALT` (64 hex на сервере) → `alembic upgrade head`
+→ **0010** (integrity ok, `site_events`/`site_stats_daily`/`leads.utm_*` созданы) → `otz photos-backfill`
+в фоне (`otz-bg`) → **2535 → 5070 webp, 0 битых**, манифест 2535 записей в `/opt/otz/data/` → рестарт
+`otz-site`/`otz-admin`/`otz-monitor` + Caddy reload (immutable `/photos/*`).
+
+**Smoke зелёный:** карта снэпнута (0 утечек); аналитика пишет только хэши; дашборд `/analytics` 200/401;
+`.card.webp`/`.detail.webp` отдаются (immutable, ~38 KB); **Lighthouse `/apt` LCP 16.0s→3.7s** (perf 0.63→0.81),
+`/` CLS 0.026→0; `stats` active/inactive; `purge-inactive --dry-run` 0 мутаций; манифест непубличен (404);
+`otz-monitor NRestarts=0`. ⚠️ Публичный путь дашборда — **`/analytics`** (не `/admin/analytics`).
+
+> Особенности после фиксов Wave 5, учтённые при деплое:
 
 - **Шаг 6 (photos-backfill) — запускать в фоне** (`otz-bg`/`tmux`/`nohup`): ~2535 оригиналов × 2 варианта ×
   webp `method=6` = десятки минут, обрыв ssh убьёт процесс. Манифест пишется **инкрементально (флаш каждые
@@ -77,10 +87,12 @@
 - Полный список и `file:line` — `docs/review/stage-t/REVIEW_FINDINGS.md`.
 
 ## 5. Открытые пункты для Дмитрия
-1. **Deploy `go`** на Wave 6 — каждый ssh-шаг раннбука подтверждается совместно.
-2. **`go` на боевой `purge-inactive`** — только после чтения dry-run отчёта (**26 400** inactive; в этапе —
-   только dry-run, D5). Бэклог `docs/BACKLOG.md` #3.
-3. **Cloudflare Wave 3b** остаётся в бэклоге #1 (в этап T не входит, решение 02.07; repo подготовлен ещё в Stage S).
+1. ~~Deploy `go`~~ ✅ **задеплоено 02.07** (см. §3, smoke зелёный).
+2. **`go` на боевой `purge-inactive`** — только после чтения dry-run отчёта (**26 400** inactive; при пороге
+   90д — **0 кандидатов**, нужен меньший `--older-than`; в этапе — только dry-run, D5). Бэклог `docs/BACKLOG.md` #3.
+3. **Снятие `'unsafe-inline'` из `script-src`** — код готов (все inline-обработчики вынесены, e2e-гард держит 0),
+   но CSP-директива в проде пока сохраняет `unsafe-inline` (безопасный дефолт). Бэклог #5.
+4. **Cloudflare Wave 3b** остаётся в бэклоге #1 (в этап T не входит, решение 02.07; repo подготовлен ещё в Stage S).
 
 ## 6. В бэклог (осознанно, из ревью)
 - **[15]** комбинированный `RUN_E2E=1 pytest tests/` падает order-зависимостью pytest-asyncio после playwright
@@ -91,6 +103,7 @@
   дрейф Stage W2, T добавил Pillow-генерацию) → вынос publish-домена в нейтральный модуль.
 
 ---
-**Итог:** Stage T закрыт в ветке, отревьюен (10 линз + re-review = **SHIP**), полный gate зелёный
-(1055 / 52 раздельно), одна миграция 0010, ноль новых зависимостей. Осталось человеку: совместный
-деплой по раннбуку (§3), `go` на боевой purge (§5.2), `go` на мерж в `main` + push origin.
+**Итог:** Stage T реализован, отревьюен (10 линз + re-review = **SHIP**), полный gate зелёный
+(1055 / 52 раздельно), одна миграция 0010, ноль новых зависимостей, **задеплоен на прод 02.07 (smoke зелёный,
+§3)** и смёржен ff → `main` + push origin. Осталось человеку: `go` на боевой purge (§5.2, меньший порог),
+снятие `unsafe-inline` (§5.3), Cloudflare 3b (§5.4).
