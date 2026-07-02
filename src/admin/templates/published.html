@@ -25,6 +25,9 @@
       <strong>{{ it.price_eur or '—' }} €</strong>
       <span class="muted">{{ '%g м²' % it.area_m2 if it.area_m2 else '' }}{% if it.district %} · {{ it.district }}{% endif %}</span>
       {% if it.live %}<span class="badge badge-green">на сайте</span>{% endif %}
+      {# T3-2: просмотры /apt за 7 дней (агрегаты, без live-«сегодня») — порядок величины;
+         None (нет SiteListing-оверлея → нет страницы) прячет бейдж, 0 — честный ноль #}
+      {% if it.views_7d is not none %}<span class="muted" title="Просмотры страницы квартиры на сайте за последние 7 дней">👁 {{ it.views_7d }} · 7д</span>{% endif %}
       {% if it.is_rented %}<span class="badge badge-grey">снято</span>{% endif %}
       {% if it.overdue %}
         <span class="badge badge-red">пора убрать · {{ it.age_days }} дн.</span>

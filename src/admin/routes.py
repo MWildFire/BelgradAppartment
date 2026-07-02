@@ -15,7 +15,12 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
-from src.admin.analytics import ANALYTICS_WINDOWS, DEFAULT_DAYS, build_analytics
+from src.admin.analytics import (
+    ANALYTICS_WINDOWS,
+    DEFAULT_DAYS,
+    build_analytics,
+    views_7d_by_apt,
+)
 from src.admin.auth import require_admin
 from src.admin.csrf import CSRF_TOKEN, require_csrf
 from src.admin.leads_report import build_leads_report
@@ -97,6 +102,9 @@ async def published_view(
                 await s.execute(select(SiteListing).where(SiteListing.match_id.in_(match_ids)))
             ).scalars().all()
             site_by_match = {sl.match_id: sl for sl in sl_rows}
+        # T3-2: бейдж «👁 7д» — просмотры /apt из агрегатов site_stats_daily; ключ метрики —
+        # site_listings.id, поэтому карточки без оверлея бейджа не получают (None ≠ 0).
+        views_7d = await views_7d_by_apt(s, [sl.id for sl in site_by_match.values()])
         items = []
         for p in rows:
             listing = p.match.listing if p.match else None
@@ -116,6 +124,7 @@ async def published_view(
                 "is_rented": bool(listing and not listing.is_active),
                 "site": site,
                 "live": live,
+                "views_7d": views_7d.get(site.id, 0) if site is not None else None,
                 "age_days": age_days,
                 "overdue": age_days is not None and age_days >= SITE_RETENTION_DAYS,
             })

@@ -11,6 +11,7 @@ is_bot=0, leads — как есть; live обязан давать те же ц
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -26,6 +27,8 @@ ANALYTICS_WINDOWS = (7, 30)
 DEFAULT_DAYS = 7
 # §A.5: top_apts ≤15, sources ≤15.
 TOP_LIMIT = 15
+# T3-2: окно бейджа «👁 7д» в /published.
+LISTING_VIEWS_DAYS = 7
 
 
 def _ref_domain(referrer: str) -> str | None:
@@ -77,6 +80,29 @@ async def _live_by_column(
         .group_by(column)
     )
     return {k: int(v) for k, v in rows.all()}
+
+
+async def views_7d_by_apt(s: AsyncSession, apt_ids: Sequence[int]) -> dict[int, int]:
+    """Бейдж «👁 7д» для /published (T3-2): SUM(views_apt) per site_listings.id за 7 дней.
+
+    Только агрегаты (day >= today-7, партиал-«сегодня» rollup-а входит, если есть) — live
+    из raw НЕ добирается: Дарье нужен порядок величины, точная сводка живёт в /analytics.
+    Квартиры без строк отсутствуют в результате — caller делает .get(id, 0).
+    """
+    if not apt_ids:
+        return {}
+    day_floor = datetime.now(UTC).date() - timedelta(days=LISTING_VIEWS_DAYS)
+    rows = await s.execute(
+        select(SiteStatsDaily.key, func.sum(SiteStatsDaily.value))
+        .where(
+            SiteStatsDaily.metric == "views_apt",
+            SiteStatsDaily.day >= day_floor,
+            # key в агрегатах — TEXT (§A.1); фильтр строками сразу отсекает и мусорные ключи
+            SiteStatsDaily.key.in_([str(i) for i in apt_ids]),
+        )
+        .group_by(SiteStatsDaily.key)
+    )
+    return {int(k): int(v) for k, v in rows.all()}
 
 
 async def build_analytics(s: AsyncSession, days: int = DEFAULT_DAYS) -> dict[str, Any]:
