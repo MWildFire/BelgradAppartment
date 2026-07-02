@@ -7,7 +7,8 @@ Two engines, by ADR isolation requirement:
   leak across pooled connections. query_only=ON is still set as belt-and-suspenders. Used
   for all catalog reads. (mode=ro reads a WAL DB fine while the pipeline writer holds it —
   verified empirically.) The DB file must already exist (the pipeline creates it).
-- narrow writer engine: busy_timeout=5000, used ONLY for Lead inserts.
+- narrow writer engine: busy_timeout=5000, used ONLY for the public app's write allowlist:
+  Lead/Subscription inserts and append-only site_events telemetry (Stage T, contract §0).
 
 Tests pass a `database_url` override (a tmp FILE DB — ":memory:" gives each connection its
 own DB, which would defeat both the read-only verification and writer/reader visibility).
@@ -103,7 +104,8 @@ async def read_session(database_url: str | None = None) -> AsyncIterator[AsyncSe
 
 @asynccontextmanager
 async def writer_session(database_url: str | None = None) -> AsyncIterator[AsyncSession]:
-    """Narrow writer session — Lead inserts only. Commits on success, rolls back on error."""
+    """Narrow writer session — the public write allowlist only (leads, subscriptions,
+    site_events). Commits on success, rolls back on error."""
     factory = _writer_factory(database_url)
     async with factory() as session:
         try:
