@@ -13,6 +13,7 @@ import re
 import httpx
 import pytest
 
+import src.scrapers.nekretnine as nekretnine_mod
 from src.db.models import Platform
 from src.scrapers.nekretnine import NekretnineScraper
 
@@ -383,3 +384,80 @@ async def test_list_recent_breaks_on_missing_payload() -> None:
     previews = await sc.list_recent(max_pages=10)
     assert previews == []
     assert sc._skipped_pages == 0, "a 200 with no payload is a structure change, not a fetch failure"
+
+
+# ------------------------------------------------------------------ fetch_detail (offline retries)
+# fetch_detail must mirror _fetch_page's resilience: retry transient failures (5xx, 429, transport
+# errors) but raise IMMEDIATELY on a deterministic 4xx (403 anti-bot block, 404/410 gone) — retrying
+# a hard block only burns the IP's reputation and the backoff budget. The 13.07 incident was exactly
+# a bare fetch_detail 403-ing and taking the whole smoke probe down with it.
+
+_DETAIL_URL = "https://www.nekretnine.rs/oglasi/468187/"
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_retries_transient_then_succeeds(nekretnine_detail_html: str) -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return httpx.Response(429, text="slow down")  # transient → must retry
+        return httpx.Response(200, text=nekretnine_detail_html)
+
+    sc = _make_scraper(handler)  # retry_backoff_sec=0 → retries but never really sleeps
+    detail = await sc.fetch_detail(_DETAIL_URL)
+    assert detail.external_id == "468187"
+    assert calls["n"] == 2, "429 is transient — retried, second attempt succeeds"
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_raises_after_exhausting_retries_on_5xx() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(500, text="boom")  # every attempt 5xx
+
+    sc = _make_scraper(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        await sc.fetch_detail(_DETAIL_URL)
+    assert calls["n"] == sc.fetch_attempts == 3, "5xx retried up to fetch_attempts, then raises"
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_403_raises_immediately_without_retry(monkeypatch) -> None:
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    async def _spy_sleep(sec: float) -> None:
+        slept.append(sec)
+
+    monkeypatch.setattr(nekretnine_mod.asyncio, "sleep", _spy_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(403, text="Forbidden")
+
+    sc = _make_scraper(handler)
+    sc.retry_backoff_sec = 2.0  # non-zero: prove the block, not a zero backoff, is why we don't sleep
+    with pytest.raises(httpx.HTTPStatusError) as ei:
+        await sc.fetch_detail(_DETAIL_URL)
+    assert ei.value.response.status_code == 403
+    assert calls["n"] == 1, "403 is deterministic — must not be retried"
+    assert slept == [], "no backoff sleep on an immediate 403 raise"
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_404_raises_immediately_without_retry() -> None:
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(404)
+
+    sc = _make_scraper(handler)
+    with pytest.raises(httpx.HTTPStatusError) as ei:
+        await sc.fetch_detail(_DETAIL_URL)
+    assert ei.value.response.status_code == 404
+    assert calls["n"] == 1, "404 gone — must not be retried"

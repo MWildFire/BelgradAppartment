@@ -32,6 +32,8 @@ import re
 from typing import Any, ClassVar
 from urllib.parse import urljoin
 
+import httpx
+
 from src.config import get_settings
 from src.db.models import Platform
 from src.scrapers.base import ListingDetail, ListingPreview, Scraper
@@ -50,6 +52,11 @@ _NEXT_DATA_RE = re.compile(
 _NUMBER_RE = re.compile(r"\d[\d.,]*")
 _THOUSANDS_DOT_RE = re.compile(r"(?<=\d)\.(?=\d{3}(?:\D|$))")
 _OGLAS_ID_RE = re.compile(r"/oglasi/(\d+)")
+
+# Detail-fetch statuses that are deterministic for a given URL — retrying just wastes the backoff
+# budget and burns the IP's reputation with the anti-bot layer. 403 = block (the 13.07 incident),
+# 404/410 = gone, 401 = auth wall. Everything else (5xx, 429, transport errors) is transient.
+_NON_RETRYABLE_DETAIL_STATUSES = frozenset({401, 403, 404, 410})
 
 
 class NekretnineScraper(Scraper):
@@ -247,9 +254,42 @@ class NekretnineScraper(Scraper):
         return search_total
 
     async def fetch_detail(self, url: str) -> ListingDetail:
-        resp = await self._client.get(url)
-        resp.raise_for_status()
-        return self.parse_detail(url, resp.text)
+        """Fetch + parse one detail page with bounded retries (same policy as `_fetch_page`).
+
+        Transient failures (transport errors, 5xx, 429) are retried up to `fetch_attempts` with
+        linear backoff (429 backs off ×5, floor 10s×attempt — same as the list walk). Deterministic
+        4xx (`_NON_RETRYABLE_DETAIL_STATUSES`: 403 anti-bot/geo block, 404/410 gone, 401 auth) raise
+        immediately — hammering a hard block only burns the IP's reputation and delays the caller.
+
+        Contract preserved: on ultimate failure the last exception propagates. `orchestrator.
+        _process_one` and the smoke detail-probe both rely on fetch_detail *raising* on failure.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(self.fetch_attempts):
+            status: int | None = None
+            try:
+                resp = await self._client.get(url)
+                resp.raise_for_status()
+                return self.parse_detail(url, resp.text)
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code
+                if status in _NON_RETRYABLE_DETAIL_STATUSES:
+                    raise  # deterministic for this URL — retrying is pure waste
+                last_exc = e
+            except httpx.RequestError as e:  # transport: timeout / connect / read — retryable
+                last_exc = e
+            logger.warning(
+                "[nekretnine] detail GET %s attempt %d/%d failed: %s%s",
+                url, attempt + 1, self.fetch_attempts, type(last_exc).__name__,
+                f" (HTTP {status})" if status else "",
+            )
+            if attempt + 1 < self.fetch_attempts and self.retry_backoff_sec > 0:
+                backoff = self.retry_backoff_sec * (attempt + 1)
+                if status == 429:
+                    backoff = max(backoff * 5, 10.0 * (attempt + 1))
+                await asyncio.sleep(backoff)
+        assert last_exc is not None  # loop only exits early via return or raise
+        raise last_exc
 
     async def _fetch_page(self, url: str) -> str | None:
         """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed.
