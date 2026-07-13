@@ -168,8 +168,9 @@
   живут в `.env.example`; не трогал.)*
 - [x] Полный гейт: unit **1095** + e2e **52** раздельно; `ruff check` — реальных проблем в диффе нет (version-drift
   ruff 0.15.21 — в BACKLOG #22).
-- [ ] 🧑 **Merge ff в `main` + `git push origin main` + снос worktree — ЖДЁТ go Дмитрия** (outward-facing; плюс
-  диагноз DataDome может изменить решение — бандлить ли D6 до деплоя). Ветка готова: `fix/liveness-and-403`.
+- [x] **Merge ff в `main` + `git push origin main` + снос worktree — ВЫПОЛНЕНО (14.07, по go Дмитрия).**
+  `main` @ **`beb2242`** = `origin/main`; ветка `fix/liveness-and-403` и worktree удалены; alembic head 0011.
+  Осталось (🧑): Wave 6 деплой + Wave 2 B3/B4 (обход DataDome, D6 — BACKLOG #21) ДО триажа 42 карточек.
 
 ### Wave 6 — 🧑 деплой + разовый триаж 42 (совместно, по go)
 
