@@ -3,38 +3,60 @@
 {% block content %}
 <h1>Опубликованные квартиры</h1>
 <p class="muted">Доставленные кандидаты. «На сайт» выводит квартиру в публичный каталог rentbelgrad.com,
-«Квартира недели» — в карточку на главной (одновременно может быть только одна). Квартиры на сайте
-дольше {{ retention_days }} дней помечаются «пора убрать» — снимайте их кнопкой «На сайт».</p>
+«Квартира недели» — в карточку на главной. «📌 Закреп» защищает карточку от авто-снятия liveness-свипом.
+Вкладка «🪦 Пропавшие» показывает все карточки на сайте (без окна по дате) с отметкой, жива ли квартира ещё
+хоть на одной площадке.</p>
 
 <div class="window-filter">
   <span class="muted">Период:</span>
-  {% set labels = {'week': 'за неделю', '3weeks': 'за 3 недели', 'all': 'все'} %}
+  {% set labels = {'week': 'за неделю', '3weeks': 'за 3 недели', 'all': 'все', 'gone': '🪦 Пропавшие'} %}
   {% for w in windows %}
     <a class="chip{{ ' is-on' if w == window else '' }}" href="/published?window={{ w }}">{{ labels[w] }}</a>
   {% endfor %}
 </div>
 
 {% if not items %}
-  <div class="empty">За выбранный период доставленных кандидатов нет.</div>
+  <div class="empty">{{ 'На сайте нет публичных карточек.' if gone_mode else 'За выбранный период доставленных кандидатов нет.' }}</div>
 {% else %}
+{% if gone_mode %}
+{# Standalone form (NOT wrapping the cards — that would nest the per-card <form> and be invalid HTML).
+   The checkboxes associate via the HTML5 form= attribute; CSRF rides the body's hx-headers. #}
+<form id="bulk-unpublish" class="bulk-bar"
+      hx-post="/published/bulk-unpublish"
+      hx-confirm="Снять выбранные карточки с сайта?"
+      hx-target="body" hx-swap="outerHTML">
+  <button type="submit" class="btn-toggle">Снять выбранные с сайта</button>
+  <span class="muted">Отметьте подтверждённо пропавшие карточки и снимите их одним действием.</span>
+</form>
+{% endif %}
 <div class="pub-list">
   {% for it in items %}
-  <div class="pub-card{{ ' is-overdue' if it.overdue else '' }}">
+  <div class="pub-card">
     <div class="pub-head">
+      {% if gone_mode and it.site %}
+      <input type="checkbox" name="site_listing_id" value="{{ it.site.id }}" form="bulk-unpublish"
+             aria-label="Выбрать карточку для снятия с сайта">
+      {% endif %}
       <span class="badge badge-yellow">{{ it.platform }}</span>
       <strong>{{ it.price_eur or '—' }} €</strong>
       <span class="muted">{{ '%g м²' % it.area_m2 if it.area_m2 else '' }}{% if it.district %} · {{ it.district }}{% endif %}</span>
       {% if it.live %}<span class="badge badge-green">на сайте</span>{% endif %}
-      {# T3-2: просмотры /apt за 7 дней (агрегаты, без live-«сегодня») — порядок величины;
-         None (нет SiteListing-оверлея → нет страницы) прячет бейдж, 0 — честный ноль #}
+      {# T3-2: просмотры /apt за 7 дней (агрегаты, без live-«сегодня»); None прячет бейдж, 0 — честный ноль #}
       {% if it.views_7d is not none %}<span class="muted" title="Просмотры страницы квартиры на сайте за последние 7 дней">👁 {{ it.views_7d }} · 7д</span>{% endif %}
-      {% if it.is_rented %}<span class="badge badge-grey">снято</span>{% endif %}
-      {% if it.overdue %}
-        <span class="badge badge-red">пора убрать · {{ it.age_days }} дн.</span>
-      {% elif it.live and it.age_days is not none %}
+      {% if it.is_rented %}<span class="badge badge-grey">снято с площадки</span>{% endif %}
+      {% if gone_mode %}
+        {# T4-3 liveness badge — lite (dup-group is_active, no HEAD; the nightly sweep confirms) #}
+        {% if it.alive_on %}
+          <span class="badge badge-green" title="Квартира ещё активна на этих площадках">жива на {{ it.alive_on | join(', ') }}</span>
+        {% else %}
+          <span class="badge badge-red" title="Ни одного активного объявления в dup-группе — но без таргет-проверки">мёртво везде (не подтв.)</span>
+        {% endif %}
+      {% endif %}
+      {# Age is neutral FYI now — the 21-day «пора убрать» remove-driver is retired (D5). #}
+      {% if it.live and it.age_days is not none %}
         <span class="muted">{{ it.age_days }} дн. на сайте</span>
       {% endif %}
-      <span class="muted pub-date">{{ it.published_at.strftime('%Y-%m-%d %H:%M') }}{% if it.listing_url %} · <a href="{{ it.listing_url }}" target="_blank" rel="noopener">источник ↗</a>{% endif %}</span>
+      {% if it.date_shown %}<span class="muted pub-date">{{ it.date_shown.strftime('%Y-%m-%d %H:%M') }}{% if it.listing_url %} · <a href="{{ it.listing_url }}" target="_blank" rel="noopener">источник ↗</a>{% endif %}</span>{% endif %}
     </div>
     {% if it.match_id %}
       {% with match_id = it.match_id, site = it.site %}{% include "_site_controls.html" %}{% endwith %}

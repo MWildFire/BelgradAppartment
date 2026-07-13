@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
@@ -62,10 +63,67 @@ async def queue_view(request: Request, _: str = Depends(require_admin)) -> HTMLR
     )
 
 
-# Retention: a listing live on the public site this long should come down (warn-first, no auto-delete).
-SITE_RETENTION_DAYS = 21
-# Time windows for the «Опубликованные» list — «за неделю» for the one-time catch-up, «все» for everything.
+# Time windows for the «Опубликованные» list — «за неделю» for the one-time catch-up, «все» for
+# everything. «gone» is a separate view (from site_listings, no date window) — see _build_gone_items.
 _PUBLISHED_WINDOWS = {"week": 7, "3weeks": 21, "all": None}
+_GONE_WINDOW = "gone"
+
+
+async def _build_gone_items(s: Any, now: datetime) -> list[dict]:
+    """«Пропавшие» view: EVERY public card straight from site_listings — no published_at window, so
+    old cards the default «3 недели» filter hides are surfaced (the UX bug from the diagnosis).
+
+    Each row is annotated with lite liveness from the A4 dup-group: the platforms on which some group
+    member is still active. Empty → «мёртво везде (не подтверждено)» (no HEAD here — that's the
+    nightly sweep's job; this is a fast, read-only admin view). Oldest-on-site first.
+    """
+    rows = (
+        await s.execute(
+            select(SiteListing, Listing)
+            .join(Match, Match.id == SiteListing.match_id)
+            .join(Listing, Listing.id == Match.listing_id, isouter=True)
+            .where(SiteListing.is_public.is_(True))
+            .order_by(SiteListing.created_at.asc())
+            .limit(300)
+        )
+    ).all()
+    group_ids = {lst.dup_group_id for _sl, lst in rows if lst and lst.dup_group_id is not None}
+    alive_platforms_by_group: dict[int, set[str]] = {}
+    if group_ids:
+        for gid, plat in (
+            await s.execute(
+                select(Listing.dup_group_id, Listing.platform).where(
+                    Listing.dup_group_id.in_(group_ids), Listing.is_active.is_(True)
+                )
+            )
+        ).all():
+            alive_platforms_by_group.setdefault(gid, set()).add(plat.value)
+    views_7d = await views_7d_by_apt(s, [sl.id for sl, _lst in rows])
+    items: list[dict] = []
+    for sl, listing in rows:
+        if listing and listing.dup_group_id is not None:
+            alive_on = sorted(alive_platforms_by_group.get(listing.dup_group_id, set()))
+        elif listing and listing.is_active:
+            alive_on = [listing.platform.value]  # active singleton (never grouped)
+        else:
+            alive_on = []
+        items.append({
+            "match_id": sl.match_id,
+            "site": sl,
+            "live": True,  # the gone view lists only is_public cards
+            "date_shown": sl.created_at,
+            "platform": listing.platform.value if listing else "—",
+            "listing_url": listing.url if listing else None,
+            "price_eur": listing.price_eur if listing else None,
+            "area_m2": listing.area_m2 if listing else None,
+            "district": listing.district if listing else None,
+            "is_rented": bool(listing and not listing.is_active),
+            "views_7d": views_7d.get(sl.id, 0),
+            "age_days": (now - sl.created_at).days,
+            "alive_on": alive_on,
+            "group_live": len(alive_on),
+        })
+    return items
 
 
 @router.get("/published", response_class=HTMLResponse)
@@ -78,56 +136,61 @@ async def published_view(
 
     /queue only holds PENDING matches, but delivery flips every match to PUBLISHED, so the
     candidates live here. Each row exposes the SiteListing toggles («На сайт» / «Квартира недели» /
-    flags / note), whether it's live on the site, whether the source is «снято» (is_active=0), and
-    a «пора убрать» flag once it has been on the site ≥ SITE_RETENTION_DAYS.
+    pin / flags / note), whether it's live on the site, and (in the «Пропавшие» view) whether the
+    apartment is still alive on any platform. Age is shown as neutral FYI, never as a remove-driver.
     """
-    window = window if window in _PUBLISHED_WINDOWS else "3weeks"
-    days = _PUBLISHED_WINDOWS[window]
+    gone_mode = window == _GONE_WINDOW
+    if not gone_mode and window not in _PUBLISHED_WINDOWS:
+        window = "3weeks"
     # SQLite returns naive datetimes; use naive-UTC `now` so age subtraction doesn't mix awareness.
     now = utcnow().replace(tzinfo=None)
     async with get_session() as s:
-        stmt = (
-            select(PublishedPost)
-            .options(selectinload(PublishedPost.match).selectinload(Match.listing))
-            .order_by(PublishedPost.published_at.desc())
-            .limit(300)
-        )
-        if days is not None:
-            stmt = stmt.where(PublishedPost.published_at >= now - timedelta(days=days))
-        rows = (await s.execute(stmt)).scalars().all()
-        match_ids = [p.match_id for p in rows if p.match_id]
-        site_by_match: dict[int, SiteListing] = {}
-        if match_ids:
-            sl_rows = (
-                await s.execute(select(SiteListing).where(SiteListing.match_id.in_(match_ids)))
-            ).scalars().all()
-            site_by_match = {sl.match_id: sl for sl in sl_rows}
-        # T3-2: бейдж «👁 7д» — просмотры /apt из агрегатов site_stats_daily; ключ метрики —
-        # site_listings.id, поэтому карточки без оверлея бейджа не получают (None ≠ 0).
-        views_7d = await views_7d_by_apt(s, [sl.id for sl in site_by_match.values()])
-        items = []
-        for p in rows:
-            listing = p.match.listing if p.match else None
-            site = site_by_match.get(p.match_id)
-            live = bool(site and site.is_public)
-            # Age counts from when it was put on the site (created_at), only while it IS live.
-            age_days = (now - site.created_at).days if (site is not None and live) else None
-            items.append({
-                "match_id": p.match_id,
-                "tg_message_id": p.tg_message_id,
-                "published_at": p.published_at,
-                "platform": listing.platform.value if listing else "—",
-                "listing_url": listing.url if listing else None,
-                "price_eur": listing.price_eur if listing else None,
-                "area_m2": listing.area_m2 if listing else None,
-                "district": listing.district if listing else None,
-                "is_rented": bool(listing and not listing.is_active),
-                "site": site,
-                "live": live,
-                "views_7d": views_7d.get(site.id, 0) if site is not None else None,
-                "age_days": age_days,
-                "overdue": age_days is not None and age_days >= SITE_RETENTION_DAYS,
-            })
+        if gone_mode:
+            items = await _build_gone_items(s, now)
+        else:
+            days = _PUBLISHED_WINDOWS[window]
+            stmt = (
+                select(PublishedPost)
+                .options(selectinload(PublishedPost.match).selectinload(Match.listing))
+                .order_by(PublishedPost.published_at.desc())
+                .limit(300)
+            )
+            if days is not None:
+                stmt = stmt.where(PublishedPost.published_at >= now - timedelta(days=days))
+            rows = (await s.execute(stmt)).scalars().all()
+            match_ids = [p.match_id for p in rows if p.match_id]
+            site_by_match: dict[int, SiteListing] = {}
+            if match_ids:
+                sl_rows = (
+                    await s.execute(select(SiteListing).where(SiteListing.match_id.in_(match_ids)))
+                ).scalars().all()
+                site_by_match = {sl.match_id: sl for sl in sl_rows}
+            # T3-2: бейдж «👁 7д» — просмотры /apt из агрегатов site_stats_daily; ключ метрики —
+            # site_listings.id, поэтому карточки без оверлея бейджа не получают (None ≠ 0).
+            views_7d = await views_7d_by_apt(s, [sl.id for sl in site_by_match.values()])
+            items = []
+            for p in rows:
+                listing = p.match.listing if p.match else None
+                site = site_by_match.get(p.match_id)
+                live = bool(site and site.is_public)
+                # Age counts from when it was put on the site (created_at), only while it IS live —
+                # shown as neutral FYI now (the 21-day «пора убрать» driver is retired, D5).
+                age_days = (now - site.created_at).days if (site is not None and live) else None
+                items.append({
+                    "match_id": p.match_id,
+                    "tg_message_id": p.tg_message_id,
+                    "date_shown": p.published_at,
+                    "platform": listing.platform.value if listing else "—",
+                    "listing_url": listing.url if listing else None,
+                    "price_eur": listing.price_eur if listing else None,
+                    "area_m2": listing.area_m2 if listing else None,
+                    "district": listing.district if listing else None,
+                    "is_rented": bool(listing and not listing.is_active),
+                    "site": site,
+                    "live": live,
+                    "views_7d": views_7d.get(site.id, 0) if site is not None else None,
+                    "age_days": age_days,
+                })
     return templates.TemplateResponse(
         request,
         "published.html",
@@ -135,8 +198,8 @@ async def published_view(
             "items": items,
             "active_nav": "published",
             "window": window,
-            "windows": list(_PUBLISHED_WINDOWS.keys()),
-            "retention_days": SITE_RETENTION_DAYS,
+            "windows": [*_PUBLISHED_WINDOWS.keys(), _GONE_WINDOW],
+            "gone_mode": gone_mode,
         },
     )
 
@@ -335,6 +398,52 @@ async def site_toggle_featured(
             )
             site.is_featured = True
     return _site_controls(request, match_id, site)
+
+
+@router.post("/match/{match_id}/site/toggle-keep", response_class=HTMLResponse)
+async def site_toggle_keep(
+    request: Request,
+    match_id: int,
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> HTMLResponse:
+    """D4 pin: keep_on_site — the liveness sweep never auto-hides a pinned card, even when the
+    apartment is confirmed gone from every platform. A deliberate «keep this one up» override."""
+    async with get_session() as s:
+        await _require_match(s, match_id)
+        site, _created = await get_or_create_site_listing(s, match_id)
+        site.keep_on_site = not site.keep_on_site
+    return _site_controls(request, match_id, site)
+
+
+@router.post("/published/bulk-unpublish")
+async def bulk_unpublish(
+    request: Request,
+    site_listing_id: list[int] = Form(default=[]),
+    _: str = Depends(require_admin),
+    __: None = Depends(require_csrf),
+) -> RedirectResponse:
+    """Warn-first bulk removal (D1): hide the selected public cards (is_public=0, is_featured=0).
+
+    The manual counterpart to auto-hide — Дарья ticks the confirmed-dead cards from the «Пропавшие»
+    view and takes them down in one action. Idempotent: already-hidden ids are no-ops (the
+    is_public=True guard), and an empty selection changes nothing. 303 → back to the gone view."""
+    if site_listing_id:
+        async with get_session() as s:
+            result = await s.execute(
+                update(SiteListing)
+                .where(SiteListing.id.in_(site_listing_id), SiteListing.is_public.is_(True))
+                .values(is_public=False, is_featured=False)
+            )
+            hidden = result.rowcount or 0
+        if hidden:
+            from src.site.cache import invalidate_catalog_cache
+
+            invalidate_catalog_cache()
+        logger.info(
+            "[admin] bulk-unpublish: %d of %d selected cards hidden", hidden, len(site_listing_id)
+        )
+    return RedirectResponse("/published?window=gone", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/match/{match_id}/site/meta", response_class=HTMLResponse)

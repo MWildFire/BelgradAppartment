@@ -215,6 +215,7 @@ async def test_mark_posted_preserves_manual_overrides(client, db):
         "site/toggle-vnj",
         "site/toggle-white-card",
         "site/toggle-featured",
+        "site/toggle-keep",
         "site/meta",
     ],
 )
@@ -425,3 +426,132 @@ async def test_published_page_shows_controls_and_status(client, db):
     assert "На сайт" in html and "Квартира недели" in html       # controls present
     assert "за неделю" in html and "за 3 недели" in html         # window filter
     assert "на сайте" in html                                    # live badge (we toggled public)
+
+
+# --------------------------------------------------- Wave 4: pin toggle / bulk-unpublish / gone view
+
+
+async def _seed_public_card(
+    db,
+    i: int,
+    *,
+    is_active: bool = True,
+    dup_group_id: int | None = None,
+    price: int = 700,
+    platform: Platform = Platform.NEKRETNINE,
+) -> tuple[int, int]:
+    """Create a PUBLISHED match + public SiteListing (unique per i). Returns (match_id, site_listing_id)."""
+    async with db() as s:
+        ch = SourceChannel(tg_id=-(5000 + i), username=f"pub-{i}", is_active=True)
+        s.add(ch)
+        await s.flush()
+        listing = Listing(
+            platform=platform, external_id=f"pub{i}", url=f"https://x/pub{i}",
+            price_eur=price, photo_urls=["u"], photo_phashes=["00"],
+            is_active=is_active, dup_group_id=dup_group_id,
+        )
+        ib = InboundPost(
+            source_channel_id=ch.id, tg_message_id=5000 + i, photo_paths=[], photo_phashes=[],
+            status=InboundStatus.MATCHED,
+        )
+        s.add_all([listing, ib])
+        await s.flush()
+        m = Match(
+            inbound_post_id=ib.id, listing_id=listing.id, confidence=0.8,
+            matched_photo_count=1, method="phash", status=MatchStatus.PUBLISHED,
+        )
+        s.add(m)
+        await s.flush()
+        sl = SiteListing(match_id=m.id, is_public=True)
+        s.add(sl)
+        await s.flush()
+        result = (m.id, sl.id)
+        await s.commit()
+        return result
+
+
+@pytest.mark.asyncio
+async def test_toggle_keep_creates_then_flips(client, db):
+    """T3-5: the pin toggle upserts + flips keep_on_site."""
+    match_id = await _seed_match(db)
+    r = client.post(f"/match/{match_id}/site/toggle-keep", headers={**AUTH, **CSRF})
+    assert r.status_code == 200
+    assert (await _site_listing(db, match_id)).keep_on_site is True
+    client.post(f"/match/{match_id}/site/toggle-keep", headers={**AUTH, **CSRF})
+    assert (await _site_listing(db, match_id)).keep_on_site is False
+    assert await _site_listing_count(db) == 1  # upsert, not a second row
+
+
+def test_bulk_unpublish_without_csrf_is_403(client, db):
+    r = client.post("/published/bulk-unpublish", headers=AUTH, data={"site_listing_id": 1})
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_bulk_unpublish_hides_only_selected_and_is_idempotent(client, db):
+    """T4-2: only the ticked cards go down (is_public=0, is_featured=0); re-running is a no-op."""
+    _, sl1 = await _seed_public_card(db, 1)
+    _, sl2 = await _seed_public_card(db, 2)
+    _, sl3 = await _seed_public_card(db, 3)
+
+    r = client.post(
+        "/published/bulk-unpublish", headers={**AUTH, **CSRF},
+        data={"site_listing_id": [sl1, sl2]}, follow_redirects=False,
+    )
+    assert r.status_code == 303
+    async with db() as s:
+        rows = {sl.id: sl for sl in (await s.execute(select(SiteListing))).scalars().all()}
+    assert rows[sl1].is_public is False and rows[sl1].is_featured is False
+    assert rows[sl2].is_public is False
+    assert rows[sl3].is_public is True  # not selected → untouched
+
+    # idempotent: hiding an already-hidden card changes nothing and does not error
+    r2 = client.post(
+        "/published/bulk-unpublish", headers={**AUTH, **CSRF},
+        data={"site_listing_id": [sl1]}, follow_redirects=False,
+    )
+    assert r2.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_bulk_unpublish_empty_selection_is_noop(client, db):
+    _, sl1 = await _seed_public_card(db, 1)
+    r = client.post("/published/bulk-unpublish", headers={**AUTH, **CSRF}, data={}, follow_redirects=False)
+    assert r.status_code == 303
+    async with db() as s:
+        sl = (await s.execute(select(SiteListing).where(SiteListing.id == sl1))).scalar_one()
+    assert sl.is_public is True
+
+
+@pytest.mark.asyncio
+async def test_gone_window_surfaces_old_card_hidden_by_default(client, db):
+    """T4-1: a card published 30 days ago is out of the default «3 недели» window but shows in the
+    «Пропавшие» view (which reads site_listings directly, no date filter)."""
+    from datetime import timedelta
+
+    from src.db.models import PublishedPost, utcnow
+
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)  # listing price 850
+    client.post(f"/match/{match_id}/site/toggle-public", headers={**AUTH, **CSRF})
+    async with db() as s:
+        s.add(PublishedPost(
+            match_id=match_id, tg_message_id=999, post_text="x",
+            published_at=utcnow() - timedelta(days=30),
+        ))
+        await s.commit()
+
+    assert "850 €" not in client.get("/published", headers=AUTH).text  # default window hides it
+    r = client.get("/published?window=gone", headers=AUTH)
+    assert r.status_code == 200
+    assert "850 €" in r.text and "🪦 Пропавшие" in r.text
+
+
+@pytest.mark.asyncio
+async def test_gone_view_shows_liveness_badges(client, db):
+    """T4-3: alive-on-a-platform vs dead-everywhere badges in the «Пропавшие» view."""
+    await _seed_public_card(db, 10, is_active=True, price=111)   # active singleton → alive
+    await _seed_public_card(db, 11, is_active=False, price=222)  # inactive singleton → dead
+
+    html = client.get("/published?window=gone", headers=AUTH).text
+    assert "жива на NEKRETNINE" in html
+    assert "мёртво везде" in html

@@ -29,6 +29,14 @@
       hx-target="#site-controls-{{ match_id }}"
       hx-swap="outerHTML"
     >Квартира недели {{ '✓' if site and site.is_featured else '✕' }}</button>
+    <button
+      type="button"
+      class="btn-toggle{{ ' is-on' if site and site.keep_on_site else '' }}"
+      hx-post="/match/{{ match_id }}/site/toggle-keep"
+      hx-target="#site-controls-{{ match_id }}"
+      hx-swap="outerHTML"
+      title="Закрепить: liveness-свип не снимет карточку автоматически, даже если квартира пропала со всех площадок"
+    >📌 Закреп {{ '✓' if site and site.keep_on_site else '✕' }}</button>
   </div>
   <form
     class="site-meta-form"
