@@ -127,6 +127,14 @@
 
 **Гейт Wave 3:** unit-пол + новые; alembic up/down на пустой и засеянной БД.
 
+> ✅ **Wave 3 СДЕЛАНА (14.07), кроме admin-UI-хвостов.** Коммиты: T3-1+T3-2 `64de43d`, T3-5-схема `111cda3`,
+> T3-3 `bd641a6`, T3-4+T3-6 `2528cfa`. Гейт: **unit 1088 passed** (1055 флор + 12 Wave1 + 21 Wave3), 53
+> skipped; alembic up/down/roundtrip на пустой и засеянной БД (тесты 0010/0011) зелёные; `src/site/liveness.py`
+> ruff-чист. Побочно: `test_migration_0010` привязан к абсолютным ревизиям (был head/-1, ломался от 0011).
+> **Перенесено в Wave 4 (admin-facing):** T3-5-UI (тогл pin в `_site_controls.html`) и T3-6-бейдж (переименование
+> «пора убрать» → нейтральный «N дн. на сайте»). Ядро (config/dupes-write/liveness-модуль/нотис/CLI/nightly/
+> миграция/удаление retention.py) — готово.
+
 ### Wave 4 — админка (агент, TDD; после Wave 3 — общие файлы)
 
 | ID | Задача | Суть | TDD |
