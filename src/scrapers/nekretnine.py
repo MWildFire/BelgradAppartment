@@ -264,11 +264,16 @@ class NekretnineScraper(Scraper):
         Contract preserved: on ultimate failure the last exception propagates. `orchestrator.
         _process_one` and the smoke detail-probe both rely on fetch_detail *raising* on failure.
         """
+        # A detail page is reached by clicking a card on the list — so present it as a same-site
+        # navigation: Referer = the list URL, Sec-Fetch-Site = same-origin (overrides the client's
+        # top-level "none"). A Refererless deep-link straight to an /oglasi/<id>/ is the shape an
+        # anti-bot layer flags. T1-4.
+        detail_headers = {"Referer": self.list_url, "Sec-Fetch-Site": "same-origin"}
         last_exc: Exception | None = None
         for attempt in range(self.fetch_attempts):
             status: int | None = None
             try:
-                resp = await self._client.get(url)
+                resp = await self._client.get(url, headers=detail_headers)
                 resp.raise_for_status()
                 return self.parse_detail(url, resp.text)
             except httpx.HTTPStatusError as e:

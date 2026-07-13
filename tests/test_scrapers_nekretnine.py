@@ -461,3 +461,19 @@ async def test_fetch_detail_404_raises_immediately_without_retry() -> None:
         await sc.fetch_detail(_DETAIL_URL)
     assert ei.value.response.status_code == 404
     assert calls["n"] == 1, "404 gone — must not be retried"
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_sends_referer(nekretnine_detail_html: str) -> None:
+    """T1-4: a detail GET must carry a same-site Referer (the list URL) — a Refererless deep-link to
+    an oglas is exactly the shape an anti-bot layer flags."""
+    captured: dict[str, httpx.Headers] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = request.headers
+        return httpx.Response(200, text=nekretnine_detail_html)
+
+    sc = _make_scraper(handler)
+    await sc.fetch_detail(_DETAIL_URL)
+    assert captured["headers"].get("referer") == sc.list_url
+    assert captured["headers"].get("sec-fetch-site") == "same-origin"

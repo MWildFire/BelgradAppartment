@@ -87,6 +87,22 @@ class Scraper(abc.ABC):
             headers={
                 "User-Agent": ua,
                 "Accept-Language": "sr,en;q=0.9,ru;q=0.8",
+                # Browser-navigation headers a bare httpx client omits — their ABSENCE is a cheap
+                # fingerprint for anti-bot layers (the nekretnine 403 of 13.07). Values track the
+                # Chrome 126 / macOS identity in DEFAULT_USER_AGENT; keep them in sync if the UA
+                # bumps. sec-ch-ua / Sec-Fetch-* are what a top-level document navigation sends.
+                "Accept": (
+                    "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                    "image/avif,image/webp,image/apng,*/*;q=0.8"
+                ),
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-User": "?1",
+                "Sec-Fetch-Dest": "document",
+                "sec-ch-ua": '"Google Chrome";v="126", "Chromium";v="126", "Not/A)Brand";v="24"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"',
             },
             timeout=httpx.Timeout(30.0),
             follow_redirects=True,
