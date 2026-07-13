@@ -23,7 +23,7 @@ from src.scrapers.base import ListingDetail, ListingPreview, Scraper
 from src.scrapers.cetiri_zida import CetiriZidaScraper
 from src.scrapers.halooglasi import HalooglasiScraper
 from src.scrapers.nekretnine import NekretnineScraper
-from src.scrapers.smoke import SmokeResult, compute_drift, run_smoke
+from src.scrapers.smoke import _DETAIL_PROBE_COUNT, SmokeResult, compute_drift, run_smoke
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -405,6 +405,92 @@ async def test_run_smoke_exception_sets_error(monkeypatch, tmp_path: Path) -> No
     res = await run_smoke(sc)
     assert res.ok is False
     assert res.error is not None and "kaboom" in res.error
+
+
+# ------------------------------------------------- T1-2/T1-3: detail-probe resilience + honest count
+
+
+class _DetailFailScraper(_FakeScraper):
+    """fetch_detail raises for URLs in `fail_urls`; returns the canned detail otherwise.
+
+    Models the 13.07 reality: nekretnine 403s on SOME detail GETs while the list is healthy.
+    """
+
+    def __init__(self, *, fail_urls: set[str], error: Exception, **kw: object) -> None:
+        super().__init__(**kw)  # type: ignore[arg-type]
+        self._fail_urls = fail_urls
+        self._error = error
+
+    async def fetch_detail(self, url: str) -> ListingDetail:
+        if url in self._fail_urls:
+            raise self._error
+        return self._details[url]
+
+
+@pytest.mark.asyncio
+async def test_run_smoke_one_bad_detail_does_not_sink_probe(monkeypatch, tmp_path: Path) -> None:
+    """T1-2: a single preview's fetch_detail raising (a 403 on ONE ad) must not fail the probe —
+    the loop moves to the next preview and accepts on the first healthy detail."""
+    _state_redirect(monkeypatch, tmp_path)
+    previews = [_preview(i) for i in range(1, 7)]
+    details = {p.url: _full_detail(p.url) for p in previews}
+    sc = _DetailFailScraper(
+        previews=previews, details=details,
+        fail_urls={previews[0].url},  # first probe 403s; second yields full detail
+        error=RuntimeError("HTTP 403 Forbidden"),
+        fingerprint_fp={"source": "x", "result_keys": ["a"]},
+    )
+
+    res = await run_smoke(sc)
+    assert res.ok is True, "one bad detail must not sink an otherwise-healthy probe"
+    assert res.detail_ok is True
+    assert res.n_previews == 6
+    assert res.error is None, "a recovered probe carries no error"
+
+
+@pytest.mark.asyncio
+async def test_run_smoke_all_details_403_fails_softly_with_honest_count(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """T1-2/T1-3: every probed detail 403s → detail_ok=False, error carries the 403, but the probe
+    does NOT crash and n_previews reflects the list that DID work (the 13.07 'previews=0' was a lie)."""
+    _state_redirect(monkeypatch, tmp_path)
+    previews = [_preview(i) for i in range(1, 7)]
+    details = {p.url: _full_detail(p.url) for p in previews}
+    sc = _DetailFailScraper(
+        previews=previews, details=details,
+        fail_urls={p.url for p in previews[:_DETAIL_PROBE_COUNT]},
+        error=RuntimeError("HTTP 403 Forbidden"),
+    )
+
+    res = await run_smoke(sc)
+    assert res.ok is False
+    assert res.detail_ok is False
+    assert res.n_previews == 6, "list worked — the count must be honest, not 0"
+    assert res.error is not None and "403" in res.error
+
+
+@pytest.mark.asyncio
+async def test_run_smoke_reports_true_count_on_post_list_crash(monkeypatch, tmp_path: Path) -> None:
+    """T1-3: a crash AFTER list_recent succeeded (here: persisting the good fingerprint fails, e.g.
+    disk full) lands in the outer except — which must still report the real preview count, not 0."""
+    _state_redirect(monkeypatch, tmp_path)
+    import src.scrapers.smoke as smoke_mod
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise OSError("disk full writing fingerprint")
+
+    monkeypatch.setattr(smoke_mod, "_save_good_fingerprint", _boom)
+    previews = [_preview(i) for i in range(1, 7)]
+    details = {p.url: _full_detail(p.url) for p in previews}
+    sc = _FakeScraper(
+        previews=previews, details=details, fingerprint_fp={"source": "x", "result_keys": ["a"]}
+    )
+
+    res = await run_smoke(sc)
+    assert res.ok is False, "the persist crash makes the run not-ok"
+    assert res.n_previews == 6, "the list DID work — the except branch must not report 0"
+    assert res.error is not None and "disk full" in res.error
 
 
 # --------------------------------------------------------------------------- contract guard (CI)

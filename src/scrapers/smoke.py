@@ -129,21 +129,37 @@ async def run_smoke(scraper: Scraper) -> SmokeResult:
     persisted only when ok is True.
     """
     platform_value = scraper.platform.value
+    # Hoisted so the outer except can report the TRUE preview count: a crash AFTER list_recent
+    # succeeded (T1-3) must not masquerade as "previews=0" — the 13.07 nekretnine alert did exactly
+    # that (list had 20 previews, a detail 403 blew up the probe, the alert claimed previews=0).
+    n_previews = 0
     try:
         previews = await scraper.list_recent(max_pages=1)
         n_previews = len(previews)
 
         # --- detail probe: accept if any of the first few previews yields all required fields ---
+        # T1-2: one preview's fetch_detail raising (e.g. a targeted 403 on a single ad) is NOT a
+        # dead parser — catch it, remember the error, and try the next preview. Only if EVERY probed
+        # preview fails do we report detail_ok=False with that last error (a real signal).
         detail_ok = False
         missing_fields: list[str] = []
+        detail_error: str | None = None
         for prev in previews[:_DETAIL_PROBE_COUNT]:
-            detail = await scraper.fetch_detail(prev.url)
+            try:
+                detail = await scraper.fetch_detail(prev.url)
+            except Exception as e:  # noqa: BLE001 — one bad detail ≠ dead parser; probe the next
+                detail_error = str(e) or type(e).__name__
+                logger.warning(
+                    "[smoke] %s detail probe %s failed: %s", platform_value, prev.url, e
+                )
+                continue
             this_missing = [
                 f for f in scraper.REQUIRED_DETAIL_FIELDS if not getattr(detail, f, None)
             ]
             if not this_missing:
                 detail_ok = True
                 missing_fields = []
+                detail_error = None  # a healthy detail clears the earlier probe failures
                 break
             # Keep the LAST probe's misses for the alert (all probes failed → real signal).
             missing_fields = this_missing
@@ -180,14 +196,16 @@ async def run_smoke(scraper: Scraper) -> SmokeResult:
             detail_ok=detail_ok,
             missing_fields=missing_fields,
             drift=drift,
-            error=None,
+            # T1-2: surface the last detail failure even when the probe didn't crash — a soft
+            # all-details-403 must still tell the alert WHY detail_ok is False (was silently None).
+            error=detail_error,
         )
     except Exception as e:  # noqa: BLE001 — any failure is a smoke failure worth alerting on
         logger.exception("[smoke] %s probe raised", platform_value)
         return SmokeResult(
             platform=platform_value,
             ok=False,
-            n_previews=0,
+            n_previews=n_previews,  # T1-3: honest count — 0 only if list_recent itself never returned
             detail_ok=False,
             missing_fields=[],
             drift=[],
