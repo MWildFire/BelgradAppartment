@@ -963,6 +963,27 @@ async def _dupes_report_nightly_line() -> str:
         return "🚨 dupes-report шаг упал — см. логи"
 
 
+async def _liveness_nightly_line() -> str:
+    """T3-4 nightly step — liveness sweep + notice, fault-isolated (сбой → 🚨-строка, nightly жив).
+    Kill switch SITE_LIVENESS_ENABLED=0 глушит шаг целиком (сводка получает строку «выкл»)."""
+    if not get_settings().site_liveness_enabled:
+        return "liveness: выкл (SITE_LIVENESS_ENABLED=0)"
+    try:
+        from src.site.liveness import send_liveness_notice, site_liveness_sweep
+
+        report = await site_liveness_sweep()
+        sent = await send_liveness_notice(report)
+        note = " — нотис отправлен" if sent else ""
+        return (
+            f"liveness: снято {len(report.hidden)}, подтв. {len(report.candidates_confirmed)}, "
+            f"неподтв. {len(report.candidates_unconfirmed)}, "
+            f"держим {report.kept_active + report.kept_pinned}{note}"
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("nightly step failed: site-liveness")
+        return "🚨 liveness шаг упал — см. логи"
+
+
 @cli.command("embed-all")
 @click.option(
     "--target",
@@ -1407,16 +1428,37 @@ def weekly_refresh_alias(
     asyncio.run(_nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape))
 
 
-@cli.command("site-retention-notice")
-def site_retention_notice() -> None:
-    """Send the «пора убрать» notice for site listings older than the retention window.
+@cli.command("site-liveness")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Compute the sweep and print the report + notice preview WITHOUT hiding anything.",
+)
+def site_liveness(dry_run: bool) -> None:
+    """Liveness sweep (replaces the age-based «пора убрать» retention notice, D5).
 
-    The same step the nightly job runs; exposed for manual/ad-hoc runs and testing. No-op when
-    nothing is overdue. Reuses the bot recipients (Дарья + оператор)."""
-    from src.site.retention import send_overdue_notice
+    A public card stays up while its apartment is listed on >=1 platform (its A4 dup-group) and only
+    comes down when confirmed gone from all. Prints the report + a notice preview; --dry-run mutates
+    nothing (Wave-6 triage). The nightly job runs the same sweep and actually sends the notice."""
+    asyncio.run(_site_liveness(dry_run))
 
-    n = asyncio.run(send_overdue_notice())
-    click.echo(f"retention: {n} overdue listing(s)" + (" — notice sent" if n else " — nothing to send"))
+
+async def _site_liveness(dry_run: bool) -> None:
+    from src.site.liveness import format_liveness_notice, site_liveness_sweep
+
+    report = await site_liveness_sweep(dry_run=dry_run)
+    click.echo(
+        f"=== Liveness sweep{' (dry-run)' if dry_run else ''} ===\n"
+        f"держим: активные {report.kept_active}, pinned {report.kept_pinned}   "
+        f"снято: {len(report.hidden)}   подтв. мертвы: {len(report.candidates_confirmed)}   "
+        f"неподтв.: {len(report.candidates_unconfirmed)}   errors: {report.errors}"
+    )
+    notice = format_liveness_notice(report)
+    if notice:
+        click.echo("\n--- нотис (превью) ---")
+        click.echo(notice)
+    else:
+        click.echo("(нечего слать — всё живо)")
 
 
 def _parse_rate_degraded(
@@ -1525,15 +1567,12 @@ async def _nightly_refresh(
         logging.getLogger(__name__).exception("nightly step failed: price-drop")
         price_line = "🚨 price-drop шаг упал — см. логи"
 
-    # Stage W2 retention (warn-first): notify Дарью + оператора of flats live on the public site
-    # >= 3 weeks so they can take them down in the admin. Fault-isolated — never kills nightly.
-    try:
-        from src.site.retention import send_overdue_notice
-        n_overdue = await send_overdue_notice()
-        if n_overdue:
-            click.echo(f"  retention: {n_overdue} listing(s) overdue — notice sent")
-    except Exception:
-        logging.getLogger(__name__).exception("nightly step failed: site-retention")
+    # Liveness sweep (D5, replaces the age-based 21-day retention notice): a card comes down only
+    # when its apartment is confirmed gone from EVERY platform (its dup-group), never merely by age.
+    # Fault-isolated inside the helper; kill switch SITE_LIVENESS_ENABLED=0.
+    click.echo("→ Site-listing liveness sweep…")
+    liveness_line = await _liveness_nightly_line()
+    click.echo(f"  {liveness_line}")
 
     # T2-4: site-аналитика — догон несагрегированных дней + сегодня → retention raw
     # (§N, ПЕРЕД dupes-шагом); SITE_ANALYTICS_ENABLED=false глушит шаг целиком.
@@ -1572,6 +1611,7 @@ async def _nightly_refresh(
         lines.append(price_line)
     lines.append(analytics_line)  # T2-4: rollup/retention — всегда в summary (в т.ч. «удалено 0»)
     lines.append(dupes_line)  # T1-4: счётчик дублей — всегда в summary (0 тоже информативен)
+    lines.append(liveness_line)  # T3-4: liveness — всегда в summary (снято/кандидаты/держим)
     if total_errors:
         lines.append(f"⚠️ Ошибки: {total_errors}")
     lines.append(f"⏱ Время: {dur}")

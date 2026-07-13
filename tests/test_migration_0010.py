@@ -47,7 +47,7 @@ def _seed_lead_pre_0010(db_path: Path) -> None:
 def test_upgrade_0010_creates_analytics_schema(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0010_analytics")  # pin to 0010 — isolate from later migrations (0011+)
 
     con = sqlite3.connect(db_path)
 
@@ -139,7 +139,8 @@ def test_downgrade_0010_reverses_schema_and_keeps_leads(tmp_path: Path) -> None:
     cfg = _alembic_cfg(db_path)
     command.upgrade(cfg, "0009_subscriptions")
     _seed_lead_pre_0010(db_path)
-    command.upgrade(cfg, "head")
+    # Pin to 0010 (not "head") so this 0010 roundtrip stays isolated from later migrations (0011+).
+    command.upgrade(cfg, "0010_analytics")
 
     con = sqlite3.connect(db_path)
     con.execute(
@@ -150,7 +151,7 @@ def test_downgrade_0010_reverses_schema_and_keeps_leads(tmp_path: Path) -> None:
     con.commit()
     con.close()
 
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, "0009_subscriptions")
 
     con = sqlite3.connect(db_path)
     assert (
@@ -169,11 +170,12 @@ def test_downgrade_0010_reverses_schema_and_keeps_leads(tmp_path: Path) -> None:
 
 
 def test_downgrade_0010_on_empty_db(tmp_path: Path) -> None:
-    """Empty-DB roundtrip: head → -1 works with zero rows anywhere."""
+    """Empty-DB roundtrip: 0010 up → down works with zero rows anywhere."""
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
-    command.downgrade(cfg, "-1")
+    # Absolute revisions (not head/-1) keep this 0010 roundtrip stable as later migrations land.
+    command.upgrade(cfg, "0010_analytics")
+    command.downgrade(cfg, "0009_subscriptions")
 
     con = sqlite3.connect(db_path)
     assert (

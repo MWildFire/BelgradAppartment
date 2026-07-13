@@ -23,7 +23,13 @@ from src.db.models import (
     SiteListing,
     SourceChannel,
 )
-from src.site.liveness import LivenessReport, site_liveness_sweep
+from src.site.liveness import (
+    LivenessCandidate,
+    LivenessReport,
+    format_liveness_notice,
+    send_liveness_notice,
+    site_liveness_sweep,
+)
 
 _N = itertools.count(1)
 
@@ -290,3 +296,121 @@ async def test_district_falls_back_to_address_then_title(db):
     report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
 
     assert report.candidates_confirmed[0].district == "Кнеза Милоша 10"
+
+
+# ------------------------------------------------------------- T3-4: notice (D8) + delivery
+
+
+def _cand(i: int, *, price: int | None = 300, district: str | None = "Vračar",
+          group_size: int = 1, dead: int = 1, inconclusive: int = 0) -> LivenessCandidate:
+    return LivenessCandidate(
+        site_listing_id=i, listing_id=i, price_eur=price, district=district,
+        group_size=group_size, dead=dead, inconclusive=inconclusive, url=f"https://x/{i}/",
+    )
+
+
+def test_notice_is_silent_when_nothing_flagged():
+    assert format_liveness_notice(LivenessReport(kept_active=5, kept_pinned=2)) is None
+
+
+def test_notice_has_sections_top10_and_overflow():
+    rep = LivenessReport(
+        hidden=[_cand(i) for i in range(3)],
+        candidates_confirmed=[_cand(100 + i) for i in range(12)],  # >10 → «…и ещё 2»
+        candidates_unconfirmed=[_cand(200, dead=0, inconclusive=1)],
+    )
+    body = format_liveness_notice(rep)
+    assert body is not None
+    assert "🪦 сняты автоматически (3)" in body
+    assert "подтверждённо мертвы" in body and "(12)" in body
+    assert "…и ещё 2" in body, "confirmed section collapses past the top-10"
+    assert "не подтверждено" in body
+
+
+def test_notice_price_and_district_and_group_in_row():
+    body = format_liveness_notice(
+        LivenessReport(candidates_confirmed=[_cand(1, price=1234, district="Врачар",
+                                                   group_size=2, dead=2)])
+    )
+    assert body is not None
+    assert "1234€" in body and "Врачар" in body
+    assert "мертво 2/2 площадок" in body
+
+
+@pytest.mark.asyncio
+async def test_send_liveness_notice_sends_when_flagged_and_token(monkeypatch):
+    import src.site.liveness as liveness_mod
+
+    monkeypatch.setattr(get_settings(), "tg_bot_token", "test-token")
+    sent = {}
+
+    async def fake_send(text):  # send_text_via_bot(text) — bot-only, no client arg
+        sent["text"] = text
+
+    monkeypatch.setattr(liveness_mod, "send_text_via_bot", fake_send)
+    ok = await send_liveness_notice(LivenessReport(candidates_confirmed=[_cand(1, price=1234)]))
+    assert ok is True
+    assert "1234€" in sent["text"]
+
+
+@pytest.mark.asyncio
+async def test_send_liveness_notice_noop_when_empty(monkeypatch):
+    import src.site.liveness as liveness_mod
+
+    calls = []
+
+    async def fake_send(text):
+        calls.append(text)
+
+    monkeypatch.setattr(liveness_mod, "send_text_via_bot", fake_send)
+    assert await send_liveness_notice(LivenessReport(kept_active=3)) is False
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_send_liveness_notice_noop_without_bot_token(monkeypatch):
+    import src.site.liveness as liveness_mod
+
+    monkeypatch.setattr(get_settings(), "tg_bot_token", "")
+    calls = []
+
+    async def fake_send(text):
+        calls.append(text)
+
+    monkeypatch.setattr(liveness_mod, "send_text_via_bot", fake_send)
+    assert await send_liveness_notice(LivenessReport(candidates_confirmed=[_cand(1)])) is False
+    assert calls == []
+
+
+# ------------------------------------------------------------- T3-4: nightly step (fault-isolated)
+
+
+@pytest.mark.asyncio
+async def test_liveness_nightly_line_killswitch_off(monkeypatch):
+    """SITE_LIVENESS_ENABLED=0 → step is skipped with an explicit summary line, no sweep runs."""
+    import src.cli as cli_mod
+
+    monkeypatch.setattr(get_settings(), "site_liveness_enabled", False)
+    # If the sweep were called it would need a client; make it explode to prove it's NOT called.
+    async def boom(**_kw):
+        raise AssertionError("sweep must not run when the kill switch is off")
+
+    monkeypatch.setattr("src.site.liveness.site_liveness_sweep", boom)
+    line = await cli_mod._liveness_nightly_line()
+    assert "выкл" in line
+
+
+@pytest.mark.asyncio
+async def test_liveness_nightly_line_fault_isolated(monkeypatch):
+    """A sweep failure becomes a 🚨 summary line — the nightly run never dies on it."""
+    import src.cli as cli_mod
+
+    monkeypatch.setattr(get_settings(), "site_liveness_enabled", True)
+
+    async def boom(**_kw):
+        raise RuntimeError("sweep exploded")
+
+    monkeypatch.setattr("src.site.liveness.site_liveness_sweep", boom)
+    line = await cli_mod._liveness_nightly_line()
+    assert line.startswith("🚨")
+    assert "liveness" in line

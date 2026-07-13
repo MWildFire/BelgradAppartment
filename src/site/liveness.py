@@ -38,8 +38,12 @@ from src.scrapers.orchestrator import (
     _make_side_client,
     hide_site_listings_for_listing,
 )
+from src.telegram.bot_delivery import send_text_via_bot
 
 logger = logging.getLogger(__name__)
+
+# How many rows to list per section before collapsing the rest into «…и ещё N» (D8).
+_NOTICE_TOP = 10
 
 # Member statuses (C0). Plain strings keep the report trivially serialisable for logs/tests.
 _ACTIVE = "ACTIVE"
@@ -237,3 +241,68 @@ async def site_liveness_sweep(
         len(report.hidden), report.errors, dry_run,
     )
     return report
+
+
+# --------------------------------------------------------------------------- notice (D8)
+
+
+def _fmt_row(c: LivenessCandidate) -> str:
+    price = f"{c.price_eur}€" if c.price_eur is not None else "—"
+    where = c.district or "—"  # already district → address_raw → title fallbacked in the sweep
+    if c.group_size > 1:
+        return f"• {price}, {where} — мертво {c.dead}/{c.group_size} площадок"
+    return f"• {price}, {where}"
+
+
+def _section(title: str, items: list[LivenessCandidate]) -> list[str]:
+    lines = [title]
+    lines += [_fmt_row(c) for c in items[:_NOTICE_TOP]]
+    if len(items) > _NOTICE_TOP:
+        lines.append(f"…и ещё {len(items) - _NOTICE_TOP}")
+    return lines
+
+
+def format_liveness_notice(report: LivenessReport) -> str | None:
+    """Compact Telegram body (D8). Sections: auto-hidden / confirmed-dead candidates / unconfirmed.
+    Top-10 per section + «…и ещё N». Returns None when nothing is flagged (the caller stays silent).
+    """
+    if report.total_flagged == 0:
+        return None
+    blocks: list[str] = ["🏠 Живость карточек"]
+    if report.hidden:
+        blocks.append("")
+        blocks += _section(f"🪦 сняты автоматически ({len(report.hidden)}):", report.hidden)
+    if report.candidates_confirmed:
+        blocks.append("")
+        blocks += _section(
+            f"🪦 подтверждённо мертвы — снять вручную ({len(report.candidates_confirmed)}):",
+            report.candidates_confirmed,
+        )
+    if report.candidates_unconfirmed:
+        blocks.append("")
+        blocks += _section(
+            f"⚠️ не подтверждено — проверить ({len(report.candidates_unconfirmed)}):",
+            report.candidates_unconfirmed,
+        )
+    return "\n".join(blocks)
+
+
+async def send_liveness_notice(report: LivenessReport) -> bool:
+    """Send the liveness notice to Дарья + оператор via the bot. Silent (returns False) when nothing
+    is flagged or TG_BOT_TOKEN is unset — same delivery as the retired retention notice.
+
+    Sends via the bot DIRECTLY (send_text_via_bot fans out to every TG_BOT_RECIPIENTS chat), NOT
+    send_text_to_recipients(None, …) which raises under the userbot delivery mode.
+    """
+    body = format_liveness_notice(report)
+    if body is None:
+        logger.info("[liveness] nothing to report — notice not sent")
+        return False
+    if not get_settings().tg_bot_token:
+        logger.warning(
+            "[liveness] %d flagged but TG_BOT_TOKEN unset — notice not sent", report.total_flagged
+        )
+        return False
+    await send_text_via_bot(body)
+    logger.info("[liveness] notice sent (%d flagged)", report.total_flagged)
+    return True
