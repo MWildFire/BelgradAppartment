@@ -90,6 +90,16 @@ class Settings(BaseSettings):
     # X2 auto-remove: when verify-links deactivates a listing the platform removed (404/410),
     # auto-hide its public card in the SAME transaction (NIGHTLY_AUTO_HIDE_SITE_LISTINGS=0 → skip).
     nightly_auto_hide_site_listings: bool = True
+    # Liveness sweep (replaces the age-based 21-day retention notice, D5). A public card stays up
+    # while the apartment exists on ≥1 platform (dup-group A4) and only comes down when confirmed
+    # gone from ALL. site_liveness_enabled is the kill switch for the whole nightly step.
+    site_liveness_enabled: bool = True  # SITE_LIVENESS_ENABLED=0 → skip the liveness step entirely
+    # D1 — warn-first by default: the nightly notice lists confirmed-dead candidates but hides
+    # nothing. Flip SITE_LIVENESS_AUTO_HIDE=1 on the server after ~a week of clean notices.
+    site_liveness_auto_hide: bool = False
+    # D3 — safety cap on auto-hides per night (mirrors the price-drop cap); overflow → notice
+    # candidates instead of being hidden, so a bad night can't wipe the whole showcase.
+    site_liveness_max_hides: int = 10
     # C2: nightly saved-search digest — new public listings × active subscriptions → notices
     # (idempotent via subscription_matches). NIGHTLY_NOTIFY_SUBSCRIPTIONS=0 → skip the step.
     nightly_notify_subscriptions: bool = True
@@ -133,6 +143,11 @@ class Settings(BaseSettings):
     # shared photo is too weak (agency/stock photos get reused across unrelated listings).
     dedup_max_hamming: int = 6
     dedup_min_shared_photos: int = 2
+    # D2 — tag dup_group_id/is_primary in the nightly dupes step (not just report). The liveness
+    # sweep needs live dup-groups to know a card is still alive on another platform;
+    # find_cross_platform_dupes(write=True) is idempotent (reset + re-tag active). NIGHTLY_DUPES_WRITE=0
+    # → report-only (the pre-liveness behaviour).
+    nightly_dupes_write: bool = True
     area_tolerance_m2: float = 5.0
     price_tolerance_eur: int = 0
     clip_similarity_threshold: float = 0.92

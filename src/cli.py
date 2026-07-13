@@ -873,23 +873,27 @@ async def _render_dupes_groups(stats: DedupStats) -> list[str]:
 
 
 async def _write_dupes_report() -> tuple[Path, DedupStats]:
-    """T1-4: compute cross-platform dupes READ-ONLY and persist data/reports/dupes-YYYY-MM-DD.txt.
+    """T1-4/T3-2: compute cross-platform dupes and persist data/reports/dupes-YYYY-MM-DD.txt.
 
-    Report-only по решению D6 — никакого авто-мержа, артефакт для ручной курации Дарьи.
-    Идемпотентно: write=False ничего не мутирует в БД, а повторный прогон за тот же день
-    просто перезаписывает тот же файл. Returns (report path, DedupStats).
+    Mode is D2's NIGHTLY_DUPES_WRITE: default `write=True` idempotently tags dup_group_id/is_primary
+    (reset + re-tag active) so the liveness sweep can see a card is still alive on another platform;
+    `false` keeps the pre-liveness report-only behaviour (no DB changes). Either way there's no
+    auto-merge — the artifact is for Дарья's manual curation. Идемпотентно: повторный прогон за тот
+    же день перезаписывает тот же файл. Returns (report path, DedupStats).
     """
     from src.matching.dedup import find_cross_platform_dupes
 
-    stats = await find_cross_platform_dupes(write=False)
+    write = get_settings().nightly_dupes_write
+    stats = await find_cross_platform_dupes(write=write)
 
     # data/ не в гите — на свежем деплое каталога reports/ ещё нет.
     report_dir = get_settings().data_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"dupes-{datetime.now(timezone.utc).date().isoformat()}.txt"
 
+    mode = "wrote dup_group tags" if write else "report-only (no DB changes)"
     lines = [
-        "Cross-platform dupes — report-only (no DB changes)",
+        f"Cross-platform dupes — {mode}",
         f"active scanned: {stats.active_scanned}   groups: {stats.groups_found}   "
         f"demoted (non-primary): {stats.listings_demoted}",
     ]

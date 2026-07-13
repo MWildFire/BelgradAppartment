@@ -101,10 +101,29 @@ async def test_writes_dated_artifact_with_groups(db, reports_dir):
     assert f"https://example.com/{Platform.HALOOGLASI.value}/b" in text
 
 
-async def test_report_only_no_db_mutation(db, reports_dir):
-    """Решение D6: nightly-шаг НИКОГДА не пишет теги — только отчёт."""
+async def test_nightly_dupes_write_true_persists_tags(db, reports_dir):
+    """D2: по умолчанию (NIGHTLY_DUPES_WRITE=1) nightly-шаг ПИШЕТ dup_group_id/is_primary — liveness
+    нужны живые dup-группы, чтобы знать, что квартира ещё жива на другой площадке."""
     from src.cli import _write_dupes_report
 
+    a, b = await _seed_dupe_pair()
+
+    _, stats = await _write_dupes_report()
+
+    assert stats.groups_found == 1
+    async with get_session() as s:
+        rows = [await s.get(Listing, i) for i in (a, b)]
+    gid = min(a, b)
+    assert all(r.dup_group_id == gid for r in rows), "both members tagged with the shared group id"
+    assert sum(1 for r in rows if r.is_primary) == 1, "exactly one primary per group"
+
+
+async def test_nightly_dupes_write_false_is_report_only(db, reports_dir, monkeypatch):
+    """NIGHTLY_DUPES_WRITE=0 → прежнее поведение: только отчёт, БД не трогаем."""
+    from src.cli import _write_dupes_report
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "nightly_dupes_write", False)
     a, b = await _seed_dupe_pair()
 
     await _write_dupes_report()
