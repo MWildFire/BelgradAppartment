@@ -295,6 +295,11 @@ class SiteListing(Base):
     is_featured: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("0"), nullable=False
     )
+    # D4 pin: when set, the liveness sweep never auto-hides this card (KEEP + "pinned" in the notice)
+    # even if the apartment is confirmed gone from every platform. Toggled from the admin.
+    keep_on_site: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("0"), nullable=False
+    )
     is_for_vnj: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_for_white_card: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     channel_post_url: Mapped[str | None] = mapped_column(Text, nullable=True)
