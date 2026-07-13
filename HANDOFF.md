@@ -10,9 +10,51 @@
 > Память Claude по проекту: `~/.claude/projects/-Users-mvstrike-BelgradAppartment/memory/`
 > (project-ops, nekretnine-nextjs-migration, site-pagination-caps).
 
+### 0.-7 «Liveness & Resilience» (14.07.2026) — ✅ КОД ГОТОВ · ⏳ деплой (Wave 6) ждёт go
+
+> **⭐ САМЫЙ СВЕЖИЙ handoff — начни отсюда.** Ветка **`fix/liveness-and-403`** от `main` @ `d43ce20`.
+> План: [`docs/superpowers/plans/2026-07-14-nekretnine-403-retention-fix.md`](docs/superpowers/plans/2026-07-14-nekretnine-403-retention-fix.md).
+> Гейт зелёный: **unit 1095 / e2e 52** (раздельно). Alembic head **0011** (одна миграция). Ноль новых
+> зависимостей. Вход: два репорта 13.07 — smoke `NEKRETNINE 403` (P0) + retention-нотис «пора убрать (42)» (P1).
+
+Два рычага: **(P0)** хардненинг скрейпера/smoke против 403 и **(P1)** переход с возрастного retention на
+**живость** (карточка снимается только когда квартира подтверждённо пропала со ВСЕХ площадок).
+
+- **Wave 1 · Хардненинг (P0).** `fetch_detail` получил ретраи (транзиентные ретраятся, 403/404/410/401 —
+  сразу raise). Smoke: один битый detail не роняет зонд + честный `n_previews` (алерт «превью=0» 13.07 был
+  враньём except-ветки). Браузерные заголовки в `base._make_client` (Accept/Sec-Fetch/sec-ch-ua/UIR) + `Referer`
+  на detail nekretnine. `SCRAPER_PROXY_URL` прокинут в фото-загрузчик и verify-links клиент (`_make_side_client`).
+- **Wave 3 · Liveness-ядро (P1).** `src/site/liveness.py::site_liveness_sweep` — C0-матрица по dup-группам A4
+  (KEEP пока жив ≥1 площадка / INCONCLUSIVE держит / все DEAD → hide|candidate; pin держит). HEAD с A3-семантикой
+  (404/410=DEAD; 403/5xx/таймаут=INCONCLUSIVE=fail-safe). Нотис D8 (топ-10, секции, молчит при пустоте). CLI
+  `otz site-liveness [--dry-run]`. Nightly-шаг **вместо** retention-вызова (fault-isolated). Миграция **0011**
+  `site_listings.keep_on_site` (pin). A4-тег пишется в nightly (`NIGHTLY_DUPES_WRITE=1`). 21-дневный retention
+  (`site-retention-notice`, `src/site/retention.py`) — **удалён**.
+- **Wave 4 · Админка.** `/published?window=gone` «🪦 Пропавшие» — от `site_listings` (чинит UX-баг окна «3 недели»);
+  bulk-снятие (CSRF+confirm); бейджи живости; тогл «📌 Закреп». «пора убрать» → нейтральный «N дн. на сайте».
+
+**Новые env-ключи (в `.env.example`):** `SITE_LIVENESS_ENABLED=1`, `SITE_LIVENESS_AUTO_HIDE=0` (warn-first, D1),
+`SITE_LIVENESS_MAX_HIDES=10` (D3), `NIGHTLY_DUPES_WRITE=1` (D2).
+
+**⚠️ Диагноз 403 (Wave 2 B2, curl-матрица с VPS 14.07): это DataDome, НЕ простой фингерпринт.** И detail, и
+**LIST** отдают 403 даже с полными браузерными заголовками; сигнатура `x-datadome: protected` + JS-челлендж.
+**T1-4 необходим, но недостаточен** — нужна **эскалация D6** (curl_cffi / Playwright-фоллбэк для nekretnine
+и/или резидентный EU-прокси; новая зависимость → решение Дмитрия). Деплой этого этапа nekretnine НЕ починит,
+но liveness это переживает штатно (HEAD 403 = INCONCLUSIVE = KEEP — карточки не снимаются ошибочно). BACKLOG #21.
+
+**Как включить auto-hide на проде (после ~недели чистых нотисов, D1):** `SITE_LIVENESS_AUTO_HIDE=1` в
+`/opt/otz/.env` → рестарт. До этого — warn-first: нотис перечисляет подтверждённо-мёртвые кандидаты, снимает
+Дарья вручную (bulk в «🪦 Пропавшие» или тогл «На сайт»).
+
+**⏳ Не сделано (совместные шаги Дмитрия, Wave 6):** бэкап БД → `./scripts/deploy_sync.sh --restart` из основного
+чекаута → `alembic upgrade head` (0011) → рестарт юнитов; **порядок:** сначала обход 403 (Wave 2 B3/B4 = D6),
+иначе все nekretnine-члены = INCONCLUSIVE и триаж 42 карточек слеп; `otz-bg site-liveness --dry-run` → отчёт Дарье.
+
+---
+
 ### 0.-6 Stage T «Insight & Integrity» (02.07.2026) — 🚀 ЗАДЕПЛОЕНО НА ПРОД · smoke зелёный
 
-> **⭐ САМЫЙ СВЕЖИЙ handoff — начни отсюда.** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-07-02.md`](docs/web/SESSION_HANDOFF_2026-07-02.md).
+> **Предыдущий этап (задеплоен на прод 02.07).** Полная сессия: [`docs/web/SESSION_HANDOFF_2026-07-02.md`](docs/web/SESSION_HANDOFF_2026-07-02.md).
 > Ветка **`feature/insight-and-integrity`** от `main` @ **`009d229`**. **29 коммитов** (`ce21ea5..5c2b42f`),
 > **79 файлов, +8828 / −139**. Гейт зелёный: **юниты 1055 / e2e 52** (гоняются **раздельно** — комбинированный
 > прогон невозможен by design, playwright оставляет running-loop). Alembic head **0010** (одна миграция).

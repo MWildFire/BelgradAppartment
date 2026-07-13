@@ -79,10 +79,11 @@ otz deliver-all             # повторно отправить все PENDING
 otz rematch-all --hamming N # сбросить статусы и пересчитать matcher с другим порогом
 otz match <inbound_id>      # one-off матчинг конкретного inbound
 otz stats                   # текущее состояние БД
+otz site-liveness [--dry-run] # свип живости публичных карточек (снятие только когда мертво везде)
 otz admin                   # запустить веб-просмотр (FastAPI)
 ```
 
-## Публичный веб-каталог (этапы W / W2 / S / T)
+## Публичный веб-каталог (этапы W / W2 / S / T / Liveness)
 
 Второе FastAPI+Jinja-приложение (`src/site/`) — публичный каталог для клиентов @RentBelgrad. Читает
 **ту же SQLite read-only** и показывает только **отобранные Дарьей** квартиры (опубличенные в канале),
@@ -111,6 +112,17 @@ live-выкатка по раннбуку. Ноль миграций (head ос�
 Миграция **0010** (`site_events`, `site_stats_daily`, `leads.utm_*`). Новые env — `SITE_ANALYTICS_*`
 (см. [`docs/web/env.additions-t.txt`](docs/web/env.additions-t.txt)). Ноль новых зависимостей.
 План: [`docs/superpowers/plans/2026-07-02-insight-and-integrity.md`](docs/superpowers/plans/2026-07-02-insight-and-integrity.md).
+
+**«Liveness & Resilience»** (`docs/superpowers/plans/2026-07-14-nekretnine-403-retention-fix.md`; ✅ код готов,
+⏳ деплой Wave 6 ждёт go): хардненинг скрейпера против 403 (ретраи в `fetch_detail`, браузерные заголовки,
+устойчивость smoke-пробы, proxy в боковые клиенты) и **переход с возрастного retention на живость**. Публичная
+карточка живёт, пока квартира есть хотя бы на одной площадке (A4-dup-группа), и снимается только когда
+подтверждённо пропала со **всех** (`otz site-liveness [--dry-run]`, ночной свип, нотис D8 молчит при пустоте).
+Возраст карточки больше не причина снимать — 21-дневный `site-retention-notice` **удалён**. Админка: фильтр
+«🪦 Пропавшие» (чинит UX-баг окна), bulk-снятие, бейджи живости, тогл «📌 Закреп» (`keep_on_site`). Миграция
+**0011** (`keep_on_site`). Новые env — `SITE_LIVENESS_*`, `NIGHTLY_DUPES_WRITE`. Ноль новых зависимостей.
+⚠️ Диагноз 403 = **DataDome** (не простой фингерпринт): браузерных заголовков мало, нужна эскалация D6
+(curl_cffi/Playwright/резидентный прокси) — см. BACKLOG #21.
 
 ```bash
 # применить миграции (head 0006 заводит site_listings + leads)

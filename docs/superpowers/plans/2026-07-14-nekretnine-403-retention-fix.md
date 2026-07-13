@@ -156,11 +156,20 @@
 
 **Гейт Wave 4:** unit-пол + новые; e2e-сьют зелёный (отдельным прогоном).
 
+> ✅ **Wave 4 СДЕЛАНА (14.07)** (+ перенесённые T3-5-UI/T3-6-бейдж). Коммит `1e7c197`. Гейт: **unit 1095 /
+> e2e 52**. T4-1 gone-вид от `site_listings`; T4-2 bulk-снятие (CSRF+confirm, form=-чекбоксы без вложенных
+> форм); T4-3 бейджи живости; pin-тогл; «пора убрать» → нейтральный «N дн. на сайте».
+
 ### Wave 5 — доки + merge (агент)
 
-- [ ] Доки: `HANDOFF.md` (новая секция §0.-7: что сделано + как включать auto-hide), `README.md` (абзац retention→liveness), `.env.example`/`deploy/env.additions.txt` (новые ключи), `docs/BACKLOG.md` (внести D6-эскалацию как пункт; закрыть строки, которые закрыл этап), отметки [x] в этом файле.
-- [ ] Полный гейт: unit + e2e раздельно, `ruff check`.
-- [ ] Merge ff в `main`, `git push origin main`, снести worktree (`finishing-a-development-branch`).
+- [x] Доки: `HANDOFF.md` §0.-7 (что сделано + как включать auto-hide + диагноз DataDome), `README.md` (абзац
+  Liveness + CLI `site-liveness`), `.env.example` (новые ключи — сделано в T3-1), `docs/BACKLOG.md` (#21 D6/DataDome,
+  #22 ruff-дрейф), отметки [x] в этом файле. *(NB: `deploy/env.additions.txt` устарел ещё со Stage T — новые ключи
+  живут в `.env.example`; не трогал.)*
+- [x] Полный гейт: unit **1095** + e2e **52** раздельно; `ruff check` — реальных проблем в диффе нет (version-drift
+  ruff 0.15.21 — в BACKLOG #22).
+- [ ] 🧑 **Merge ff в `main` + `git push origin main` + снос worktree — ЖДЁТ go Дмитрия** (outward-facing; плюс
+  диагноз DataDome может изменить решение — бандлить ли D6 до деплоя). Ветка готова: `fix/liveness-and-403`.
 
 ### Wave 6 — 🧑 деплой + разовый триаж 42 (совместно, по go)
 
