@@ -7,7 +7,25 @@ from ALL. This file is the successor to the old tests/test_retention.py.
 
 from __future__ import annotations
 
-from src.config import Settings
+import itertools
+
+import httpx
+import pytest
+from sqlalchemy import select, update
+
+from src.config import Settings, get_settings
+from src.db import Listing, Match, get_session
+from src.db.models import (
+    InboundPost,
+    InboundStatus,
+    MatchStatus,
+    Platform,
+    SiteListing,
+    SourceChannel,
+)
+from src.site.liveness import LivenessReport, site_liveness_sweep
+
+_N = itertools.count(1)
 
 
 # --------------------------------------------------------------------------- T3-1: config
@@ -31,3 +49,244 @@ def test_liveness_config_env_override(monkeypatch) -> None:
     assert s.site_liveness_auto_hide is True
     assert s.site_liveness_max_hides == 3
     assert s.nightly_dupes_write is False
+
+
+# ------------------------------------------------------------- T3-3: liveness sweep (matrix)
+#
+# DB — общий conftest-фикстур `db` (in-memory SQLite, подменяет глобальную session factory).
+# HTTP — httpx.MockTransport, инжектируется в sweep через client=. Никакой сети.
+
+
+async def _listing(
+    *,
+    is_active: bool,
+    dup_group_id: int | None = None,
+    url: str | None = None,
+    price_eur: int | None = 300,
+    district: str | None = "Vračar",
+    address_raw: str | None = None,
+    title: str | None = None,
+    platform: Platform = Platform.NEKRETNINE,
+) -> int:
+    n = next(_N)
+    async with get_session() as s:
+        lst = Listing(
+            platform=platform,
+            external_id=f"ext{n}",
+            url=url or f"https://nekretnine.rs/oglasi/{n}/",
+            price_eur=price_eur,
+            district=district,
+            address_raw=address_raw,
+            title=title,
+            photo_urls=[],
+            photo_phashes=[],
+            is_active=is_active,
+            dup_group_id=dup_group_id,
+        )
+        s.add(lst)
+        await s.flush()
+        return lst.id
+
+
+async def _join_group(*listing_ids: int) -> int:
+    """Tag every listing with the shared dup_group_id (= min member id), like dedup does."""
+    gid = min(listing_ids)
+    async with get_session() as s:
+        await s.execute(
+            update(Listing).where(Listing.id.in_(listing_ids)).values(dup_group_id=gid)
+        )
+    return gid
+
+
+async def _card(listing_id: int, *, keep_on_site: bool = False, is_public: bool = True) -> int:
+    """Attach a PUBLISHED match + (public) SiteListing to a listing; return the site_listing id."""
+    n = next(_N)
+    async with get_session() as s:
+        ch = SourceChannel(tg_id=-n, username=f"c{n}", is_active=True)
+        s.add(ch)
+        await s.flush()
+        ib = InboundPost(
+            source_channel_id=ch.id, tg_message_id=n, photo_paths=[], photo_phashes=[],
+            status=InboundStatus.MATCHED,
+        )
+        s.add(ib)
+        await s.flush()
+        m = Match(
+            inbound_post_id=ib.id, listing_id=listing_id, confidence=0.9,
+            matched_photo_count=1, method="phash", status=MatchStatus.PUBLISHED,
+        )
+        s.add(m)
+        await s.flush()
+        sl = SiteListing(match_id=m.id, is_public=is_public, keep_on_site=keep_on_site)
+        s.add(sl)
+        await s.flush()
+        return sl.id
+
+
+def _client(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+
+
+def _by_path(mapping: dict[str, int], default: int = 200):
+    """MockTransport handler: first path-substring match wins, else `default`."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        for needle, code in mapping.items():
+            if needle in url:
+                return httpx.Response(code)
+        return httpx.Response(default)
+    return handler
+
+
+async def _is_public(sl_id: int) -> bool:
+    async with get_session() as s:
+        row = (await s.execute(select(SiteListing).where(SiteListing.id == sl_id))).scalar_one()
+        return row.is_public
+
+
+@pytest.mark.asyncio
+async def test_active_group_member_keeps_card(db):
+    """A neighbour still ACTIVE on another platform keeps the card up, even though the matched
+    listing itself went inactive (and would HEAD 404)."""
+    dead = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
+    alive = await _listing(is_active=True, url="https://4zida.rs/live/", platform=Platform.CETIRI_ZIDA)
+    await _join_group(dead, alive)
+    sl = await _card(dead)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+
+    assert report.kept_active == 1
+    assert report.total_flagged == 0
+    assert await _is_public(sl) is True
+
+
+@pytest.mark.asyncio
+async def test_all_dead_hides_when_autohide_on(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
+    sl = await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+
+    assert len(report.hidden) == 1
+    assert report.hidden[0].site_listing_id == sl
+    assert await _is_public(sl) is False
+
+
+@pytest.mark.asyncio
+async def test_all_dead_is_candidate_when_autohide_off(db):
+    """Default warn-first (D1): all-dead → confirmed candidate, card NOT hidden."""
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
+    sl = await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+
+    assert len(report.candidates_confirmed) == 1
+    assert report.candidates_confirmed[0].site_listing_id == sl
+    assert len(report.hidden) == 0
+    assert await _is_public(sl) is True
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_keeps_card_even_with_autohide_on(db, monkeypatch):
+    """A 403/timeout on an inactive member = INCONCLUSIVE → KEEP (fail-safe), even with auto-hide on."""
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/blocked/")
+    sl = await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/blocked/": 403})))
+
+    assert len(report.candidates_unconfirmed) == 1
+    assert len(report.hidden) == 0
+    assert await _is_public(sl) is True
+
+
+@pytest.mark.asyncio
+async def test_head_transport_error_is_inconclusive_and_counted(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/slow/")
+    sl = await _card(lst)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("timed out", request=request)
+
+    report = await site_liveness_sweep(client=_client(handler))
+
+    assert report.errors == 1
+    assert len(report.candidates_unconfirmed) == 1
+    assert await _is_public(sl) is True
+
+
+@pytest.mark.asyncio
+async def test_pin_keeps_card_even_when_all_dead(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
+    sl = await _card(lst, keep_on_site=True)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+
+    assert report.kept_pinned == 1
+    assert len(report.hidden) == 0
+    assert report.total_flagged == 0
+    assert await _is_public(sl) is True
+
+
+@pytest.mark.asyncio
+async def test_cap_limits_hides_overflow_to_candidates(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    monkeypatch.setattr(get_settings(), "site_liveness_max_hides", 10)
+    for _ in range(11):
+        lst = await _listing(is_active=False, url=f"https://nekretnine.rs/gone/{next(_N)}/")
+        await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+
+    assert len(report.hidden) == 10, "cap D3 bounds hides per night"
+    assert len(report.candidates_confirmed) == 1, "the 11th all-dead card spills to candidates"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_computes_but_does_not_mutate(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
+    sl = await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})), dry_run=True)
+
+    assert len(report.hidden) == 1, "dry-run still reports what WOULD be hidden"
+    assert await _is_public(sl) is True, "dry-run mutates nothing"
+
+
+@pytest.mark.asyncio
+async def test_singleton_group_dead_is_confirmed_candidate(db):
+    """A listing that never joined a dup-group (dup_group_id NULL) is a group of one."""
+    lst = await _listing(is_active=False, dup_group_id=None, url="https://nekretnine.rs/gone/")
+    sl = await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+
+    assert len(report.candidates_confirmed) == 1
+    assert report.candidates_confirmed[0].group_size == 1
+    assert report.candidates_confirmed[0].site_listing_id == sl
+
+
+@pytest.mark.asyncio
+async def test_empty_run_is_all_zero(db):
+    report = await site_liveness_sweep(client=_client(_by_path({})))
+    assert isinstance(report, LivenessReport)
+    assert report.kept_active == 0 and report.kept_pinned == 0
+    assert report.total_flagged == 0 and report.errors == 0
+
+
+@pytest.mark.asyncio
+async def test_district_falls_back_to_address_then_title(db):
+    """D8 fix for the retention screenshot's «—»: district → address_raw → title."""
+    lst = await _listing(
+        is_active=False, district=None, address_raw="Кнеза Милоша 10", title="Стан",
+        url="https://nekretnine.rs/gone/",
+    )
+    await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+
+    assert report.candidates_confirmed[0].district == "Кнеза Милоша 10"
