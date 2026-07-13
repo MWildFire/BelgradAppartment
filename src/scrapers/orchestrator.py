@@ -276,6 +276,28 @@ async def _process_one(
     return True, len(photo_paths), True
 
 
+def _make_side_client(
+    *,
+    headers: dict[str, str] | None = None,
+    timeout: httpx.Timeout | float = 30.0,
+) -> httpx.AsyncClient:
+    """httpx client for the orchestrator's non-scraper side traffic — photo downloads and the
+    verify-links HEAD sweep.
+
+    Honors SCRAPER_PROXY_URL exactly like the scrapers' own client (`base._make_client`): when an IP
+    block forces the scrapers behind a proxy, photo fetches and HEAD checks that still exit from the
+    blocked VPS IP defeat the point — every verify-links HEAD would come back 403 (inconclusive) and
+    photos would keep 403-ing too. T1-5.
+    """
+    proxy = get_settings().scraper_proxy_url or None
+    return httpx.AsyncClient(
+        follow_redirects=True,
+        timeout=timeout,
+        headers=headers,
+        proxy=proxy,
+    )
+
+
 async def _download_photos(
     detail: ListingDetail,
 ) -> tuple[list[Path], list[str], bytes | None]:
@@ -292,10 +314,9 @@ async def _download_photos(
     sem = asyncio.Semaphore(4)
     results: list[tuple[int, Path, str] | None] = [None] * len(detail.photo_urls)
 
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0, connect=10.0),
-        follow_redirects=True,
+    async with _make_side_client(
         headers=headers,
+        timeout=httpx.Timeout(30.0, connect=10.0),
     ) as client:
         async def _one(idx: int, url: str) -> None:
             async with sem:
@@ -514,11 +535,7 @@ async def verify_active_links(
         from src.scrapers.base import DEFAULT_USER_AGENT
 
         ua = get_settings().scraper_user_agent or DEFAULT_USER_AGENT
-        client = httpx.AsyncClient(
-            follow_redirects=True,
-            timeout=10.0,
-            headers={"User-Agent": ua},
-        )
+        client = _make_side_client(headers={"User-Agent": ua}, timeout=10.0)
 
     async def _check_one(row: Any) -> None:
         try:
