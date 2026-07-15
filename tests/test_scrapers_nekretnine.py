@@ -474,11 +474,7 @@ async def test_fetch_detail_403_falls_back_to_playwright(nekretnine_detail_html:
         seen["url"] = url
         return nekretnine_detail_html
 
-    async def no_warm() -> bool:
-        return False  # cookie warm-up unavailable → the browser fetch is what must save us
-
     sc._playwright_html = fake_pw  # type: ignore[method-assign]
-    sc._warm_datadome = no_warm  # type: ignore[method-assign]
     detail = await sc.fetch_detail(_DETAIL_URL)
 
     assert detail.external_id == "468187", "the browser HTML parses exactly like the httpx HTML"
@@ -496,11 +492,7 @@ async def test_fetch_detail_403_raises_when_browser_also_blocked() -> None:
     async def fake_pw(url: str) -> None:
         return None  # browser blocked too → keep the original 403 contract
 
-    async def no_warm() -> bool:
-        return False
-
     sc._playwright_html = fake_pw  # type: ignore[method-assign]
-    sc._warm_datadome = no_warm  # type: ignore[method-assign]
     with pytest.raises(httpx.HTTPStatusError) as ei:
         await sc.fetch_detail(_DETAIL_URL)
     assert ei.value.response.status_code == 403
@@ -598,120 +590,88 @@ async def test_fetch_detail_sends_referer(nekretnine_detail_html: str) -> None:
     assert captured["headers"].get("sec-fetch-site") == "same-origin"
 
 
-# ------------------------------------------------- D6b: datadome cookie warm-up (list + detail)
-# DataDome lets the FIRST httpx request through and 403s the rest — that is why the nightly walk
-# collected 25 of ~6018 pages. Measured on the VPS: a browser page-load yields a `datadome` cookie
-# which, injected into our httpx client, makes list pages, price bands AND details return 200 at
-# httpx speed. So the browser is paid for ONCE per run, not per page.
+# ------------------------------------------- D6b: browser fallback for LIST pages (walk coverage)
+# DataDome lets the FIRST httpx list request through and 403s the rest — that is why the nightly
+# segmented walk collected 25 of ~6018 (39 skipped pages) and ingested nothing new.
+#
+# Measured from the VPS, twice, an hour apart:
+#   httpx, no cookie        → 200 403 403 403   (page 1, ?pag=2, ?pag=3, price-band)
+#   httpx + datadome cookie → 200 403 403 403   ← the cookie is SENT and still rejected;
+#                                                 an earlier 200-200-200-200 reading did NOT
+#                                                 reproduce, so cookie-transfer was dropped.
+#   browser                 → 200 200 200 200   ← reproducible; this is what we use.
+# So a 403 list page is refetched through the same browser the detail fallback uses.
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_403_warms_datadome_then_retries() -> None:
-    state = {"warmed": False, "calls": 0}
+async def test_fetch_page_403_falls_back_to_browser() -> None:
+    calls = {"http": 0, "pw": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        state["calls"] += 1
-        if not state["warmed"]:
-            return httpx.Response(403, text="blocked")
-        return httpx.Response(200, text=_list_html([1, 2, 3]))
+        calls["http"] += 1
+        return httpx.Response(403, text="blocked")
 
     sc = _make_scraper(handler)
 
-    async def fake_warm() -> bool:
-        state["warmed"] = True
-        return True
+    async def fake_pw(url: str) -> str:
+        calls["pw"] += 1
+        return _list_html([1, 2, 3])
 
-    sc._warm_datadome = fake_warm  # type: ignore[method-assign]
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
     html = await sc._fetch_page(sc.list_url)
 
     assert html is not None and "__NEXT_DATA__" in html
-    assert state["calls"] == 2, "one blocked try → warm the cookie → one 200; no wasted attempts"
+    assert calls["http"] == 1, "403 is deterministic — one httpx try, then the browser"
+    assert calls["pw"] == 1
 
 
 @pytest.mark.asyncio
-async def test_fetch_page_403_gives_up_when_warmup_fails() -> None:
-    """Warm-up failed (no browser / still challenged) → the page is skipped exactly as before."""
+async def test_fetch_page_403_skips_when_browser_also_blocked() -> None:
+    """Browser blocked too → the page is skipped exactly as before (no crash, no false data)."""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(403)
 
     sc = _make_scraper(handler)
 
-    async def fake_warm() -> bool:
-        return False
+    async def fake_pw(url: str) -> None:
+        return None
 
-    sc._warm_datadome = fake_warm  # type: ignore[method-assign]
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
     assert await sc._fetch_page(sc.list_url) is None
 
 
 @pytest.mark.asyncio
-async def test_fetch_detail_403_warms_cookie_and_retries_before_browser(
-    nekretnine_detail_html: str,
-) -> None:
-    """The cookie alone should fix the detail — the per-page browser fetch stays a last resort."""
-    state = {"warmed": False, "pw": 0}
+async def test_fetch_page_404_never_uses_browser() -> None:
+    """404 = past the pagination cap (semantic end-of-walk), not a block — must stay free."""
+    calls = {"pw": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if not state["warmed"]:
-            return httpx.Response(403)
-        return httpx.Response(200, text=nekretnine_detail_html)
+        return httpx.Response(404)
 
     sc = _make_scraper(handler)
-
-    async def fake_warm() -> bool:
-        state["warmed"] = True
-        return True
-
-    async def fake_pw(url: str) -> None:
-        state["pw"] += 1
-        return None
-
-    sc._warm_datadome = fake_warm  # type: ignore[method-assign]
-    sc._playwright_html = fake_pw  # type: ignore[method-assign]
-    detail = await sc.fetch_detail(_DETAIL_URL)
-
-    assert detail.external_id == "468187"
-    assert state["pw"] == 0, "cookie warm-up was enough — no per-detail browser fetch"
-
-
-@pytest.mark.asyncio
-async def test_fetch_detail_uses_browser_when_cookie_not_enough(nekretnine_detail_html: str) -> None:
-    calls = {"warm": 0, "pw": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(403)  # cookie doesn't help this URL
-
-    sc = _make_scraper(handler)
-
-    async def fake_warm() -> bool:
-        calls["warm"] += 1
-        return calls["warm"] == 1  # warmed once; later calls report "already tried"
 
     async def fake_pw(url: str) -> str:
         calls["pw"] += 1
-        return nekretnine_detail_html
+        return _list_html([1])
 
-    sc._warm_datadome = fake_warm  # type: ignore[method-assign]
     sc._playwright_html = fake_pw  # type: ignore[method-assign]
-    detail = await sc.fetch_detail(_DETAIL_URL)
-
-    assert detail.external_id == "468187"
-    assert calls["pw"] == 1, "cookie failed → browser fetches that one page"
+    assert await sc._fetch_page(sc.list_url) is None
+    assert calls["pw"] == 0
 
 
 @pytest.mark.asyncio
-async def test_warm_datadome_attempts_only_once_per_run() -> None:
-    """A blocked run must not relaunch a browser on every 403 — one attempt, success or not."""
+async def test_fetch_page_200_never_uses_browser() -> None:
+    calls = {"pw": 0}
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200)
+        return httpx.Response(200, text=_list_html([1, 2]))
 
     sc = _make_scraper(handler)
-    starts = {"n": 0}
 
-    async def fake_start() -> None:
-        starts["n"] += 1
-        raise RuntimeError("no browser in unit tests")
+    async def fake_pw(url: str) -> None:
+        calls["pw"] += 1
+        return None
 
-    sc._start_browser = fake_start  # type: ignore[method-assign]
-    assert await sc._warm_datadome() is False
-    assert await sc._warm_datadome() is False
-    assert starts["n"] == 1, "browser launch attempted once per scraper run"
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
+    assert await sc._fetch_page(sc.list_url) is not None
+    assert calls["pw"] == 0
