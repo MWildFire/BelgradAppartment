@@ -100,6 +100,9 @@ class NekretnineScraper(Scraper):
         self._pw: Any = None
         self._pw_context: Any = None
         self._pw_headless = os.environ.get("NEKRETNINE_HEADLESS", "false").lower() == "true"
+        # One datadome cookie warm-up per run (success or not) — a blocked run must not relaunch a
+        # browser on every 403.
+        self._dd_warmed = False
 
     async def list_recent(
         self,
@@ -289,9 +292,13 @@ class NekretnineScraper(Scraper):
                 status = e.response.status_code
                 if status in _NON_RETRYABLE_DETAIL_STATUSES:
                     # Retrying over httpx is pure waste — but a 403 here is the DataDome block, not
-                    # a dead page, so refetch this one page through a real browser first (D6).
-                    # 404/410/401 mean the ad is genuinely gone: no browser, raise now.
+                    # a dead page. 404/410/401 mean the ad is genuinely gone: no browser, raise now.
                     if status == 403 and get_settings().nekretnine_playwright_fallback:
+                        # Cheapest first: one browser-warmed `datadome` cookie usually unblocks httpx
+                        # for the whole run, so retry this URL over httpx before paying per page.
+                        if await self._warm_datadome():
+                            continue
+                        # Cookie didn't help this URL → fetch just this page through the browser.
                         html = await self._playwright_html(url)
                         if html:
                             logger.info("[nekretnine] detail %s recovered via browser fallback", url)
@@ -353,6 +360,48 @@ class NekretnineScraper(Scraper):
             await self._pw.stop()
             self._pw = None
             raise
+
+    async def _warm_datadome(self) -> bool:
+        """Solve the DataDome challenge once with a real browser and hand its cookie to httpx.
+
+        DataDome lets the FIRST httpx request through and 403s the rest — which is why the nightly
+        segmented walk collected ~25 of ~6018 listings (39 skipped pages). Measured from the VPS:
+
+            httpx, no cookie          → 200 403 403 403   (page 1, ?pag=2, ?pag=3, price-band)
+            httpx + datadome cookie   → 200 200 200 200
+
+        So ONE browser page-load buys a cookie that unblocks the whole run — list pages, price bands
+        and details — at httpx speed. Far cheaper than driving every page through the browser.
+
+        Attempted at most once per run. Returns True only when a fresh cookie was installed, so the
+        caller may retry the request exactly once.
+        """
+        if self._dd_warmed:
+            return False
+        self._dd_warmed = True  # one attempt per run, success or not
+        try:
+            if self._pw_context is None:
+                await self._start_browser()
+            page = await self._pw_context.new_page()
+            try:
+                await page.goto(
+                    self.list_url, wait_until="domcontentloaded", timeout=self.pw_timeout_ms
+                )
+            finally:
+                await page.close()
+            cookies = {c["name"]: c["value"] for c in await self._pw_context.cookies()}
+            token = cookies.get("datadome")
+            if not token:
+                logger.warning("[nekretnine] datadome warm-up produced no cookie")
+                return False
+            self._client.cookies.set("datadome", token, domain=".nekretnine.rs")
+            logger.info("[nekretnine] datadome cookie warmed — httpx unblocked for this run")
+            return True
+        except Exception as e:  # noqa: BLE001 — warm-up is best-effort; caller degrades gracefully
+            logger.warning(
+                "[nekretnine] datadome warm-up failed: %s: %s", type(e).__name__, e
+            )
+            return False
 
     async def _playwright_html(self, url: str) -> str | None:
         """Refetch one detail page through a real browser. Returns HTML, or None if that failed too.
@@ -418,6 +467,13 @@ class NekretnineScraper(Scraper):
                     url, attempt + 1, self.fetch_attempts, type(e).__name__,
                     f" (HTTP {status})" if status else "",
                 )
+                # 403 = DataDome, which 403s every httpx request after the first. One browser-warmed
+                # `datadome` cookie unblocks the whole walk, so buy it here and retry immediately —
+                # without it the segmented walk skips most pages (25 of ~6018 on 15.07).
+                if status == 403 and get_settings().nekretnine_playwright_fallback and (
+                    await self._warm_datadome()
+                ):
+                    continue
                 if attempt + 1 < self.fetch_attempts and self.retry_backoff_sec > 0:
                     backoff = self.retry_backoff_sec * (attempt + 1)
                     if status == 429:
