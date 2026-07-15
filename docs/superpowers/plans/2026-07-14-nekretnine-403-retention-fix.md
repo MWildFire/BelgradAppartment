@@ -170,7 +170,18 @@
   ruff 0.15.21 — в BACKLOG #22).
 - [x] **Merge ff в `main` + `git push origin main` + снос worktree — ВЫПОЛНЕНО (14.07, по go Дмитрия).**
   `main` @ **`beb2242`** = `origin/main`; ветка `fix/liveness-and-403` и worktree удалены; alembic head 0011.
-  Осталось (🧑): Wave 6 деплой + Wave 2 B3/B4 (обход DataDome, D6 — BACKLOG #21) ДО триажа 42 карточек.
+
+> ✅ **D6 + Wave 6 ВЫПОЛНЕНЫ 15.07** (решение делегировано Дмитрием: «доделай, реши сам»).
+> **D6 (коммит `6c38801`) — Playwright+stealth-фоллбэк для detail nekretnine, НОЛЬ новых зависимостей:**
+> curl_cffi/резидентный прокси не понадобились — playwright уже был в deps, тем же приёмом halooglasi бьёт
+> Cloudflare, а юниты уже идут под `xvfb-run -a`. Проверено с VPS до реализации: DETAIL 200, `__NEXT_DATA__` ok.
+> **Исправление B2:** блок ЧАСТИЧНЫЙ — 403 только на DETAIL, LIST у httpx = 200. Вывод 14.07 «лист тоже
+> заблокирован» был **артефактом curl** (его TLS-отпечаток хуже httpx). Не диагностировать это curl'ом.
+> **Wave 6 деплой:** бэкап (1.4G, integrity ok) → rsync → `alembic upgrade head` = 0011 (146 карточек уцелели)
+> → рестарт site/admin/monitor. **Smoke: 4/4 OK, `NEKRETNINE previews=25 detail_ok=True`, exit 0** — алерты
+> каждые 6ч прекращены. **Триаж (dry-run):** 130 карточек → живы 88, подтв. мертва **1**, неподтв. 41, снято 0.
+> Возрастной нотис требовал снять 42 — реально мертва одна. AUTO_HIDE осознанно оставлен 0 (D1, 41 inconclusive).
+> Открыто: BACKLOG #23 (покрытие list-walk 25/6018 — D6 чинит детали, не глубину обхода).
 
 ### Wave 6 — 🧑 деплой + разовый триаж 42 (совместно, по go)
 
