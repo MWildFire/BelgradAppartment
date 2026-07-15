@@ -28,7 +28,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+from contextlib import suppress
 from typing import Any, ClassVar
 from urllib.parse import urljoin
 
@@ -36,7 +38,7 @@ import httpx
 
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.base import DEFAULT_USER_AGENT, ListingDetail, ListingPreview, Scraper
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,7 @@ class NekretnineScraper(Scraper):
     retry_backoff_sec: ClassVar[float] = 2.0  # sleep between per-page retries
     page_delay_sec: ClassVar[float] = 0.4  # pacing between pages on a long walk (avoids 429s)
     max_consecutive_failures: ClassVar[int] = 3  # abort the walk after this many in a row
+    pw_timeout_ms: ClassVar[int] = 60000  # per-page cap on the D6 browser fallback
 
     # The site hard-caps every search at 80 pages × 25 = 2000 results (page 81+ returns HTTP 404)
     # even when totalAds is ~7700. A single unfiltered walk therefore covers only ~25% of the
@@ -91,6 +94,12 @@ class NekretnineScraper(Scraper):
         # coverage (previewed/site_total) and alert when we collect far less than what exists.
         self._site_total: int | None = None
         self._last_status: int | None = None  # HTTP status of the most recent _fetch_page
+        # D6 Playwright fallback — started lazily on the FIRST DataDome 403 and reused for the rest
+        # of the run (a browser per detail would cost seconds each); aclose() stops it. Headed by
+        # default (anti-bot denies headless-shell); prod units already run under `xvfb-run -a`.
+        self._pw: Any = None
+        self._pw_context: Any = None
+        self._pw_headless = os.environ.get("NEKRETNINE_HEADLESS", "false").lower() == "true"
 
     async def list_recent(
         self,
@@ -279,7 +288,15 @@ class NekretnineScraper(Scraper):
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code
                 if status in _NON_RETRYABLE_DETAIL_STATUSES:
-                    raise  # deterministic for this URL — retrying is pure waste
+                    # Retrying over httpx is pure waste — but a 403 here is the DataDome block, not
+                    # a dead page, so refetch this one page through a real browser first (D6).
+                    # 404/410/401 mean the ad is genuinely gone: no browser, raise now.
+                    if status == 403 and get_settings().nekretnine_playwright_fallback:
+                        html = await self._playwright_html(url)
+                        if html:
+                            logger.info("[nekretnine] detail %s recovered via browser fallback", url)
+                            return self.parse_detail(url, html)
+                    raise
                 last_exc = e
             except httpx.RequestError as e:  # transport: timeout / connect / read — retryable
                 last_exc = e
@@ -295,6 +312,88 @@ class NekretnineScraper(Scraper):
                 await asyncio.sleep(backoff)
         assert last_exc is not None  # loop only exits early via return or raise
         raise last_exc
+
+    async def _start_browser(self) -> None:
+        """Launch the stealth Chromium used by the DataDome fallback (mirrors halooglasi's setup).
+
+        Headed by default: an anti-bot layer routinely denies the headless-shell binary. The prod
+        units already wrap the CLI in `xvfb-run -a`, which is what makes headed work on the VPS.
+        Persistent profile → the `datadome` cookie survives across runs, so later pages sail through.
+        """
+        from playwright.async_api import async_playwright
+        from playwright_stealth import Stealth
+
+        settings = get_settings()
+        ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
+        user_data_dir = settings.data_dir / "playwright" / "nekretnine"
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+
+        self._pw = await async_playwright().start()
+        try:
+            stealth = Stealth(
+                navigator_user_agent_override=ua,
+                navigator_languages_override=("sr-RS", "sr", "en-US", "en"),
+                init_scripts_only=False,
+            )
+            stealth.hook_playwright_context(self._pw)
+            self._pw_context = await self._pw.chromium.launch_persistent_context(
+                user_data_dir=str(user_data_dir),
+                headless=self._pw_headless,
+                user_agent=ua,
+                viewport={"width": 1366, "height": 900},
+                locale="sr-RS",
+                timezone_id="Europe/Belgrade",
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-features=IsolateOrigins,site-per-process",
+                ],
+            )
+        except BaseException:
+            # A failed launch must not leak the playwright driver process.
+            await self._pw.stop()
+            self._pw = None
+            raise
+
+    async def _playwright_html(self, url: str) -> str | None:
+        """Refetch one detail page through a real browser. Returns HTML, or None if that failed too.
+
+        This is the D6 escalation for DataDome: httpx is 403'd on detail pages by TLS/JS
+        fingerprint, but a stealth-patched headed Chromium gets 200 with the same `__NEXT_DATA__`
+        blob, so `parse_detail` is reused verbatim. Best-effort by contract — any failure returns
+        None and the caller re-raises the original 403 (never a false "listing is gone").
+        """
+        try:
+            if self._pw_context is None:
+                await self._start_browser()
+            page = await self._pw_context.new_page()
+            try:
+                resp = await page.goto(url, wait_until="domcontentloaded", timeout=self.pw_timeout_ms)
+                if resp is not None and resp.status >= 400:
+                    logger.warning(
+                        "[nekretnine] playwright fallback %s → HTTP %s (still blocked)",
+                        url, resp.status,
+                    )
+                    return None
+                return await page.content()
+            finally:
+                await page.close()
+        except Exception as e:  # noqa: BLE001 — fallback is best-effort; caller re-raises the 403
+            logger.warning(
+                "[nekretnine] playwright fallback failed for %s: %s: %s", url, type(e).__name__, e
+            )
+            return None
+
+    async def aclose(self) -> None:
+        """Close the httpx client (base) AND the fallback browser, if one was ever started."""
+        await super().aclose()
+        if self._pw_context is not None:
+            with suppress(Exception):
+                await self._pw_context.close()
+            self._pw_context = None
+        if self._pw is not None:
+            with suppress(Exception):
+                await self._pw.stop()
+            self._pw = None
 
     async def _fetch_page(self, url: str) -> str | None:
         """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed.

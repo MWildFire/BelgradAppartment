@@ -36,11 +36,20 @@
 **Новые env-ключи (в `.env.example`):** `SITE_LIVENESS_ENABLED=1`, `SITE_LIVENESS_AUTO_HIDE=0` (warn-first, D1),
 `SITE_LIVENESS_MAX_HIDES=10` (D3), `NIGHTLY_DUPES_WRITE=1` (D2).
 
-**⚠️ Диагноз 403 (Wave 2 B2, curl-матрица с VPS 14.07): это DataDome, НЕ простой фингерпринт.** И detail, и
-**LIST** отдают 403 даже с полными браузерными заголовками; сигнатура `x-datadome: protected` + JS-челлендж.
-**T1-4 необходим, но недостаточен** — нужна **эскалация D6** (curl_cffi / Playwright-фоллбэк для nekretnine
-и/или резидентный EU-прокси; новая зависимость → решение Дмитрия). Деплой этого этапа nekretnine НЕ починит,
-но liveness это переживает штатно (HEAD 403 = INCONCLUSIVE = KEEP — карточки не снимаются ошибочно). BACKLOG #21.
+**Диагноз 403 (Wave 2) и его фикс (D6) — 15.07.** Это **DataDome** (не Cloudflare): 403-тело = JS-челлендж
+«Please enable JS…», заголовки `x-datadome: protected`, `x-dd-b: 1`, `datadome=`-cookie. Ключит по TLS/JA3 +
+JS, поэтому **браузерные заголовки (T1-4) необходимы, но недостаточны**.
+**Блок ЧАСТИЧНЫЙ: 403 только на DETAIL — LIST отдаёт httpx 200** (видно в каждом прогоне smoke).
+> ⚠️ **Не диагностировать это curl'ом:** curl с VPS получает 403 и на листе — это артефакт curl (его
+> TLS-отпечаток хуже httpx). 14.07 из-за этого был сделан неверный вывод «лист тоже заблокирован».
+> Источник правды — `/var/log/otz/scrape-smoke.log` (что реально получает httpx).
+
+**Фикс (D6, ноль новых зависимостей):** Playwright+stealth-фоллбэк в `NekretnineScraper.fetch_detail` — на 403
+одна страница перезапрашивается headed stealth-Chromium'ом (проверено с VPS: DETAIL **200**, `__NEXT_DATA__` на
+месте). Тот же приём `launch_persistent_context` + `Stealth(...)`, которым halooglasi бьёт Cloudflare. Headed
+работает, т.к. юниты smoke/nightly уже идут под `xvfb-run -a`. Браузер стартует лениво на первом 403 и
+переиспользуется; профиль `data/playwright/nekretnine` хранит `datadome`-cookie. Только 403 зовёт браузер —
+404/410 = объявление реально исчезло. Ключи: `NEKRETNINE_PLAYWRIGHT_FALLBACK=1`, `NEKRETNINE_HEADLESS=false`.
 
 **Как включить auto-hide на проде (после ~недели чистых нотисов, D1):** `SITE_LIVENESS_AUTO_HIDE=1` в
 `/opt/otz/.env` → рестарт. До этого — warn-first: нотис перечисляет подтверждённо-мёртвые кандидаты, снимает

@@ -125,6 +125,11 @@ class Settings(BaseSettings):
     # 301-redirects here AND drops query params, which breaks ?pag=N pagination — so the
     # canonical URL must be configured directly.
     nekretnine_list_url: str = "https://www.nekretnine.rs/izdavanje-stanova/beograd/"
+    # D6 — nekretnine sits behind DataDome, which 403s httpx on DETAIL pages (TLS/JS fingerprint)
+    # while the list still passes. On a 403 we refetch that page through a real browser (Playwright
+    # + stealth, exactly what halooglasi already does against Cloudflare — no new dependency).
+    # NEKRETNINE_PLAYWRIGHT_FALLBACK=0 → skip the browser and let the 403 raise (pre-D6 behaviour).
+    nekretnine_playwright_fallback: bool = True
     cetiri_zida_list_url: str = "https://www.4zida.rs/izdavanje-stanova/beograd"
     halooglasi_list_url: str = "https://www.halooglasi.com/nekretnine/izdavanje-stanova/beograd"
     # E1 — cityexpert.rs JSON API. list_url is the public browsable rentals page (used as a

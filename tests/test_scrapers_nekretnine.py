@@ -427,6 +427,10 @@ async def test_fetch_detail_raises_after_exhausting_retries_on_5xx() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_detail_403_raises_immediately_without_retry(monkeypatch) -> None:
+    from src.config import get_settings
+
+    # This test is about the httpx retry policy, not the D6 browser fallback — switch it off.
+    monkeypatch.setattr(get_settings(), "nekretnine_playwright_fallback", False)
     calls = {"n": 0}
     slept: list[float] = []
 
@@ -444,8 +448,115 @@ async def test_fetch_detail_403_raises_immediately_without_retry(monkeypatch) ->
     with pytest.raises(httpx.HTTPStatusError) as ei:
         await sc.fetch_detail(_DETAIL_URL)
     assert ei.value.response.status_code == 403
-    assert calls["n"] == 1, "403 is deterministic — must not be retried"
+    assert calls["n"] == 1, "403 is deterministic — must not be retried over httpx"
     assert slept == [], "no backoff sleep on an immediate 403 raise"
+
+
+# ------------------------------------------------- D6: Playwright fallback for the DataDome 403
+# nekretnine is behind DataDome: httpx gets 403 on DETAIL pages (TLS/JS fingerprint) while the LIST
+# still returns 200. A real browser (Playwright + stealth — already a dependency, same trick
+# halooglasi uses against Cloudflare) gets 200, so a 403 refetches that one page through it.
+# The browser is mocked here; the launch path is exercised on the VPS, not in unit tests.
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_403_falls_back_to_playwright(nekretnine_detail_html: str) -> None:
+    calls = {"n": 0}
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(403, text="Forbidden")
+
+    sc = _make_scraper(handler)
+
+    async def fake_pw(url: str) -> str:
+        seen["url"] = url
+        return nekretnine_detail_html
+
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
+    detail = await sc.fetch_detail(_DETAIL_URL)
+
+    assert detail.external_id == "468187", "the browser HTML parses exactly like the httpx HTML"
+    assert seen["url"] == _DETAIL_URL
+    assert calls["n"] == 1, "one httpx try, then straight to the browser — no httpx retry on 403"
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_403_raises_when_browser_also_blocked() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403)
+
+    sc = _make_scraper(handler)
+
+    async def fake_pw(url: str) -> None:
+        return None  # browser blocked too → keep the original 403 contract
+
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
+    with pytest.raises(httpx.HTTPStatusError) as ei:
+        await sc.fetch_detail(_DETAIL_URL)
+    assert ei.value.response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_403_skips_browser_when_disabled(monkeypatch) -> None:
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "nekretnine_playwright_fallback", False)
+    calls = {"pw": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403)
+
+    sc = _make_scraper(handler)
+
+    async def fake_pw(url: str) -> str:
+        calls["pw"] += 1
+        return "<html/>"
+
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
+    with pytest.raises(httpx.HTTPStatusError):
+        await sc.fetch_detail(_DETAIL_URL)
+    assert calls["pw"] == 0, "kill switch → never start a browser"
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_404_does_not_use_browser() -> None:
+    """404 = the ad is genuinely gone; only a 403 (the DataDome block) is worth a browser."""
+    calls = {"pw": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    sc = _make_scraper(handler)
+
+    async def fake_pw(url: str) -> str:
+        calls["pw"] += 1
+        return "<html/>"
+
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
+    with pytest.raises(httpx.HTTPStatusError):
+        await sc.fetch_detail(_DETAIL_URL)
+    assert calls["pw"] == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_detail_200_never_starts_browser(nekretnine_detail_html: str) -> None:
+    """The happy path must never pay the browser cost (seconds per page)."""
+    calls = {"pw": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=nekretnine_detail_html)
+
+    sc = _make_scraper(handler)
+
+    async def fake_pw(url: str) -> None:
+        calls["pw"] += 1
+        return None
+
+    sc._playwright_html = fake_pw  # type: ignore[method-assign]
+    await sc.fetch_detail(_DETAIL_URL)
+    assert calls["pw"] == 0
 
 
 @pytest.mark.asyncio
