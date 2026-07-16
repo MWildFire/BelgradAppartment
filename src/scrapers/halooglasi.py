@@ -38,6 +38,36 @@ USER_AGENT = (
 _LIST_VAR = "QuidditaEnvironment.serverListData"
 _DETAIL_VAR = "QuidditaEnvironment.CurrentClassified"
 
+# Cloudflare interstitial fingerprints. 'Sačekajte trenutak' is the Serbian 'Just a moment' — the
+# context runs at locale sr-RS, so that is the title the site actually serves us; matching only the
+# English string would misread every real challenge as a soft error page.
+_CHALLENGE_MARKERS = (
+    "Just a moment",
+    "Sačekajte trenutak",
+    "challenge-platform",
+    "cf-turnstile-response",
+)
+
+# One navigation's worth of polling (~15s), then reload. Worst case 5 navigations ~= 75s + loads,
+# which is under the old doomed budget of 3 attempts at ~43s each. Once clearance lands it is
+# reused by every later page in the context — measured: subsequent details return 200 in ~2s.
+_MARKER_POLL_STEPS = 25
+_MARKER_POLL_STEP_MS = 600
+_CHALLENGE_MAX_RELOADS = 4
+
+
+def _is_challenge(html: str) -> bool:
+    """True if `html` is a Cloudflare interstitial rather than a real (if unparseable) page."""
+    return any(marker in html for marker in _CHALLENGE_MARKERS)
+
+
+class _MarkerMissing(RuntimeError):
+    """Page loaded but carries no data marker: challenge outlasted the reloads, or a soft error.
+
+    Distinct from a browser fault because the retry policy differs — see `fetch_detail`.
+    """
+
+
 ROOMS_BY_TEXT = {
     "garsonjera": 1.0,
     "jednosoban": 1.0,
@@ -243,8 +273,6 @@ class HalooglasiScraper(Scraper):
     async def fetch_detail(self, url: str) -> ListingDetail:
         if self._context is None:
             raise RuntimeError("HalooglasiScraper must be used as async context manager")
-        # Same retry+recycle pattern as list pages — Chromium ERR_NETWORK_IO_SUSPENDED
-        # can hit a single detail page and then propagate to the rest if we don't restart.
         last_error: Exception | None = None
         for attempt in range(3):
             try:
@@ -253,12 +281,25 @@ class HalooglasiScraper(Scraper):
                     # Challenge/soft-error page: parse_detail would "succeed" with an all-None
                     # shell that gets inserted and frozen forever (existing rows are never
                     # detail-refreshed) — fail instead so the retry/error path handles it.
-                    raise RuntimeError("detail data marker missing (challenge or soft error page)")
+                    raise _MarkerMissing(
+                        "detail data marker missing (challenge or soft error page)"
+                    )
                 return self.parse_detail(url, html)
+            except _MarkerMissing as e:
+                # Deliberately NO _recycle_browser() here. A challenged attempt leaves the
+                # profile holding the cf_clearance Cloudflare just granted, and the next navigation
+                # is what redeems it. Recycling discarded that every time, so every attempt started
+                # cold and detail failed 9/9 in prod on 16.07 — while the list walk, which never
+                # recycles, recovered on its 3rd attempt in the very same runs.
+                last_error = e
+                logger.warning("[halooglasi] detail %s attempt %d: %s", url, attempt + 1, e)
+                await asyncio.sleep(3.0)
             except Exception as e:
+                # A real Chromium fault (ERR_NETWORK_IO_SUSPENDED &c) can hit one detail page and
+                # then propagate to the rest if we don't restart the browser.
                 last_error = e
                 logger.warning(
-                    "[halooglasi] detail %s attempt %d failed: %s",
+                    "[halooglasi] detail %s attempt %d failed: %s — recycling browser",
                     url, attempt + 1, type(e).__name__,
                 )
                 await self._recycle_browser()
@@ -270,33 +311,68 @@ class HalooglasiScraper(Scraper):
     # ---- Browser helpers ----
 
     async def _fetch_with_browser(self, url: str, *, ready_marker: str) -> str:
-        """Open `url`, wait until `ready_marker` appears in the page HTML, return content.
+        """Open `url`, soak-and-reload until `ready_marker` shows up in the HTML, return content.
 
         Why content-polling instead of `wait_for_function`: halooglasi defines
         `QuidditaEnvironment.serverListData = {...}` with a bare `var` at the top of an inline
         script. JS `typeof` of a `var` in a different evaluate context isn't reliable across
-        engines; HTML substring check is. Also: Cloudflare-challenge pages don't contain the
-        marker, so the same wait elegantly handles "challenge still in progress".
+        engines; HTML substring check is.
+
+        Why RELOAD rather than only poll: Cloudflare grants clearance while the browser sits
+        on the interstitial, but the interstitial never navigates to the real page by itself — only
+        a fresh navigation cashes that clearance in. Measured on the VPS 16.07, fresh profile:
+
+            goto detail, poll 150s, no reload → 403, still 'Sacekajte trenutak' (never resolves)
+            goto detail, soak 45s, reload     → 403, still the challenge
+                          ...reload again     → 200, CurrentClassified present
+
+        Polling alone therefore watches a static interstitial until it times out — which is exactly
+        what the detail path did. (The list walk accidentally sidestepped this: its retry loop
+        re-`goto`s in the same context, so its 3rd attempt *is* the reload. That is why the list
+        needed 2 doomed attempts on every single run.)
         """
         assert self._context is not None
         page = await self._context.new_page()
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            # Poll page content for the marker — up to 30s total, ~600ms steps.
             html = ""
-            for _ in range(50):
-                html = await page.content()
+            for nav in range(_CHALLENGE_MAX_RELOADS + 1):
+                html = await self._poll_for_marker(page, ready_marker)
                 if ready_marker in html:
-                    break
-                if "Just a moment" in html or "challenge-platform" in html and ready_marker not in html:
-                    # CF challenge still loading; give it more time.
-                    await page.wait_for_timeout(800)
-                    continue
-                await page.wait_for_timeout(600)
-            if ready_marker not in html:
-                logger.warning("[halooglasi] %s marker '%s' not found after wait", url, ready_marker)
+                    return html
+                if not _is_challenge(html):
+                    # A real page that simply lacks the marker (removed ad, soft error): reloading
+                    # it only burns a minute per attempt. Hand it back; the caller decides.
+                    logger.warning(
+                        "[halooglasi] %s marker '%s' missing on a non-challenge page",
+                        url, ready_marker,
+                    )
+                    return html
+                if nav < _CHALLENGE_MAX_RELOADS:
+                    logger.info(
+                        "[halooglasi] %s challenge held after soak — reload %d/%d",
+                        url, nav + 1, _CHALLENGE_MAX_RELOADS,
+                    )
+                    await page.reload(wait_until="domcontentloaded", timeout=60000)
+            logger.warning(
+                "[halooglasi] %s still challenged after %d reloads", url, _CHALLENGE_MAX_RELOADS
+            )
+            return html
         finally:
             await page.close()
+
+    async def _poll_for_marker(self, page: Any, ready_marker: str) -> str:
+        """Poll one navigation's content for `ready_marker`; return the last HTML seen.
+
+        Doubles as the challenge soak: Cloudflare needs these seconds of JS to grant clearance,
+        which the *next* navigation redeems.
+        """
+        html = ""
+        for _ in range(_MARKER_POLL_STEPS):
+            html = await page.content()
+            if ready_marker in html:
+                return html
+            await page.wait_for_timeout(_MARKER_POLL_STEP_MS)
         return html
 
     # ---- Pure parsers ----
