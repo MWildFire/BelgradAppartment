@@ -210,6 +210,9 @@ section.bay{padding-block:var(--bay)}
 
 /* ───────── trust / split ───────── */
 .split{display:grid;grid-template-columns:1fr 1fr;gap:var(--gutter);align-items:center}
+.split.solo{grid-template-columns:1fr}
+.split.solo h2{max-width:24ch}
+.split.solo p{max-width:60ch}
 .split .photo{aspect-ratio:5/4;border:1px solid var(--ink);border-radius:var(--r-m);background:linear-gradient(160deg,#6f4a3c,#caa07f);position:relative;overflow:hidden}
 .split .photo .ph-note{position:absolute;top:14px;left:14px;font-family:var(--mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.78);border:1px solid rgba(255,255,255,.4);padding:3px 8px;border-radius:999px}
 .split h2{font-size:var(--step-3);max-width:14ch}
