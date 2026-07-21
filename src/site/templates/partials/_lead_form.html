@@ -6,7 +6,7 @@
       hx-disabled-elt="find button[type='submit']">
   <p class="kicker">персональный поиск</p>
   <h2>Расскажи, какую квартиру ищешь</h2>
-  <p class="lede">Район, бюджет, нужен ли договор под ВНЖ — пара полей, и Дарья соберёт подборку под тебя.</p>
+  <p class="lede">Локация, бюджет, вид отопления — пара полей, и наш специалист соберёт подборку под тебя.</p>
 
   {# CSRF — synchronizer token, same field name as admin #}
   <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">
@@ -60,7 +60,7 @@
     </div>
     <div class="field span-2">
       <label for="lead-message">Что важно (необязательно)</label>
-      <textarea id="lead-message" name="message" maxlength="2000" placeholder="Сроки, лифт, питомцы, нужен договор под боравиште…"></textarea>
+      <textarea id="lead-message" name="message" maxlength="2000" placeholder="Сроки, лифт, питомцы…"></textarea>
     </div>
     <div class="field span-2">
       <button type="submit" class="btn ox">Отправить заявку</button>
