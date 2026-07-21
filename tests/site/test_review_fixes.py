@@ -3,7 +3,7 @@
 Covers the behavioral changes made in response to the review:
 - readmodel.public_ids (sitemap id-only query) + similar() honoring C1 (no rented).
 - Template/a11y hooks: HTMX in-flight feedback + double-submit guard, results live region,
-  required-field markers, calculator label/aria-live, nav active-state, map-pin contrast fix,
+  required-field markers, nav active-state, map-pin contrast fix,
   color-scheme, and the moved-out favorites styles.
 """
 
@@ -113,13 +113,6 @@ def test_filters_form_drives_results_indicator() -> None:
                  "price_max": None, "rooms": [], "sort": "new", "show_rented": False},
     )
     assert 'hx-indicator="#results"' in html
-
-
-def test_calculator_uses_real_labels_and_live_total() -> None:
-    html = _render("calculator.html", csrf_token="x")
-    assert '<label class="lbl" for="calc-rent">' in html  # UX-6: real label, not span+aria-label
-    assert 'aria-label="Аренда в евро"' not in html  # paraphrasing aria-label removed
-    assert 'data-calc-total' in html and 'aria-live="polite"' in html
 
 
 def test_map_price_pins_use_dark_text_on_light_buckets() -> None:

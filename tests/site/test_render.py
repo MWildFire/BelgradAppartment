@@ -482,13 +482,6 @@ def test_map_renders_container() -> None:
     assert "id=\"map\"" in html or 'id="map"' in html
 
 
-# --------------------------------------------------------------------- calculator
-def test_calculator_renders_shell() -> None:
-    html = _render("calculator.html")
-    assert html.strip()
-    assert "€" in html  # static shell shows currency
-
-
 # ----------------------------------------------------------- F2 district dropdown
 # Curated Cyrillic display superset (a subset of data/districts.yaml's Cyrillic keys),
 # alphabetically sorted — mirrors what app.py registers as the `district_options` global.

@@ -121,7 +121,7 @@ def test_offline_route_renders_shell(client):
 
 def test_base_html_has_pwa_head_and_register(client):
     """A real page carries the manifest link, iOS meta, SW-register script + bottom-nav."""
-    body = client.get("/calculator").text  # a static page that extends base.html
+    body = client.get("/how").text  # a static page that extends base.html
     assert 'rel="manifest"' in body
     assert "/static/manifest.webmanifest" in body
     assert 'name="apple-mobile-web-app-capable"' in body
@@ -132,4 +132,4 @@ def test_base_html_has_pwa_head_and_register(client):
     assert 'class="bottom-nav"' in body
     assert 'href="/catalog"' in body
     assert 'href="/map"' in body
-    assert 'href="/calculator"' in body
+    assert 'href="/#lead"' in body

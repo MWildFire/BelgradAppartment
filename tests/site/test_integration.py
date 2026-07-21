@@ -287,11 +287,10 @@ def test_map_json_only_public_with_coords(client):
 # ============================================================ GET /calculator + /healthz
 
 
-def test_calculator_renders(client):
-    r = client.get("/calculator")
-    assert r.status_code == 200
-    assert "<!DOCTYPE html>" in r.text
-    assert "€" in r.text
+def test_calculator_redirects_to_lead(client):
+    r = client.get("/calculator", follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == "/#lead"
 
 
 def test_healthz_ok(client):

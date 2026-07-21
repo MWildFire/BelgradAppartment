@@ -1,7 +1,6 @@
 """Wave 4 island wiring — render-smoke for the EXTRAS islands (agent F).
 
-Three client-side islands plus their template hooks:
-- W4-F1 calculator: /calculator inputs + [data-calc*] hooks + calculator.js <script>.
+Two client-side islands plus their template hooks:
 - W4-F2 favorites: a localStorage save control on every card + apt detail (data-fav-id),
   a counter badge in the nav, and favorites.js loaded site-wide.
 - W4-F3 lead form: honeypot name="company" + csrf_token field + lead.js wiring, with the
@@ -60,36 +59,6 @@ def _render(name: str, **ctx: object) -> str:
 
 _STATS = {"active": 47, "districts": 8}
 _CSRF = "test-csrf-token"
-
-
-# =====================================================================================
-# W4-F1 · calculator
-# =====================================================================================
-def test_calculator_has_fields_and_script() -> None:
-    html = _render("calculator.html")
-    # the live-recompute hooks the JS island binds to
-    assert "data-calc" in html
-    assert 'data-calc-field="rent"' in html
-    assert 'data-calc-field="rezije"' in html      # режие
-    assert 'data-calc-field="infostan"' in html    # инфостан
-    assert "data-calc-total" in html
-    assert "data-calc-deposit" in html             # депозит
-    assert "data-calc-upfront" in html
-    # Serbian-context labels are surfaced
-    assert "Режие" in html or "режие" in html.lower()
-    assert "нфостан" in html  # Инфостан / инфостан
-    # MONO output for the totals
-    assert "mono" in html
-    # the island script is loaded on this page
-    assert "/static/js/calculator.js" in html
-
-
-def test_calculator_script_is_pure_client_no_network() -> None:
-    """Calculator must never hit the network (DATA_CONTRACT: pure client расчёт)."""
-    src = (STATIC_JS / "calculator.js").read_text(encoding="utf-8")
-    assert "fetch(" not in src
-    assert "XMLHttpRequest" not in src
-    assert "hx-" not in src
 
 
 # =====================================================================================
@@ -181,7 +150,6 @@ def test_lead_script_no_alert_inline_validation() -> None:
 @pytest.mark.parametrize(
     ("template", "ctx"),
     [
-        ("calculator.html", {}),
         ("index.html", {"featured": [FakeView()], "stats": _STATS, "csrf_token": _CSRF}),
         ("apt.html", {"item": FakeView(), "similar": [FakeView(id=200)], "csrf_token": _CSRF}),
     ],

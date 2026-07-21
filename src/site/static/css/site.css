@@ -1,7 +1,7 @@
 /* ============================================================
    RentBelgrad — Component CSS  ("Belgrade Editorial")
    Ported 1-to-1 from design/index.html inline <style> + the
-   catalog/apt/map/calculator screens. Tokens live in tokens.css.
+   catalog/apt/map screens. Tokens live in tokens.css.
    Anti-slop: sharp 3–6px radii, warm --paper bg, mono data,
    no purple gradients / glassmorphism slop / Inter.
    ============================================================ */
@@ -146,7 +146,7 @@
 /* ───────── section frame ───────── */
 section.bay{padding-block:var(--bay)}
 .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--gutter);margin-bottom:2.4rem}
-/* W5-27: титулы страниц (catalog/map/calculator/how/vnj/unsubscribe) подняты до семантического
+/* W5-27: титулы страниц (catalog/map/how/vnj/unsubscribe) подняты до семантического
    h1, но визуально остаются прежним section-заголовком — один стиль на оба уровня. */
 .sec-head h1,.sec-head h2{font-size:var(--step-3)}
 .sec-head .idx{font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2)}
@@ -400,17 +400,6 @@ section.bay{padding-block:var(--bay)}
 .map-shell{border:1px solid var(--ink);border-radius:var(--r-m);overflow:hidden;background:var(--paper-2)}
 #map{width:100%;height:min(70vh,640px);background:var(--paper-3)}
 .map-empty{display:grid;place-items:center;height:100%;font-family:var(--mono);font-size:var(--step--1);color:var(--ink-2);text-align:center;padding:2rem}
-
-/* ───────── calculator ───────── */
-.calc{max-width:560px}
-.calc .calc-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid var(--hairline)}
-.calc .calc-row .lbl{color:var(--ink-2);font-size:var(--step-0)}
-.calc .calc-row .val{font-family:var(--mono);font-weight:500;font-size:var(--step-0)}
-.calc .calc-row input{width:120px;text-align:right;font-family:var(--mono);font-size:var(--step-0);border:1.5px solid var(--hairline);border-radius:var(--r-s);padding:8px 10px;background:var(--paper);color:var(--ink)}
-.calc-total{background:var(--navy);color:var(--paper);border-radius:var(--r-m);padding:20px;margin-top:18px;text-align:center}
-.calc-total .big{font-family:var(--display);font-weight:700;font-size:var(--step-3);display:block;letter-spacing:-0.03em}
-.calc-total small{font-family:var(--mono);font-size:var(--step--1);opacity:.75}
-.calc-note{border:1.5px dashed var(--oxblood);border-radius:var(--r-m);padding:14px 16px;margin-top:16px;font-size:var(--step--1);color:var(--ink-2);background:color-mix(in srgb,var(--oxblood) 7%,var(--card))}
 
 /* ───────── footer ───────── */
 footer{border-top:1px solid var(--ink);margin-top:var(--bay)}

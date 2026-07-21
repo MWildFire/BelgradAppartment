@@ -42,7 +42,6 @@ _STUBS = {
     ),
     "apt.html": "TPL:apt id={{ item.id }} similar={{ similar|length }}",
     "map.html": "TPL:map",
-    "calculator.html": "TPL:calculator",
     "vnj.html": "TPL:vnj договор checklist tg={{ telegram_url }}",
     "how.html": "TPL:how 50% при заселении tg={{ telegram_url }}",
     "partials/_results.html": "TPL:_results items={{ items|length }} total={{ total }}",
@@ -305,10 +304,11 @@ def test_map_json_only_public_with_coords(client):
         assert p["url"] == f"/apt/{p['id']}"
 
 
-def test_calculator_page(client):
-    r = client.get("/calculator")
-    assert r.status_code == 200
-    assert "TPL:calculator" in r.text
+def test_calculator_redirects_to_lead(client):
+    # Правка Даши №2: страницы калькулятора больше нет — 301 на лид-форму.
+    r = client.get("/calculator", follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == "/#lead"
 
 
 def test_vnj_page_renders_vnj_template(client):
@@ -618,7 +618,7 @@ def test_sitemap_xml_is_valid_and_lists_static_and_public(client):
     assert all(loc.startswith(base) for loc in locs)
 
     # static pages are present (absolute)
-    for path in ("/", "/catalog", "/map", "/calculator", "/vnj", "/how"):
+    for path in ("/", "/catalog", "/map", "/vnj", "/how"):
         assert f"{base}{path}" in locs
 
     # all public listings appear; the private one (id=4) does NOT

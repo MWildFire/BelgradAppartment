@@ -191,7 +191,7 @@ def _submit_event_request(request: Request, attribution: dict[str, str | None]) 
 def _static_page(request: Request, template: str) -> Response:
     """C3: render a genuinely-static content page WITH an ETag + conditional 304 short-circuit.
 
-    Only the static content pages (/vnj, /how, /calculator) route through here — their bodies
+    Only the static content pages (/vnj, /how) route through here — their bodies
     don't depend on DB state or query params, so a content-derived ETag is safe. The ETag is a
     weak validator over the rendered bytes (changes iff the rendered HTML changes — a template
     edit or an asset-version bump that alters /static URLs both move it). When the client sends
@@ -555,24 +555,14 @@ async def map_json(db_url: str = Depends(catalog_db_url)) -> JSONResponse:
     return JSONResponse({"points": points})
 
 
-@router.get("/calculator", response_class=HTMLResponse)
-async def calculator(
-    request: Request,
-    background_tasks: BackgroundTasks,
-    db_url: str = Depends(catalog_db_url),  # T2-2: только для писателя аналитики
-) -> Response:
-    # C3: static content page — served with an ETag + conditional 304.
-    resp = _static_page(request, "calculator.html")
-    # T2-2: pageview только на полный 200-рендер; условный 304 (не-2xx) — скип по контракту §A.3.
-    if resp.status_code == status.HTTP_200_OK:
-        background_tasks.add_task(
-            analytics.record_event, request, path="/calculator", database_url=db_url
-        )
-    return resp
+@router.get("/calculator")
+async def calculator(request: Request) -> RedirectResponse:
+    """Правка Даши №2: страницы калькулятора больше нет — постоянный редирект на лид-форму."""
+    return RedirectResponse("/#lead", status_code=301)
 
 
 # Static pages that always belong in the sitemap (absolute via site_public_base_url).
-_SITEMAP_STATIC = ("/", "/catalog", "/map", "/calculator", "/vnj", "/how")
+_SITEMAP_STATIC = ("/", "/catalog", "/map", "/vnj", "/how")
 
 
 @router.get("/sitemap.xml")
@@ -615,7 +605,7 @@ async def vnj(
     # district_options, csrf_token) are supplied via the shared Jinja env.
     # C3: served with an ETag + conditional 304 (content-static page).
     resp = _static_page(request, "vnj.html")
-    # T2-2: pageview только на полный 200-рендер (304 — скип, см. /calculator).
+    # T2-2: pageview только на полный 200-рендер (304 — скип, см. /how).
     if resp.status_code == status.HTTP_200_OK:
         background_tasks.add_task(analytics.record_event, request, path="/vnj", database_url=db_url)
     return resp
@@ -630,7 +620,7 @@ async def how(
     # Static content page «Как работаем» (incl. the 50% commission breakdown) — no DB.
     # C3: served with an ETag + conditional 304.
     resp = _static_page(request, "how.html")
-    # T2-2: pageview только на полный 200-рендер (304 — скип, см. /calculator).
+    # T2-2: pageview только на полный 200-рендер (304 — скип, см. /how).
     if resp.status_code == status.HTTP_200_OK:
         background_tasks.add_task(analytics.record_event, request, path="/how", database_url=db_url)
     return resp

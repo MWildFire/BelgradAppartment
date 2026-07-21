@@ -98,7 +98,6 @@ _PAGES: list[tuple[str, dict[str, object]]] = [
     ),
     ("apt.html", {"item": FakeView(), "similar": [FakeView(id=200)], "csrf_token": _CSRF}),
     ("map.html", {"csrf_token": _CSRF}),
-    ("calculator.html", {"csrf_token": _CSRF}),
     ("how.html", {"csrf_token": _CSRF, "telegram_url": _TG}),
     ("vnj.html", {"csrf_token": _CSRF, "telegram_url": _TG}),
     ("unsubscribe.html", {"csrf_token": _CSRF, "ok": True, "telegram_url": _TG}),
@@ -128,7 +127,7 @@ def test_base_html_lang_ru() -> None:
 @pytest.mark.parametrize(("template", "ctx"), _PAGES)
 def test_pages_have_exactly_one_h1(template: str, ctx: dict[str, object]) -> None:
     """W5-27: every content page carries EXACTLY one <h1> (the page title) — «at most one»
-    let catalog/map/calculator/how/vnj/unsubscribe ship with an outline starting at <h2>,
+    let catalog/map/how/vnj/unsubscribe ship with an outline starting at <h2>,
     weakening SR heading navigation and SEO."""
     if template == "base.html":
         pytest.skip("base shell has no content <h1> by itself")

@@ -1,6 +1,6 @@
 """C3 — HTTP caching for the genuinely-static content pages + /static assets.
 
-Static content pages (/vnj, /how, /calculator) re-render identically on every request, so they
+Static content pages (/vnj, /how) re-render identically on every request, so they
 carry an ETag (stable hash of the rendered body) + Last-Modified and short-circuit to 304 when
 the client sends a matching If-None-Match. Dynamic routes (/, /catalog, /lead) must NOT carry a
 static ETag (their bodies depend on DB state / filters). /static asset responses carry a
@@ -28,7 +28,6 @@ _STUBS = {
     "apt.html": "TPL:apt id={{ item.id }} similar={{ similar|length }}",
     "vnj.html": "TPL:vnj договор",
     "how.html": "TPL:how 50%",
-    "calculator.html": "TPL:calculator",
     "partials/_results.html": "TPL:_results items={{ items|length }}",
     "partials/_card.html": "TPL:_card id={{ item.id }}",
     "partials/_filters.html": "TPL:_filters",
@@ -36,7 +35,7 @@ _STUBS = {
 }
 
 # The static content pages C3 targets — each must carry an ETag + honor If-None-Match → 304.
-STATIC_PAGES = ("/vnj", "/how", "/calculator")
+STATIC_PAGES = ("/vnj", "/how")
 
 
 @pytest.fixture(autouse=True)

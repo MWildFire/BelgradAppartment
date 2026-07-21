@@ -83,7 +83,7 @@
       <a href="/how"{% if cur_path == '/how' %} aria-current="page"{% endif %}>Как работаем</a>
       <a href="/vnj"{% if cur_path == '/vnj' %} aria-current="page"{% endif %}>ВНЖ и договор</a>
       <a href="/map"{% if cur_path == '/map' %} aria-current="page"{% endif %}>Карта</a>
-      <a href="/calculator"{% if cur_path == '/calculator' %} aria-current="page"{% endif %}>Калькулятор</a>
+      <a href="/#lead">Удаленный поиск квартиры</a>
     </nav>
     <div class="nav-cta">
       {# favorites counter — reflects localStorage count, updated by favorites.js on toggle.
@@ -117,7 +117,7 @@
     {# footer column titles are h2 (same level as section headings) — keeps heading order
        sequential (no h2→h5 skip); styled by .foot .col h2, identical to the old h5 look. #}
     <div class="col"><h2>Каталог</h2><a href="/catalog">Все квартиры</a><a href="/catalog?vnj=1">Под ВНЖ</a><a href="/catalog?wc=1">Белый картон</a><a href="/map">На карте</a></div>
-    <div class="col"><h2>Помощь</h2><a href="/how">Как работаем</a><a href="/vnj">ВНЖ и договор</a><a href="/calculator">Калькулятор аренды</a></div>
+    <div class="col"><h2>Помощь</h2><a href="/how">Как работаем</a><a href="/vnj">ВНЖ и договор</a><a href="/#lead">Удаленный поиск квартиры</a></div>
     {# F5: footer Telegram CTA = DM to Дарья ({{ telegram_url }}) — distinct from the
        Telegram-канал link above (channel vs personal DM). #}
     <div class="col"><h2>Контакты</h2><a href="{{ channel_url|default('https://t.me/RentBelgrad') }}" rel="noopener">Telegram-канал</a><a href="{{ telegram_url }}" target="_blank" rel="noopener">Написать в Telegram</a><a href="/#lead">Написать агенту</a></div>
@@ -134,7 +134,7 @@
 </a>
 
 {# S5-1 PWA: mobile bottom-nav (≤620px only — see site.css). Four real, keyboard-operable links
-   with inline SVG icons (no emoji): Каталог / Карта / Калькулятор / Telegram. The Telegram item
+   with inline SVG icons (no emoji): Каталог / Карта / Поиск / Telegram. The Telegram item
    opens the DM in a new tab; the rest are in-app navigations. Touch targets ≥44px, focus-visible
    rings inherited; body gets bottom padding at this breakpoint so the fixed bar never covers
    content. aria-label on <nav> + on each link keeps the icon+label pairs accessible. #}
@@ -147,9 +147,9 @@
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11Z"/><circle cx="12" cy="10" r="2.6"/></svg>
     <span>Карта</span>
   </a>
-  <a href="/calculator" aria-label="Калькулятор аренды"{% if cur_path == '/calculator' %} aria-current="page"{% endif %}>
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4.5" y="2.5" width="15" height="19" rx="2"/><rect x="7.5" y="5.5" width="9" height="3.5"/><path d="M8 13h0M12 13h0M16 13h0M8 17h0M12 17h0M16 17h0"/></svg>
-    <span>Калькулятор</span>
+  <a href="/#lead" aria-label="Удаленный поиск квартиры">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4.8-4.8"/></svg>
+    <span>Поиск</span>
   </a>
   <a href="{{ telegram_url }}" target="_blank" rel="noopener" aria-label="Написать в Telegram">
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21.5 3.2 2.8 10.6c-.9.35-.88 1.62.03 1.95l4.6 1.64 1.78 5.4c.27.78 1.27.96 1.8.32l2.5-3.05 4.6 3.4c.6.45 1.47.13 1.65-.6L23 4.3c.2-.83-.6-1.5-1.5-1.1Z"/></svg>

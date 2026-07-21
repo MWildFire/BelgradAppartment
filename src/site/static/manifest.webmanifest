@@ -41,11 +41,6 @@
       "name": "Карта",
       "short_name": "Карта",
       "url": "/map"
-    },
-    {
-      "name": "Калькулятор аренды",
-      "short_name": "Калькулятор",
-      "url": "/calculator"
     }
   ]
 }

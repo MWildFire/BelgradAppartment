@@ -33,7 +33,6 @@ _STUBS = {
     "catalog.html": "TPL:catalog",
     "apt.html": "TPL:apt id={{ item.id }}",
     "map.html": "TPL:map",
-    "calculator.html": "TPL:calculator",
     "vnj.html": "TPL:vnj",
     "how.html": "TPL:how",
     "offline.html": "TPL:offline",
@@ -174,7 +173,7 @@ def test_human_ua_not_flagged(ua):
 
 
 def test_all_allowlist_paths_logged_and_normalized(client):
-    for path in ("/", "/catalog", "/apt/1", "/map", "/calculator", "/vnj", "/how"):
+    for path in ("/", "/catalog", "/apt/1", "/map", "/vnj", "/how"):
         assert client.get(path, headers=_HUMAN_UA).status_code == 200
     events = _fetch_events(client)
     assert [(e["type"], e["path"], e["apt_id"]) for e in events] == [
@@ -182,7 +181,6 @@ def test_all_allowlist_paths_logged_and_normalized(client):
         ("pageview", "/catalog", None),
         ("pageview", "/apt", 1),  # §A.1: '/apt/{id}' хранится как path='/apt' + apt_id
         ("pageview", "/map", None),
-        ("pageview", "/calculator", None),
         ("pageview", "/vnj", None),
         ("pageview", "/how", None),
     ]
@@ -264,7 +262,7 @@ def test_non_allowlist_routes_not_logged(client):
 
 def test_kill_switch_off_writes_nothing(client, monkeypatch):
     monkeypatch.setattr(get_settings(), "site_analytics_enabled", False)
-    for path in ("/", "/catalog", "/apt/1", "/map", "/calculator", "/vnj", "/how"):
+    for path in ("/", "/catalog", "/apt/1", "/map", "/vnj", "/how"):
         assert client.get(path, headers=_HUMAN_UA).status_code == 200
     assert _fetch_events(client) == []  # все хуки no-op, ни одной записи
 
