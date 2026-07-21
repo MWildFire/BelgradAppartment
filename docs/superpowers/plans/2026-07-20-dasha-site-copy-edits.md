@@ -56,12 +56,12 @@
 
 **Interfaces:** только текст, разметка не меняется.
 
-- [ ] **Step 1: Проверить, держат ли тесты старые строки**
+- [x] **Step 1: Проверить, держат ли тесты старые строки**
 
 Run: `grep -rn -e ">Каталог<" -e "Свой человек" tests/site/`
 Expected: `test_a11y.py:144` проверяет `<h2>Каталог</h2>` в футере — это заголовок колонки, мы его НЕ меняем; других совпадений нет → тесты править не нужно.
 
-- [ ] **Step 2: Заменить пункт меню**
+- [x] **Step 2: Заменить пункт меню**
 
 В `src/site/templates/base.html` строка 82, заменить:
 
@@ -77,7 +77,7 @@ Expected: `test_a11y.py:144` проверяет `<h2>Каталог</h2>` в ф�
 
 (мобильный bottom-nav не трогаем: там `<span>Каталог</span>` с `aria-label="Каталог квартир"` — короткая подпись для таббара осознанна; заголовок колонки футера `<h2>Каталог</h2>` тоже остаётся.)
 
-- [ ] **Step 3: Заменить описание в футере**
+- [x] **Step 3: Заменить описание в футере**
 
 Строка 115, заменить:
 
@@ -91,12 +91,12 @@ Expected: `test_a11y.py:144` проверяет `<h2>Каталог</h2>` в ф�
       <p class="desc">Команда опытных агентов в Белграде. Помогаем релокантам снять квартиру с необходимыми документами для ВНЖ и регистрации.</p>
 ```
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `uv run pytest tests/site -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/site/templates/base.html
@@ -110,12 +110,12 @@ git commit -m "dasha-edits: меню «Каталог квартир», ново
 **Files:**
 - Modify: `src/site/templates/index.html:11` (hero-lede), `src/site/templates/index.html:107` (feed-note)
 
-- [ ] **Step 1: Проверить тестовые привязки**
+- [x] **Step 1: Проверить тестовые привязки**
 
 Run: `grep -rn -e "Помогаем релокантам найти" -e "обновляется автоматически" tests/site/`
 Expected: совпадений нет (если есть — обновить строки в тестах на новые ДО правки шаблона, убедиться что тест падает, затем шаг 2).
 
-- [ ] **Step 2: Заменить hero-лид**
+- [x] **Step 2: Заменить hero-лид**
 
 Строка 11, заменить:
 
@@ -129,7 +129,7 @@ Expected: совпадений нет (если есть — обновить с
       <p class="hero-lede">Поможем вам снять квартиру на длительный срок с необходимыми документами, для оформления <span style="color:var(--navy);font-weight:600">ВНЖ</span> и регистрации (белый картон). Сопровождаем на всех этапах до заселения и подписания договора.</p>
 ```
 
-- [ ] **Step 3: Заменить подпись фида**
+- [x] **Step 3: Заменить подпись фида**
 
 Строка 107, заменить:
 
@@ -143,12 +143,12 @@ Expected: совпадений нет (если есть — обновить с
   <div class="feed-note"><span class="dot" aria-hidden="true"></span> обновляется автоматически из телеграм-канала <b style="color:var(--ink)">@RentBelgrad</b></div>
 ```
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `uv run pytest tests/site -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/site/templates/index.html
@@ -165,14 +165,14 @@ git commit -m "dasha-edits: hero-лид и подпись телеграм-ка�
 - Modify: `src/site/templates/index.html:124` (интро), `:127-130` (шаги)
 - Modify: `src/site/templates/how.html:14` (интро), `:21-24` (шаги)
 
-- [ ] **Step 1: Обновить тестовую привязку к «боравиште»**
+- [x] **Step 1: Обновить тестовую привязку к «боравиште»**
 
 `tests/site/test_render.py:144` содержит `assert "боравиште" in html or "регистрац" in html` — после правки останется истинным по «регистрац», менять не нужно. Проверить прочие:
 
 Run: `grep -rn -e "Готовим 3–5" -e "Оформляем ugovor" -e "не проходит на боравиште" -e "счётчики" tests/`
 Expected: совпадений нет; если есть — заменить в тестах на новые тексты (П9/П10/П11) до правки шаблонов.
 
-- [ ] **Step 2: index.html — интро секции**
+- [x] **Step 2: index.html — интро секции**
 
 Строка 124, заменить:
 
@@ -186,7 +186,7 @@ Expected: совпадений нет; если есть — заменить в
     <p style="max-width:30ch;color:var(--ink-2);font-size:var(--step--1)">Не маркетплейс. Живой агент ведёт за руку от первого сообщения до получения ключей.</p>
 ```
 
-- [ ] **Step 3: index.html — четыре шага**
+- [x] **Step 3: index.html — четыре шага**
 
 Строки 127–130, заменить:
 
@@ -206,7 +206,7 @@ Expected: совпадений нет; если есть — заменить в
     <div class="step"><div class="no">04 / договор</div><h3>Подготавливаем договор</h3><p>Подписание, регистрация на адресе, документы для ВНЖ. Всё под ключ.</p></div>
 ```
 
-- [ ] **Step 4: how.html — интро**
+- [x] **Step 4: how.html — интро**
 
 Строка 14, заменить:
 
@@ -220,18 +220,18 @@ Expected: совпадений нет; если есть — заменить в
     <p style="max-width:38ch;color:var(--ink-2);font-size:var(--step--1)">Не маркетплейс. Живой агент ведёт за руку от первого сообщения до получения ключей.</p>
 ```
 
-- [ ] **Step 5: how.html — те же четыре шага**
+- [x] **Step 5: how.html — те же четыре шага**
 
 Строки 21–24: применить ровно ту же замену, что в Step 3 (блоки идентичны). Шаг `05 / заселение` (строка 25) не трогать.
 
-- [ ] **Step 6: Проверить синхронность и тесты**
+- [x] **Step 6: Проверить синхронность и тесты**
 
 Run: `grep -c "Готовим подборку с вариантами" src/site/templates/index.html src/site/templates/how.html`
 Expected: по `1` в каждом файле.
 Run: `uv run pytest tests/site -q`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/site/templates/index.html src/site/templates/how.html
@@ -246,12 +246,12 @@ git commit -m "dasha-edits: интро и шаги «Как мы работае�
 - Modify: `src/site/templates/index.html:135-150` (секция `#vnj`)
 - Modify: `src/site/static/css/site.css` (добавить модификатор `.split.solo`)
 
-- [ ] **Step 1: Проверить тестовые привязки**
+- [x] **Step 1: Проверить тестовые привязки**
 
 Run: `grep -rn -e "Договор, который реально" -e "Проверяем хозяина" -e "боравиштем" -e "ph-note" tests/site/`
 Expected: если что-то совпало — обновить в тестах на новые тексты до правки шаблона.
 
-- [ ] **Step 2: Заменить заголовок и абзац**
+- [x] **Step 2: Заменить заголовок и абзац**
 
 Строки 139–140, заменить:
 
@@ -267,7 +267,7 @@ Expected: если что-то совпало — обновить в теста
       <p>Поиск недвижимости в новой стране всегда достаточно стрессовая задача — разобраться в местных юридических тонкостях, особенностях районов, задать правильные вопросы владельцу. Мы берем все главные заботы на себя, вам остается только приезжать на просмотры в назначенное время и сделать свой выбор при встрече с идеальной квартирой.</p>
 ```
 
-- [ ] **Step 3: Заменить чек-лист**
+- [x] **Step 3: Заменить чек-лист**
 
 Строки 142–145, заменить:
 
@@ -287,7 +287,7 @@ Expected: если что-то совпало — обновить в теста
         <div class="c"><span class="num">04</span><span><b>Прозрачные условия</b> — стоимость услуги называем сразу, без скрытых платежей.</span></div>
 ```
 
-- [ ] **Step 4: Убрать пустой квадрат и перевести секцию в одну колонку**
+- [x] **Step 4: Убрать пустой квадрат и перевести секцию в одну колонку**
 
 Строка 136: `<div class="split">` → `<div class="split solo">`.
 Строка 148, удалить целиком:
@@ -306,12 +306,12 @@ Expected: если что-то совпало — обновить в теста
 
 (`.split .photo` правила не удалять — их использует та же секция на странице `/vnj`, которую не трогаем.)
 
-- [ ] **Step 5: Прогнать тесты**
+- [x] **Step 5: Прогнать тесты**
 
 Run: `uv run pytest tests/site -q`
 Expected: PASS (в т.ч. `test_render.py:144` — «регистрац» встречается в чек-листе `регистрация адреса`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/site/templates/index.html src/site/static/css/site.css
@@ -325,12 +325,12 @@ git commit -m "dasha-edits: секция «Почему мы» — новый т
 **Files:**
 - Modify: `src/site/templates/partials/_lead_form.html:9` (lede), `:63` (плейсхолдер)
 
-- [ ] **Step 1: Проверить тестовые привязки**
+- [x] **Step 1: Проверить тестовые привязки**
 
 Run: `grep -rn -e "Дарья соберёт" -e "нужен договор под боравиште" tests/`
 Expected: совпадений нет; если есть — обновить на новые тексты до правки.
 
-- [ ] **Step 2: Заменить подзаголовок**
+- [x] **Step 2: Заменить подзаголовок**
 
 Строка 9, заменить:
 
@@ -344,7 +344,7 @@ Expected: совпадений нет; если есть — обновить н
   <p class="lede">Локация, бюджет, вид отопления — пара полей, и наш специалист соберёт подборку под тебя.</p>
 ```
 
-- [ ] **Step 3: Почистить плейсхолдер**
+- [x] **Step 3: Почистить плейсхолдер**
 
 Строка 63, заменить:
 
@@ -358,12 +358,12 @@ Expected: совпадений нет; если есть — обновить н
       <textarea id="lead-message" name="message" maxlength="2000" placeholder="Сроки, лифт, питомцы…"></textarea>
 ```
 
-- [ ] **Step 4: Прогнать тесты**
+- [x] **Step 4: Прогнать тесты**
 
 Run: `uv run pytest tests/site -q`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/site/templates/partials/_lead_form.html
@@ -387,7 +387,7 @@ git commit -m "dasha-edits: лид-форма — «наш специалист�
 - Produces: `format._PARENT_VALUE: dict[str, str]` (латинское значение микрорайона → латинское значение района-родителя) — приватный для `human_district`.
 - Consumes: существующие `district_tag`, `_value_to_cyrillic` — сигнатуры не меняются.
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 В `tests/site/test_format.py` добавить (рядом с существующим параметризованным тестом `human_district`, строки ~60-75):
 
@@ -417,12 +417,12 @@ def test_core_districts_is_the_ten_approved():
 
 ВАЖНО: существующие параметры `("Dorcol", "Дорћол")` и `("Dorćol", "Дорћол")` в старом тесте (строки 69–70) заменить на `("Dorcol", "Стари град")` и `("Dorćol", "Стари град")`.
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `uv run pytest tests/site/test_format.py -q`
 Expected: FAIL (`ImportError: CORE_DISTRICTS` / `"Дорћол" != "Стари град"`)
 
-- [ ] **Step 3: Реализовать в format.py**
+- [x] **Step 3: Реализовать в format.py**
 
 После блока `_CYRILLIC_RE` (строка ~22) добавить:
 
@@ -465,7 +465,7 @@ _PARENT_VALUE: dict[str, str] = {
 
 (Внешние общины — Барајево, Гроцка, Лазаревац, Младеновац, Обреновац, Сопот, Сурчин — редки в каталоге; отображаются как есть, в выпадающий список не попадают. Осознанно, YAGNI.)
 
-- [ ] **Step 4: district_options() → CORE_DISTRICTS**
+- [x] **Step 4: district_options() → CORE_DISTRICTS**
 
 В `src/site/app.py` заменить тело функции (строки 62–77) на:
 
@@ -483,7 +483,7 @@ def district_options() -> list[str]:
 
 Добавить импорт: `from src.site.format import CORE_DISTRICTS` (рядом с существующими импортами). Убрать ставшие ненужными `DISTRICTS_PATH`/`yaml`/`_CYRILLIC_RE` из app.py ТОЛЬКО если их больше никто в этом модуле не использует (проверить `grep -n "DISTRICTS_PATH\|yaml\.\|_CYRILLIC_RE" src/site/app.py`).
 
-- [ ] **Step 5: Статистика на главной — фиксированные 10**
+- [x] **Step 5: Статистика на главной — фиксированные 10**
 
 В `src/site/routes.py` (строки 430–436) заменить:
 
@@ -504,12 +504,12 @@ def district_options() -> list[str]:
 
 Добавить импорт `CORE_DISTRICTS` в routes.py: `from src.site.format import CORE_DISTRICTS` (у format.py нет зависимостей от app/routes — циклического импорта нет).
 
-- [ ] **Step 6: Тесты и линт**
+- [x] **Step 6: Тесты и линт**
 
 Run: `uv run pytest tests/site -q && uv run ruff check src tests`
 Expected: PASS; если упали фикстуры с `("Дорћол", 3)` в `test_render.py:57` / `test_a11y.py:74` / `test_islands_catalog.py:178` — эти фикстуры задают фасеты напрямую (не через human_district), они валидны как данные; чинить только упавшие ассерты, заменяя «Дорћол» на «Стари град» по смыслу теста.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/site/format.py src/site/app.py src/site/routes.py tests/site/test_format.py
@@ -524,15 +524,15 @@ git commit -m "dasha-edits: 10 районов — схлопывание мик�
 - Modify: `src/site/templates/index.html:16` (комбобокс), `:92-93` (marquee)
 - Modify: `src/site/templates/partials/_lead_form.html:55` (поле «Районы»)
 
-- [ ] **Step 1: Плейсхолдер комбобокса**
+- [x] **Step 1: Плейсхолдер комбобокса**
 
 Строка 16 index.html: `data-combobox-placeholder="Врачар, Дорћол…"` → `data-combobox-placeholder="Врачар, Земун…"`.
 
-- [ ] **Step 2: Плейсхолдер поля «Районы» в лид-форме**
+- [x] **Step 2: Плейсхолдер поля «Районы» в лид-форме**
 
 Строка 55 _lead_form.html: `placeholder="Врачар, Дорћол…"` → `placeholder="Врачар, Земун…"`.
 
-- [ ] **Step 3: Бегущая строка — 10 районов**
+- [x] **Step 3: Бегущая строка — 10 районов**
 
 Строки 92–93 index.html, заменить ОБЕ одинаковые строки (дубль нужен для бесшовной анимации) на:
 
@@ -540,14 +540,14 @@ git commit -m "dasha-edits: 10 районов — схлопывание мик�
     <span>Врачар</span><i>/</i><span>Стари град</span><i>/</i><span>Нови Београд</span><i>/</i><span>Земун</span><i>/</i><span>Савски венац</span><i>/</i><span>Звездара</span><i>/</i><span>Палилула</span><i>/</i><span>Вождовац</span><i>/</i><span>Чукарица</span><i>/</i><span>Раковица</span><i>/</i>
 ```
 
-- [ ] **Step 4: Проверить, что Дорћол на витрине больше нет**
+- [x] **Step 4: Проверить, что Дорћол на витрине больше нет**
 
 Run: `grep -rn "Дорћол" src/site/templates/`
 Expected: пусто.
 Run: `uv run pytest tests/site -q`
 Expected: PASS (упавшие ассерты с «Дорћол» в плейсхолдерах — заменить на «Земун» по новому тексту).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/site/templates/index.html src/site/templates/partials/_lead_form.html
@@ -569,7 +569,7 @@ git commit -m "dasha-edits: районы в UI — плейсхолдеры и m
 - Produces: `GET /calculator` → `301 Location: /#lead` (постоянный редирект вместо страницы).
 - Кнопка `Удаленный поиск квартиры` → `href="/#lead"` (решение Дмитрия №1).
 
-- [ ] **Step 1: Обновить тесты под новое поведение (TDD)**
+- [x] **Step 1: Обновить тесты под новое поведение (TDD)**
 
 `tests/site/test_integration.py:290-291` — заменить тест:
 
@@ -586,12 +586,12 @@ def test_calculator_redirects_to_lead(client):
 `tests/site/test_pwa.py:124` — заменить `client.get("/calculator")` на `client.get("/how")`; строка 135 `assert 'href="/calculator"'` — удалить или заменить на `assert 'href="/#lead"' in body`.
 `tests/site/test_a11y.py:101` — убрать `("calculator.html", {"csrf_token": _CSRF})` из параметризации; поправить комментарий строки 131.
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `uv run pytest tests/site/test_integration.py tests/site/test_pwa.py -q`
 Expected: FAIL (роут ещё отдаёт 200 со страницей).
 
-- [ ] **Step 3: routes.py — редирект вместо страницы**
+- [x] **Step 3: routes.py — редирект вместо страницы**
 
 Удалить хэндлер `/calculator` (строки 556–570) и вставить на его место:
 
@@ -604,7 +604,7 @@ async def calculator(request: Request) -> RedirectResponse:
 
 Импорт: `from fastapi.responses import RedirectResponse` (проверить, нет ли уже). Строка 573: `_SITEMAP_STATIC = ("/", "/catalog", "/map", "/vnj", "/how")`. Поправить упоминания `/calculator` в комментариях (строки 193, 616, 631) — заменить на `/how`.
 
-- [ ] **Step 4: base.html — кнопка вместо пункта меню**
+- [x] **Step 4: base.html — кнопка вместо пункта меню**
 
 Строка 86, заменить:
 
@@ -630,7 +630,7 @@ Bottom-nav (строки ~146-153): пункт «Калькулятор» зам
 
 Поправить комментарий над bottom-nav (`Каталог / Карта / Калькулятор / Telegram` → `Каталог / Карта / Поиск / Telegram`).
 
-- [ ] **Step 5: Удалить файлы и почистить PWA-манифест**
+- [x] **Step 5: Удалить файлы и почистить PWA-манифест**
 
 ```bash
 git rm src/site/templates/calculator.html src/site/static/js/calculator.js
@@ -643,12 +643,12 @@ Expected: пусто (если найдётся упоминание в `sw.js`/
 
 Опционально: удалить мёртвый CSS-блок `/* ───────── calculator ───────── */` в `src/site/static/css/site.css` (~строка 401) вместе с его правилами.
 
-- [ ] **Step 6: Тесты и линт**
+- [x] **Step 6: Тесты и линт**
 
 Run: `uv run pytest tests/site -q && uv run ruff check src tests`
 Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A
@@ -659,22 +659,22 @@ git commit -m "dasha-edits: калькулятор удалён, кнопка «
 
 ### Task 9: Финальная верификация
 
-- [ ] **Step 1: Полный прогон**
+- [x] **Step 1: Полный прогон**
 
 Run: `uv run pytest -q`
 Expected: PASS (весь набор, не только tests/site).
 
-- [ ] **Step 2: Линт**
+- [x] **Step 2: Линт**
 
 Run: `uv run ruff check src tests`
 Expected: чисто.
 
-- [ ] **Step 3: Grep-чистка витрины**
+- [x] **Step 3: Grep-чистка витрины**
 
 Run: `grep -rn -e "боравиште" -e "ugovor" -e "Калькулятор" -e "калькулятор" -e "Дорћол" src/site/templates/ src/site/static/js/`
 Expected: совпадения только в `vnj.html` (страница «ВНЖ и договор» — вне объёма правок Даши, там термины уместны). Любое другое совпадение — недоделка, исправить.
 
-- [ ] **Step 4: Смоук рендера главной**
+- [x] **Step 4: Смоук рендера главной**
 
 Run: `uv run pytest tests/site/test_render.py tests/site/test_a11y.py -q`
 Expected: PASS.
