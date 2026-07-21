@@ -21,6 +21,43 @@ from src.post.hashtags import DISTRICTS_PATH, _normalise, district_tag
 _RENTED_MARKERS = ("снято", "izdato", "rented", "издато")
 _CYRILLIC_RE = re.compile(r"[а-яё]", re.IGNORECASE)
 
+# Правка Даши №4 (2026-07-18): на витрине только 10 городских районов.
+# Порядок — алфавитный, как выдаёт district_options().
+CORE_DISTRICTS: tuple[str, ...] = (
+    "Вождовац",
+    "Врачар",
+    "Звездара",
+    "Земун",
+    "Нови Београд",
+    "Палилула",
+    "Раковица",
+    "Савски венац",
+    "Стари град",
+    "Чукарица",
+)
+
+# Латинское значение микрорайона (из districts.yaml) → значение района-родителя.
+# Схлопывание ТОЛЬКО для витрины сайта; districts.yaml и хэштеги канала не меняются.
+_PARENT_VALUE: dict[str, str] = {
+    "Dorcol": "Starigrad",
+    "Centar": "Starigrad",
+    "BezanijskaKosa": "NoviBeograd",
+    "BeogradNaVodi": "Savskivenac",
+    "Dedinje": "Savskivenac",
+    "Senjak": "Savskivenac",
+    "TopciderskoBrdo": "Savskivenac",
+    "Slavija": "Vracar",
+    "Karaburma": "Palilula",
+    "BanovoBrdo": "Cukarica",
+    "Cerak": "Cukarica",
+    "FilmskiGrad": "Cukarica",
+    "PetlovoBrdo": "Rakovica",
+    "Gardos": "Zemun",
+    "ProfesorskaKolonija": "Zvezdara",
+    "Mirijevo": "Zvezdara",
+    "Konjarnik": "Zvezdara",
+}
+
 
 def rooms_label(rooms: float | None) -> str:
     """listings.rooms (float) → display label. None/0 → 'студия'; N → 'N+1'."""
@@ -70,6 +107,7 @@ def human_district(raw: str | None) -> str:
     if tag is None:
         return raw  # unmapped — show as-is (logged elsewhere via districts-report)
     value = tag[1:]  # strip leading "#"
+    value = _PARENT_VALUE.get(value, value)
     cyrillic = _value_to_cyrillic().get(value)
     return cyrillic if cyrillic is not None else value
 

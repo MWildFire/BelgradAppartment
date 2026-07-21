@@ -39,6 +39,7 @@ from src.site.deps import (
     enforce_lead_ratelimit,
     require_site_csrf,
 )
+from src.site.format import CORE_DISTRICTS
 from src.site.leads import (
     LeadPayload,
     LeadValidationError,
@@ -429,7 +430,8 @@ async def index(
     facets = await _cached_facets(db_url)
     stats = {
         "active": facets.counts.get("total", 0),
-        "districts": len(facets.districts),
+        # Правка Даши №5: показываем количество покрываемых районов (10), а не фасеты.
+        "districts": len(CORE_DISTRICTS),
         "vnj": facets.counts.get("vnj", 0),
         "white_card": facets.counts.get("white_card", 0),
     }

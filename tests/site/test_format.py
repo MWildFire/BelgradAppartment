@@ -63,29 +63,31 @@ def test_human_district_empty_string() -> None:
 # --- S1-3: no Latin district may leak onto the public catalog ---
 # Each of these raw values used to resolve to a Latin/CamelCase form (orphan yaml value
 # with no Cyrillic key) and leaked latinica onto the showcase. They must now show Cyrillic.
+# Правка Даши №4 (2026-07-18): все они — микрорайоны, поэтому ожидаемое имя теперь
+# родительский район из CORE_DISTRICTS (было: собственное имя микрорайона).
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("Dorcol", "Дорћол"),
-        ("Dorćol", "Дорћол"),
-        ("Banovo brdo", "Баново брдо"),
-        ("Banovo Brdo", "Баново брдо"),
-        ("Senjak", "Сењак"),
-        ("Karaburma", "Карабурма"),
-        ("Centar", "Центар"),
-        ("Cerak", "Церак"),
-        ("Dedinje", "Дедиње"),
-        ("Slavija", "Славија"),
-        ("Gardoš", "Гардош"),
-        ("Gardos", "Гардош"),
-        ("Bežanijska kosa", "Бежанијска коса"),
-        ("Beograd na vodi", "Београд на води"),
-        ("Belgrade Waterfront", "Београд на води"),
-        ("Filmski grad", "Филмски град"),
-        ("Petlovo brdo", "Петлово брдо"),
-        ("Topčidersko brdo", "Топчидерско брдо"),
-        ("Profesorska kolonija", "Професорска колонија"),
-        ("Profesorska kolonija - Hala Pionir", "Професорска колонија"),
+        ("Dorcol", "Стари град"),
+        ("Dorćol", "Стари град"),
+        ("Banovo brdo", "Чукарица"),
+        ("Banovo Brdo", "Чукарица"),
+        ("Senjak", "Савски венац"),
+        ("Karaburma", "Палилула"),
+        ("Centar", "Стари град"),
+        ("Cerak", "Чукарица"),
+        ("Dedinje", "Савски венац"),
+        ("Slavija", "Врачар"),
+        ("Gardoš", "Земун"),
+        ("Gardos", "Земун"),
+        ("Bežanijska kosa", "Нови Београд"),
+        ("Beograd na vodi", "Савски венац"),
+        ("Belgrade Waterfront", "Савски венац"),
+        ("Filmski grad", "Чукарица"),
+        ("Petlovo brdo", "Раковица"),
+        ("Topčidersko brdo", "Савски венац"),
+        ("Profesorska kolonija", "Звездара"),
+        ("Profesorska kolonija - Hala Pionir", "Звездара"),
     ],
 )
 def test_human_district_latin_no_longer_leaks(raw: str, expected: str) -> None:
@@ -93,6 +95,39 @@ def test_human_district_latin_no_longer_leaks(raw: str, expected: str) -> None:
     assert out == expected
     # Defense: the result must contain at least one Cyrillic char (no bare latinica).
     assert any("Ѐ" <= ch <= "ӿ" for ch in out)
+
+
+def test_microdistricts_collapse_to_parent_district():
+    # Правка 4: на витрине только 10 районов — микрорайоны схлопываются в родителя.
+    from src.site.format import human_district
+
+    assert human_district("Dorcol") == "Стари град"
+    assert human_district("Dorćol") == "Стари град"
+    assert human_district("Bežanijska kosa") == "Нови Београд"
+    assert human_district("Belgrade Waterfront") == "Савски венац"
+    assert human_district("Banovo brdo") == "Чукарица"
+    assert human_district("Karaburma") == "Палилула"
+    assert human_district("Slavija") == "Врачар"
+    assert human_district("Gardoš") == "Земун"
+    assert human_district("Petlovo brdo") == "Раковица"
+    assert human_district("Profesorska kolonija") == "Звездара"
+
+
+def test_core_districts_is_the_ten_approved():
+    from src.site.format import CORE_DISTRICTS
+
+    assert CORE_DISTRICTS == (
+        "Вождовац",
+        "Врачар",
+        "Звездара",
+        "Земун",
+        "Нови Београд",
+        "Палилула",
+        "Раковица",
+        "Савски венац",
+        "Стари град",
+        "Чукарица",
+    )
 
 
 def test_human_district_already_cyrillic_passthrough() -> None:

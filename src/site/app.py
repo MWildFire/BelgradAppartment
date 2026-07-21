@@ -12,13 +12,11 @@ for a DictLoader stub, so the app must not create a second Jinja2Templates insta
 from __future__ import annotations
 
 import hashlib
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 
-import yaml
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import Response
@@ -27,14 +25,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
 from src.config import get_settings
-from src.post.hashtags import DISTRICTS_PATH  # reuse the canonical districts.yaml path
 from src.site import photos
 from src.site.db import dispose_engines
+from src.site.format import CORE_DISTRICTS
 from src.site.routes import router, templates
 
 STATIC_DIR = Path(__file__).parent / "static"
-
-_CYRILLIC_RE = re.compile(r"[а-яё]", re.IGNORECASE)
 
 # C3: how long browsers may cache a /static asset before revalidating. The asset-version token
 # (?v=<hash>) on css/js URLs busts this on every deploy that changes those bundles, so a 1-day
@@ -61,18 +57,13 @@ class _CachedStaticFiles(StaticFiles):
 
 @lru_cache(maxsize=1)
 def district_options() -> list[str]:
-    """Curated Cyrillic district display names for the район dropdowns (F2).
+    """Правка Даши №4: в район-дропдаунах только 10 городских районов.
 
-    The static superset behind both the hero combobox and the filter rail — it works even
-    when the catalog is empty (no facets). Source = data/districts.yaml's Cyrillic keys
-    (the human-readable «Врачар»/«Дорћол» labels; Latin keys are aliases for lookup only),
-    de-duplicated and sorted alphabetically. Reuses hashtags' DISTRICTS_PATH (no new path).
+    Раньше — все кириллические ключи districts.yaml (включая микрорайоны).
+    Теперь — курируемый список format.CORE_DISTRICTS; микрорайоны схлопываются
+    в родителя на отображении (format._PARENT_VALUE), districts.yaml не трогаем.
     """
-    if not DISTRICTS_PATH.exists():
-        return []
-    raw = yaml.safe_load(DISTRICTS_PATH.read_text(encoding="utf-8")) or {}
-    names = {str(key) for key in raw if _CYRILLIC_RE.search(str(key))}
-    return sorted(names)
+    return list(CORE_DISTRICTS)
 
 
 # F5: site-wide «Написать в Telegram» CTA. Register the DM url as a Jinja global on
