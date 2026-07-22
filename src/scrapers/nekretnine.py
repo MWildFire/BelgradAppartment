@@ -377,7 +377,7 @@ class NekretnineScraper(Scraper):
                 for attempt in range(self.pw_challenge_reloads + 1):
                     status = resp.status if resp is not None else None
                     html = await page.content()
-                    if (status is None or status < 400) and self._has_detail_payload(html):
+                    if (status is None or status < 400) and self._has_browser_payload(url, html):
                         return html
 
                     if attempt == self.pw_challenge_reloads:
@@ -524,8 +524,10 @@ class NekretnineScraper(Scraper):
         return data if isinstance(data, dict) else None
 
     @classmethod
-    def _has_detail_payload(cls, html: str) -> bool:
-        """True only for a Next.js detail page with a real-estate payload, not a WAF page."""
+    def _has_browser_payload(cls, url: str, html: str) -> bool:
+        """Accept a genuine detail or list payload, never a successful-looking WAF page."""
+        if not _OGLAS_ID_RE.search(url):
+            return cls._list_payload(html) is not None
         nxt = cls._extract_next_data(html)
         if not isinstance(nxt, dict):
             return False

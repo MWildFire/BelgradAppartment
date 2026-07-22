@@ -510,6 +510,16 @@ async def test_playwright_fallback_reloads_challenge_until_detail_payload(
     assert context.page.closed
 
 
+def test_browser_payload_check_accepts_list_pages(nekretnine_list_html: str) -> None:
+    """The fallback is shared by detail and list requests; a list must not be rejected as WAF HTML."""
+    assert NekretnineScraper._has_browser_payload(
+        "https://www.nekretnine.rs/izdavanje-stanova/beograd/", nekretnine_list_html,
+    )
+    assert not NekretnineScraper._has_browser_payload(
+        "https://www.nekretnine.rs/izdavanje-stanova/beograd/", "<html>challenge</html>",
+    )
+
+
 @pytest.mark.asyncio
 async def test_fetch_detail_403_falls_back_to_playwright(nekretnine_detail_html: str) -> None:
     calls = {"n": 0}
