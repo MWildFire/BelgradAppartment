@@ -41,7 +41,10 @@ rsync -rlptzv --delete-after \
   --exclude='logs/' --exclude='.claude/' --exclude='.DS_Store' \
   --exclude='tests/fixtures/halooglasi/' --exclude='tests/e2e/site/_artifacts/' \
   ./ "$VPS:$REMOTE/" | tail -10
-ssh "$VPS" "chown -R otz:otz $REMOTE/data $REMOTE/src $REMOTE/scripts $REMOTE/tests"
+# `data/` may contain a stale/dangling Telethon `*.session-journal` symlink.  GNU chown follows
+# symlinks by default and then exits non-zero, even though the code sync succeeded.  Change the
+# symlink's ownership itself instead, so an obsolete journal cannot block a deploy.
+ssh "$VPS" "chown -hR otz:otz $REMOTE/data $REMOTE/src $REMOTE/scripts $REMOTE/tests"
 
 if $RESTART; then
   echo ""
