@@ -514,6 +514,10 @@ footer{border-top:1px solid var(--ink);margin-top:var(--bay)}
   body{padding-bottom:calc(56px + env(safe-area-inset-bottom))}
   /* lift the sticky Telegram FAB above the bottom-nav so they don't overlap. */
   .tg-fab{bottom:calc(56px + 14px + env(safe-area-inset-bottom))}
+  /* The homepage hero has its own mobile Telegram route in the bottom navigation.  While that
+     hero is onscreen, tg-fab.js makes the duplicate floating target inert so it cannot cover
+     copy or the search controls. */
+  .tg-fab.is-hero-visible{opacity:0;pointer-events:none;transform:translateY(12px)}
 }
 
 /* ───────── nav active state (UX: orientation) ─────────

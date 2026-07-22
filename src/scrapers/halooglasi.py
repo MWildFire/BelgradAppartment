@@ -435,9 +435,14 @@ class HalooglasiScraper(Scraper):
         area_m2 = _safe_float(other.get("kvadratura_d"))
         rooms = _parse_rooms(other.get("broj_soba_s"))
 
+        # `mikrolokacija_s` is a neighbourhood (for example, "Dobanovačka");
+        # `lokacija_s` is Halooglasi' parent municipality ("Opština Zemun").
+        # Keep the latter so the public catalogue can consistently limit its district
+        # labels to the ten supported urban districts. The micro-location remains in
+        # the source HTML/title, but must not become the primary district field.
         district = (
-            other.get("mikrolokacija_s")
-            or other.get("lokacija_s")
+            other.get("lokacija_s")
+            or other.get("mikrolokacija_s")
             or None
         )
         address_raw = other.get("ulica_t") or None

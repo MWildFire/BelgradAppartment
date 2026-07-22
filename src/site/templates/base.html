@@ -163,6 +163,9 @@
 <script src="/static/js/favorites.js?v={{ asset_v }}" defer></script>
 {# S5-1 PWA: register the root-scoped service worker after load (feature-detected, non-fatal). #}
 <script src="/static/js/pwa.js?v={{ asset_v }}" defer></script>
+{# On the home page, this keeps the mobile sticky Telegram FAB out of the hero and its search.
+   It is a no-op on every other page and above the mobile breakpoint. #}
+<script src="/static/js/tg-fab.js?v={{ asset_v }}" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -70,6 +70,12 @@ class NekretnineScraper(Scraper):
     page_delay_sec: ClassVar[float] = 0.4  # pacing between pages on a long walk (avoids 429s)
     max_consecutive_failures: ClassVar[int] = 3  # abort the walk after this many in a row
     pw_timeout_ms: ClassVar[int] = 60000  # per-page cap on the D6 browser fallback
+    # DataDome can initially serve a 403 challenge to Chromium and set its clearance cookie only
+    # after the page has run briefly.  Keep this bounded: a few paced reloads are enough to let a
+    # legitimate browser session settle, but do not turn a persistent upstream block into a long
+    # hanging scrape.
+    pw_challenge_reloads: ClassVar[int] = 3
+    pw_challenge_wait_ms: ClassVar[int] = 4000
 
     # The site hard-caps every search at 80 pages × 25 = 2000 results (page 81+ returns HTTP 404)
     # even when totalAds is ~7700. A single unfiltered walk therefore covers only ~25% of the
@@ -368,13 +374,28 @@ class NekretnineScraper(Scraper):
             page = await self._pw_context.new_page()
             try:
                 resp = await page.goto(url, wait_until="domcontentloaded", timeout=self.pw_timeout_ms)
-                if resp is not None and resp.status >= 400:
-                    logger.warning(
-                        "[nekretnine] playwright fallback %s → HTTP %s (still blocked)",
-                        url, resp.status,
+                for attempt in range(self.pw_challenge_reloads + 1):
+                    status = resp.status if resp is not None else None
+                    html = await page.content()
+                    if (status is None or status < 400) and self._has_detail_payload(html):
+                        return html
+
+                    if attempt == self.pw_challenge_reloads:
+                        logger.warning(
+                            "[nekretnine] playwright fallback %s → HTTP %s; no detail payload "
+                            "after %d challenge reloads",
+                            url, status, self.pw_challenge_reloads,
+                        )
+                        return None
+
+                    logger.info(
+                        "[nekretnine] playwright fallback %s → HTTP %s/no payload; "
+                        "waiting %dms before challenge reload %d/%d",
+                        url, status, self.pw_challenge_wait_ms, attempt + 1,
+                        self.pw_challenge_reloads,
                     )
-                    return None
-                return await page.content()
+                    await page.wait_for_timeout(self.pw_challenge_wait_ms)
+                    resp = await page.reload(wait_until="domcontentloaded", timeout=self.pw_timeout_ms)
             finally:
                 await page.close()
         except Exception as e:  # noqa: BLE001 — fallback is best-effort; caller re-raises the 403
@@ -501,6 +522,17 @@ class NekretnineScraper(Scraper):
         except json.JSONDecodeError:
             return None
         return data if isinstance(data, dict) else None
+
+    @classmethod
+    def _has_detail_payload(cls, html: str) -> bool:
+        """True only for a Next.js detail page with a real-estate payload, not a WAF page."""
+        nxt = cls._extract_next_data(html)
+        if not isinstance(nxt, dict):
+            return False
+        try:
+            return isinstance(nxt["props"]["pageProps"]["detailData"]["realEstate"], dict)
+        except (KeyError, TypeError):
+            return False
 
     @classmethod
     def _list_payload(cls, html: str) -> dict[str, Any] | None:

@@ -158,6 +158,29 @@ def test_telegram_cta_present_on_all_page_types(page, site_server: str) -> None:
     _assert_darya_cta_everywhere(page)
 
 
+@requires_e2e
+@pytest.mark.parametrize("viewport", [{"width": 375, "height": 667}, {"width": 390, "height": 844}])
+def test_mobile_fab_does_not_cover_home_hero(page, site_server: str, viewport: dict[str, int]) -> None:
+    """The sticky FAB must be inert while the mobile homepage hero (including its search) is visible.
+
+    Telegram remains reachable through the mobile bottom navigation; this guards against an
+    overlapping fixed element stealing taps from the hero's text or controls at the two reviewed
+    phone viewports.
+    """
+    page.set_viewport_size(viewport)
+    page.goto(f"{site_server}/", wait_until="networkidle")
+
+    fab = page.locator(".tg-fab")
+    assert "is-hero-visible" in (fab.get_attribute("class") or "")
+    assert fab.evaluate("node => getComputedStyle(node).pointerEvents") == "none"
+    assert page.locator(".bottom-nav a[aria-label='Написать в Telegram']").count() == 1
+
+    # The CTA returns after the visitor leaves the hero, retaining the intended sticky shortcut.
+    page.locator("#feed").scroll_into_view_if_needed()
+    page.wait_for_function("() => !document.querySelector('.tg-fab').classList.contains('is-hero-visible')")
+    assert fab.evaluate("node => getComputedStyle(node).pointerEvents") == "auto"
+
+
 # --------------------------------------------------------------------------- W3-1 per-listing lead
 
 

@@ -460,6 +460,57 @@ async def test_fetch_detail_403_raises_immediately_without_retry(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+async def test_playwright_fallback_reloads_challenge_until_detail_payload(
+    nekretnine_detail_html: str,
+) -> None:
+    """A short-lived browser challenge must get a bounded reload before being declared blocked."""
+    class Response:
+        def __init__(self, status: int) -> None:
+            self.status = status
+
+    class Page:
+        def __init__(self) -> None:
+            self.step = 0
+            self.waits: list[int] = []
+            self.closed = False
+
+        async def goto(self, *_args, **_kwargs) -> Response:
+            return Response(403)
+
+        async def content(self) -> str:
+            return "<html>DataDome challenge</html>" if self.step == 0 else nekretnine_detail_html
+
+        async def wait_for_timeout(self, ms: int) -> None:
+            self.waits.append(ms)
+
+        async def reload(self, **_kwargs) -> Response:
+            self.step += 1
+            return Response(200)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class Context:
+        def __init__(self) -> None:
+            self.page = Page()
+
+        async def new_page(self) -> Page:
+            return self.page
+
+    sc = _make_scraper(lambda _request: httpx.Response(200))
+    context = Context()
+    sc._pw_context = context
+    sc.pw_challenge_reloads = 1
+    sc.pw_challenge_wait_ms = 7
+
+    html = await sc._playwright_html(_DETAIL_URL)
+
+    assert html == nekretnine_detail_html
+    assert context.page.waits == [7]
+    assert context.page.closed
+
+
+@pytest.mark.asyncio
 async def test_fetch_detail_403_falls_back_to_playwright(nekretnine_detail_html: str) -> None:
     calls = {"n": 0}
     seen: dict[str, str] = {}

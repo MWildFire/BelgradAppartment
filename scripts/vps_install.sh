@@ -194,7 +194,8 @@ UNIT
 cat >/etc/systemd/system/otz-scrape-smoke.service <<UNIT
 [Unit]
 Description=otz-rent-finder — live smoke probe (markup-change protection, A2)
-OnFailure=otz-notify-failure@%n.service
+# `scrape-smoke` delivers one detailed, platform-specific Telegram alert itself.  Do not attach
+# the generic systemd notifier here: it produced a duplicate second alert for every same failure.
 
 [Service]
 Type=oneshot

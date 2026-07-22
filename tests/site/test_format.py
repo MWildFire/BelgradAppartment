@@ -48,6 +48,15 @@ def test_human_district_multiword_resolves() -> None:
     assert human_district("Vracar Centar") == "Врачар"
 
 
+def test_human_district_halooglasi_parent_municipality_is_a_core_district() -> None:
+    """Halooglasi' parent of Dobanovačka must render as Zemun, never the micro-location."""
+    from src.site.format import CORE_DISTRICTS
+
+    district = human_district("Opština Zemun")
+    assert district == "Земун"
+    assert district in CORE_DISTRICTS
+
+
 def test_human_district_unmapped_passthrough() -> None:
     assert human_district("Completely Unknown Place") == "Completely Unknown Place"
 

@@ -73,8 +73,9 @@ def test_parse_detail_core_fields(
     assert detail.lat == pytest.approx(44.848287, abs=1e-4)
     assert detail.lon == pytest.approx(20.401391, abs=1e-4)
     assert detail.address_raw == "Dobrovoljačka"
-    # district: prefers mikrolokacija_s "Dobanovačka", falls back to lokacija_s
-    assert detail.district == "Dobanovačka"
+    # The source sends both a micro-location and its parent municipality. Persist the parent:
+    # the public catalog deliberately exposes only its ten curated districts.
+    assert detail.district == "Opština Zemun"
     assert detail.title and "Zemun" in detail.title
     # photos: prefixed with img.halooglasi.com
     assert len(detail.photo_urls) >= 5
