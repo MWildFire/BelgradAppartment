@@ -30,11 +30,6 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://www.halooglasi.com"
 IMG_BASE = "https://img.halooglasi.com"
 
-USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
-
 _LIST_VAR = "QuidditaEnvironment.serverListData"
 _DETAIL_VAR = "QuidditaEnvironment.CurrentClassified"
 
@@ -124,9 +119,14 @@ class HalooglasiScraper(Scraper):
             # Stealth patches: navigator.webdriver=undefined, real chrome.runtime, proper sec-ch-ua,
             # webgl vendor, plugin list, etc. — what Cloudflare actually checks. Hook the running
             # Playwright instance so every new page gets the patches applied at navigation time.
+            # Do NOT override the user agent here.  The VPS Playwright Chromium is updated with
+            # the dependency (currently Chromium 148), while the old hard-coded macOS Chrome 126
+            # string left a version/platform mismatch across UA, Client Hints and JS APIs — a
+            # strong Cloudflare automation fingerprint.  Native headed Chromium gives coherent
+            # network and JavaScript identity; stealth only supplies the missing automation fixes.
             stealth = Stealth(
-                navigator_user_agent_override=USER_AGENT,
                 navigator_languages_override=("sr-RS", "sr", "en-US", "en"),
+                navigator_platform_override="Linux x86_64",
                 init_scripts_only=False,
             )
             stealth.hook_playwright_context(self._pw)
@@ -134,7 +134,6 @@ class HalooglasiScraper(Scraper):
             self._context = await self._pw.chromium.launch_persistent_context(
                 user_data_dir=str(self._user_data_dir),
                 headless=self._headless,
-                user_agent=USER_AGENT,
                 viewport={"width": 1366, "height": 900},
                 locale="sr-RS",
                 timezone_id="Europe/Belgrade",
@@ -260,7 +259,6 @@ class HalooglasiScraper(Scraper):
         self._context = await self._pw.chromium.launch_persistent_context(  # type: ignore[union-attr]
             user_data_dir=str(self._user_data_dir),
             headless=self._headless,
-            user_agent=USER_AGENT,
             viewport={"width": 1366, "height": 900},
             locale="sr-RS",
             timezone_id="Europe/Belgrade",

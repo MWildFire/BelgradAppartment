@@ -11,8 +11,9 @@ import httpx
 from src.config import get_settings
 from src.db.models import Platform
 
-# Keep in sync with halooglasi.USER_AGENT — list pages and photo downloads presenting different
-# Chrome versions is a cheap fingerprinting signal for anti-bot layers.
+# HTTP-only platform fetches and photo downloads need a conservative desktop identity. Browser
+# scrapers intentionally use Chromium's native UA instead: a hard-coded UA can drift from the
+# bundled Playwright version and become an anti-bot fingerprint.
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
