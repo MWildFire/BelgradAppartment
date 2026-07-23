@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from src.db.models import Platform
@@ -113,6 +114,28 @@ _DETAIL_URL = "https://www.halooglasi.com/nekretnine/izdavanje-stanova/zemun/542
 _DETAIL_VAR = "QuidditaEnvironment.CurrentClassified"
 
 
+def test_smsprint_url_keeps_canonical_public_urls_separate() -> None:
+    url = "https://www.halooglasi.com/nekretnine/izdavanje-stanova/zemun/5425647413192?kid=4"
+    assert HalooglasiScraper._smsprint_url(url) == (
+        "https://smsprint.halooglasi.com/nekretnine/izdavanje-stanova/zemun/5425647413192?kid=4"
+    )
+    assert HalooglasiScraper._smsprint_url("https://example.com/nekretnine") is None
+
+
+@pytest.mark.asyncio
+async def test_smsprint_fetch_requires_the_expected_payload_marker() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "smsprint.halooglasi.com"
+        return httpx.Response(200, text=GOOD_DETAIL_HTML)
+
+    scraper = HalooglasiScraper(client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    try:
+        html = await scraper._fetch_via_smsprint(_DETAIL_URL, ready_marker=_DETAIL_VAR)
+    finally:
+        await scraper.aclose()
+    assert _DETAIL_VAR in html
+
+
 class _FakePage:
     """Playwright-Page stand-in: serves `sequence[n]` for the n-th navigation (goto, then reloads)."""
 
@@ -150,6 +173,11 @@ class _FakeContext:
 def _scraper_with(page: _FakePage) -> HalooglasiScraper:
     sc = HalooglasiScraper()
     sc._context = _FakeContext(page)  # type: ignore[assignment]
+
+    async def _no_mirror(*_args: Any, **_kwargs: Any) -> str:
+        return ""
+
+    sc._fetch_via_smsprint = _no_mirror  # type: ignore[method-assign]
     return sc
 
 

@@ -19,7 +19,9 @@ import json
 import logging
 import re
 from typing import Any, ClassVar
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
+
+import httpx
 
 from src.config import get_settings
 from src.db.models import Platform
@@ -28,6 +30,10 @@ from src.scrapers.base import ListingDetail, ListingPreview, Scraper
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.halooglasi.com"
+# Public Halooglasi print host.  It serves the same server-rendered Quiddita payloads as `www`
+# without Cloudflare's interactive gate.  It is used only as a read fallback; all stored/public
+# listing URLs stay on the canonical www host.
+SMSPRINT_BASE_URL = "https://smsprint.halooglasi.com"
 IMG_BASE = "https://img.halooglasi.com"
 
 _LIST_VAR = "QuidditaEnvironment.serverListData"
@@ -184,6 +190,12 @@ class HalooglasiScraper(Scraper):
             # page was skipped with two unused retries left.
             html = ""
             for attempt in range(3):
+                # The public smsprint host returns exactly the server-rendered payload we parse
+                # below and avoids burning a minute on Cloudflare when the primary host decides
+                # to show an interactive challenge to the VPS IP.
+                html = await self._fetch_via_smsprint(url, ready_marker=_LIST_VAR)
+                if html:
+                    break
                 try:
                     html = await self._fetch_with_browser(url, ready_marker=_LIST_VAR)
                 except Exception as e:
@@ -271,6 +283,9 @@ class HalooglasiScraper(Scraper):
     async def fetch_detail(self, url: str) -> ListingDetail:
         if self._context is None:
             raise RuntimeError("HalooglasiScraper must be used as async context manager")
+        mirror_html = await self._fetch_via_smsprint(url, ready_marker=_DETAIL_VAR)
+        if mirror_html:
+            return self.parse_detail(url, mirror_html)
         last_error: Exception | None = None
         for attempt in range(3):
             try:
@@ -307,6 +322,37 @@ class HalooglasiScraper(Scraper):
         raise RuntimeError("unreachable")
 
     # ---- Browser helpers ----
+
+    @staticmethod
+    def _smsprint_url(url: str) -> str | None:
+        """Map a canonical Halooglasi URL to its public server-rendered print host."""
+        parts = urlsplit(url)
+        if parts.scheme != "https" or parts.netloc not in {"halooglasi.com", "www.halooglasi.com"}:
+            return None
+        return urlunsplit(("https", "smsprint.halooglasi.com", parts.path, parts.query, ""))
+
+    async def _fetch_via_smsprint(self, url: str, *, ready_marker: str) -> str:
+        """Return a verified public print-host payload, or an empty string to use Chromium.
+
+        This is deliberately a fallback rather than a second parser: both hosts expose the same
+        Quiddita variables, and the caller still requires its expected marker before accepting
+        anything.  Failed/changed mirror responses remain visible and fall back to the canonical
+        browser route rather than silently yielding partial data.
+        """
+        mirror_url = self._smsprint_url(url)
+        if mirror_url is None:
+            return ""
+        try:
+            response = await self._client.get(mirror_url)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.info("[halooglasi] smsprint unavailable for %s: %s", url, type(exc).__name__)
+            return ""
+        if ready_marker in response.text:
+            logger.debug("[halooglasi] loaded %s via smsprint", url)
+            return response.text
+        logger.warning("[halooglasi] smsprint response missing marker '%s' for %s", ready_marker, url)
+        return ""
 
     async def _fetch_with_browser(self, url: str, *, ready_marker: str) -> str:
         """Open `url`, soak-and-reload until `ready_marker` shows up in the HTML, return content.
