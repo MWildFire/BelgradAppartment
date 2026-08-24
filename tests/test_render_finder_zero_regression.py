@@ -7,7 +7,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from src.db.models import InboundPost, InboundStatus, Listing, Platform
+from src.db.models import InboundPost, InboundStatus, Listing
 from src.post.template import render_post
 from src.scrapers.nekretnine import NekretnineScraper
 from src.telegram.bot_delivery import TELEGRAM_CAPTION_LIMIT

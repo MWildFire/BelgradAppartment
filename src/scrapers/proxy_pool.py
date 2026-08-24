@@ -28,9 +28,11 @@ def _validate_proxy_url(raw: str, *, slot: str) -> str:
     if parsed.scheme not in {"http", "https", "socks5", "socks5h"} or not parsed.hostname:
         raise ProxyConfigurationError(f"invalid proxy configuration for slot={slot}")
     try:
-        parsed.port
+        port = parsed.port
     except ValueError as exc:
         raise ProxyConfigurationError(f"invalid proxy configuration for slot={slot}") from exc
+    if port is not None and not 1 <= port <= 65535:
+        raise ProxyConfigurationError(f"invalid proxy configuration for slot={slot}")
     if parsed.path not in {"", "/"} or parsed.params or parsed.query or parsed.fragment:
         raise ProxyConfigurationError(f"invalid proxy configuration for slot={slot}")
     return value
