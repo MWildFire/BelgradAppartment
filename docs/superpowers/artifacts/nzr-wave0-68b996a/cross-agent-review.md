@@ -27,8 +27,30 @@ Base: `68b996a8c23da5f7dd5607f54d7b296980725b48`
 - `ruff check src tests` reports 901 pre-existing findings; no lint or production-code change is made in
   Wave 0. A fresh independent Merge Guardian was retried and rejected again by the worker-thread limit.
 
+## Provisional P1 implementation after worker-runtime blocker
+
+Per the documented Captain exception, implementation moved forward without claiming a B0 PASS. The
+Captain closed three P1 workers that remained in `running` without returning commits, then implemented
+the disjoint lanes locally on clean integration history:
+
+- `258a69e` + `d163110`: `ListingPreview.snapshot`, Nekretnine list/detail parity parser, strict XXL
+  photo allowlist, typed snapshot mode, secret-safe proxy pool, fail-closed selection, and actual
+  Nekretnine HTTP/browser routing through the pool.
+- `6a3db71`: `legacy`/`shadow`/`active` orchestrator behavior, complete-snapshot no-detail path,
+  incomplete fallback, shadow mismatch logging, non-null existing-row merge, and full-photo swap guard.
+- `c03354e` + `9668cda`: immutable Render Finder parity tests and protected/golden hash assertions.
+
+Evidence on the integrated implementation SHA: full suite `1130 passed, 55 skipped, 34 warnings`;
+P1 parser/orchestrator gate `102 passed`; parity suite passed twice consecutively (`5 passed` each);
+pipeline probe remains `golden-0001`, confidence `1.000`, `phash`; all 13 protected hashes remain equal.
+This is implementation progress, not a release authorization: B0/B1/B2 remain blocked until a fresh
+independent QA Guardian returns PASS on the integrated SHA.
+
 ## Barrier decision
 
 `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
 
-The corrected artifacts are ready, but the multi-agent tool rejected a fresh Agent C replacement after reaching its worker-thread limit. No P1 write-access, Chrome, payment, env change, restart, Telegram send, or production activation is authorized from this state.
+The corrected artifacts are ready, but the fresh independent Guardian runtime did not produce a PASS;
+the provisional P1 exception therefore remains active only for the Captain-owned implementation already
+listed above. No further release wiring, Chrome, payment, production env change, restart, Telegram send,
+or production activation is authorized from this state.

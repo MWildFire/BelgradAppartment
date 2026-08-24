@@ -1,5 +1,5 @@
 {
-  "batch": "P0/Wave 0",
+  "batch": "P0/Wave 0 + provisional P1",
   "base_sha": "68b996a8c23da5f7dd5607f54d7b296980725b48",
   "integration_branch": "codex/nzr-integration",
   "worker_slots": {
@@ -22,10 +22,55 @@
       "status": "STOPPED_STALE_FINAL_REVIEW; fresh worker unavailable due tool thread limit"
     }
   },
+  "provisional_p1_lanes": {
+    "snapshot_parser": {
+      "owner": "captain after worker runtime shutdown",
+      "write_allowlist": [
+        "src/scrapers/base.py",
+        "src/scrapers/nekretnine.py",
+        "tests/test_scrapers_nekretnine.py",
+        "tests/fixtures/nekretnine/list_snapshot.json"
+      ],
+      "commits": ["258a69e", "d163110"],
+      "status": "IMPLEMENTED; focused tests green"
+    },
+    "proxy_config": {
+      "owner": "captain after worker runtime shutdown",
+      "write_allowlist": [
+        ".env.example",
+        "src/config.py",
+        "src/scrapers/proxy_pool.py",
+        "tests/test_proxy_pool.py"
+      ],
+      "commits": ["258a69e", "9668cda"],
+      "status": "IMPLEMENTED; focused tests green"
+    },
+    "orchestrator_parity": {
+      "owner": "captain after worker runtime shutdown",
+      "write_allowlist": [
+        "src/scrapers/orchestrator.py",
+        "tests/test_orchestrator_snapshot.py",
+        "tests/test_render_finder_zero_regression.py"
+      ],
+      "commits": ["6a3db71", "c03354e"],
+      "status": "IMPLEMENTED; full suite and parity runs green"
+    }
+  },
   "captain": {
     "worktree": "/Users/mvstrike/Projects/BelgradAppartment",
     "write_allowlist": [
       "docs/superpowers/artifacts/nzr-wave0-68b996a/**",
+      ".env.example",
+      "src/config.py",
+      "src/scrapers/base.py",
+      "src/scrapers/nekretnine.py",
+      "src/scrapers/proxy_pool.py",
+      "src/scrapers/orchestrator.py",
+      "tests/test_scrapers_nekretnine.py",
+      "tests/fixtures/nekretnine/list_snapshot.json",
+      "tests/test_proxy_pool.py",
+      "tests/test_orchestrator_snapshot.py",
+      "tests/test_render_finder_zero_regression.py",
       "git checkpoint and integration metadata only"
     ],
     "forbidden": [
@@ -50,5 +95,5 @@
     ],
     "shared_db_writes": false
   },
-  "ownership_rule": "One writer per file per batch; P0 is read-only. Any allowlist violation is an immediate STOP."
+  "ownership_rule": "One writer per file per batch; P0 remains read-only and provisional P1 is Captain-owned under the documented exception. Any allowlist violation is an immediate STOP."
 }
