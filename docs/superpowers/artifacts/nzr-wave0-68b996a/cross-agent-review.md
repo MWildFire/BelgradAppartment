@@ -40,11 +40,15 @@ the disjoint lanes locally on clean integration history:
   incomplete fallback, shadow mismatch logging, non-null existing-row merge, and full-photo swap guard.
 - `c03354e` + `9668cda`: immutable Render Finder parity tests and protected/golden hash assertions.
 
-Evidence on the integrated implementation SHA: full suite `1130 passed, 55 skipped, 34 warnings`;
+Evidence on final integrated implementation SHA `1788f86b3a2d5b850cb0a3f951dde1f75efbdf94`: full suite
+`1130 passed, 55 skipped, 34 warnings`;
 P1 parser/orchestrator gate `102 passed`; parity suite passed twice consecutively (`5 passed` each);
 pipeline probe remains `golden-0001`, confidence `1.000`, `phash`; all 13 protected hashes remain equal.
 This is implementation progress, not a release authorization: B0/B1/B2 remain blocked until a fresh
 independent QA Guardian returns PASS on the integrated SHA.
+
+The final short Guardian attempt was started after the implementation and did not return any verdict
+within 60 seconds; it was closed as a worker-runtime failure. No PASS is inferred from silence.
 
 ## Barrier decision
 
