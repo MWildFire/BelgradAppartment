@@ -135,14 +135,14 @@ UNIT
 
 cat >/etc/systemd/system/otz-nightly-refresh.service <<UNIT
 [Unit]
-Description=otz-rent-finder — nightly full refresh
+Description=otz-rent-finder — nightly incremental refresh
 OnFailure=otz-notify-failure@%n.service
 
 [Service]
 Type=oneshot
 User=$OTZ_USER
 WorkingDirectory=$OTZ_HOME
-ExecStart=/usr/bin/xvfb-run -a $OTZ_HOME/.venv/bin/python -m src.cli nightly-refresh
+ExecStart=/usr/bin/xvfb-run -a $OTZ_HOME/.venv/bin/python -m src.cli nightly-refresh --incremental --max-pages=5
 ExecStartPost=-$OTZ_HOME/.venv/bin/python -m src.cli ship-log /var/log/otz/nightly-refresh.log --label nightly-refresh
 StandardOutput=append:/var/log/otz/nightly-refresh.log
 StandardError=append:/var/log/otz/nightly-refresh.log
@@ -151,10 +151,42 @@ UNIT
 
 cat >/etc/systemd/system/otz-nightly-refresh.timer <<UNIT
 [Unit]
-Description=otz nightly full refresh (03:00 UTC = 05:00 Belgrade)
+Description=otz nightly incremental refresh (03:00 UTC = 05:00 Belgrade)
 
 [Timer]
 OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target
+UNIT
+
+cat >/etc/systemd/system/otz-weekly-full-refresh.service <<UNIT
+[Unit]
+Description=otz-rent-finder — weekly full refresh
+OnFailure=otz-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+User=$OTZ_USER
+WorkingDirectory=$OTZ_HOME
+# Browser fallback is required by Nekretnine's DataDome-protected pages. Keep this idempotent
+# guard here as well as in scrape-smoke so a cleaned Playwright cache cannot break weekly.
+ExecStartPre=$OTZ_HOME/.venv/bin/playwright install chromium
+ExecStart=/usr/bin/xvfb-run -a $OTZ_HOME/.venv/bin/python -m src.cli nightly-refresh --max-pages=500
+ExecStartPost=-$OTZ_HOME/.venv/bin/python -m src.cli ship-log /var/log/otz/nightly-refresh.log --label weekly-full-refresh
+StandardOutput=append:/var/log/otz/nightly-refresh.log
+StandardError=append:/var/log/otz/nightly-refresh.log
+TimeoutStartSec=8h
+UNIT
+
+cat >/etc/systemd/system/otz-weekly-full-refresh.timer <<UNIT
+[Unit]
+Description=otz weekly full refresh (Sunday 04:00 UTC)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
 Persistent=true
 RandomizedDelaySec=15min
 
@@ -201,6 +233,9 @@ Description=otz-rent-finder — live smoke probe (markup-change protection, A2)
 Type=oneshot
 User=$OTZ_USER
 WorkingDirectory=$OTZ_HOME
+# `playwright install` is idempotent.  It makes a fresh VPS or a cleaned cache
+# recover its browser runtime before a browser-fallback source is declared down.
+ExecStartPre=$OTZ_HOME/.venv/bin/playwright install chromium
 # xvfb-run because halooglasi's probe drives Playwright (same wrapper as monitor/nightly).
 ExecStart=/usr/bin/xvfb-run -a $OTZ_HOME/.venv/bin/python -m src.cli scrape-smoke
 ExecStartPost=-$OTZ_HOME/.venv/bin/python -m src.cli ship-log /var/log/otz/scrape-smoke.log --label scrape-smoke --lines 40
@@ -276,6 +311,7 @@ systemctl daemon-reload
 log "systemd units installed. Enable + start with:"
 log "  systemctl enable --now otz-monitor"
 log "  systemctl enable --now otz-nightly-refresh.timer"
+log "  systemctl enable --now otz-weekly-full-refresh.timer"
 log "  systemctl enable --now otz-daily-summary.timer"
 log "  systemctl enable --now otz-scrape-smoke.timer"
 
@@ -290,5 +326,5 @@ log ""
 log "Don't forget:"
 log "  1. Put .env at $OTZ_HOME/.env (mode 600)"
 log "  2. Put Telethon session at $OTZ_HOME/data/otz_monitor.session (mode 600)"
-log "  3. systemctl enable --now otz-monitor otz-nightly-refresh.timer otz-daily-summary.timer otz-scrape-smoke.timer"
+log "  3. systemctl enable --now otz-monitor otz-nightly-refresh.timer otz-weekly-full-refresh.timer otz-daily-summary.timer otz-scrape-smoke.timer"
 log "──────────────────────────────────────────"

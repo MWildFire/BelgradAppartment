@@ -9,6 +9,9 @@ After=network-online.target
 Wants=network-online.target
 # Один алерт в бот при падении (паттерн этапа H1, без крэш-лупа):
 OnFailure=otz-notify-failure@%n.service
+# Keep restart bursts bounded; systemd reads these directives from [Unit].
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -23,10 +26,6 @@ EnvironmentFile=/opt/otz/.env
 ExecStart=/opt/otz/.venv/bin/uvicorn src.site.app:app --host 127.0.0.1 --port 8001 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
 Restart=on-failure
 RestartSec=5
-# Не уходить в бесконечный рестарт-луп на фатальной ошибке конфигурации:
-StartLimitIntervalSec=300
-StartLimitBurst=5
-
 # Лёгкий sandbox (сайт только читает БД + пишет leads):
 NoNewPrivileges=true
 ProtectSystem=full

@@ -55,6 +55,9 @@ class Scraper(abc.ABC):
 
     platform: ClassVar[Platform]
     list_url: ClassVar[str]
+    # Nekretnine needs the paid proxy because its DataDome wall blocks the VPS egress. Other
+    # sources currently parse directly and must not depend on proxy availability or allowance.
+    use_scraper_proxy: ClassVar[bool] = False
 
     # --- Live-smoke / structure-fingerprint contract (feature A2) ---
     # A healthy list page yields at least this many previews; fewer trips the smoke probe.
@@ -83,7 +86,7 @@ class Scraper(abc.ABC):
     def _make_client(cls) -> httpx.AsyncClient:
         settings = get_settings()
         ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
-        proxy = settings.scraper_proxy_url or None
+        proxy = settings.scraper_proxy_url or None if cls.use_scraper_proxy else None
         return httpx.AsyncClient(
             headers={
                 "User-Agent": ua,

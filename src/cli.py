@@ -1400,19 +1400,26 @@ def admin(host: str | None, port: int | None, reload: bool) -> None:
 )
 @click.option("--skip-sweep", is_flag=True, help="Run the full scrape but skip the stale-sweep.")
 @click.option("--skip-scrape", is_flag=True, help="Skip the scrape, only do the stale-sweep.")
+@click.option(
+    "--incremental",
+    is_flag=True,
+    help="Use the cheap recent-listings walk; defer full coverage/stale-sweep to the weekly job.",
+)
 def nightly_refresh(
     max_pages: int,
     inactive_after_days: int,
     skip_sweep: bool,
     skip_scrape: bool,
+    incremental: bool,
 ) -> None:
-    """Nightly maintenance: full (non-incremental) scrape + mark stale listings inactive.
+    """Nightly maintenance: incremental daily scrape or full weekly refresh.
 
-    Runs once a night via systemd timer (otz-nightly-refresh.timer at 03:00 UTC = 05:00 Belgrade).
-    Daily runs from each new inbound post auto-scrape in incremental mode (1-5 min); this full
-    walk takes hours but guarantees the active-listings set reflects what's actually live.
+    The daily systemd job uses ``--incremental`` to keep metered proxy traffic bounded. The
+    weekly full unit omits it and performs the coverage/stale sweep.
     """
-    asyncio.run(_nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape))
+    asyncio.run(
+        _nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental)
+    )
 
 
 # Backwards-compat alias — old systemd units / scripts may still call `weekly-refresh`.
@@ -1487,7 +1494,11 @@ def _parse_rate_degraded(
 
 
 async def _nightly_refresh(
-    max_pages: int, inactive_after_days: int, skip_sweep: bool, skip_scrape: bool
+    max_pages: int,
+    inactive_after_days: int,
+    skip_sweep: bool,
+    skip_scrape: bool,
+    incremental: bool = False,
 ) -> None:
     import time as _time
 
@@ -1499,13 +1510,16 @@ async def _nightly_refresh(
     sweep_result = None
 
     if not skip_scrape:
-        click.echo(f"→ Full scrape (incremental=False, max_pages={max_pages})…")
+        click.echo(
+            f"→ {'Incremental' if incremental else 'Full'} scrape "
+            f"(incremental={incremental}, max_pages={max_pages})…"
+        )
         results = await _run_all(
             list(SCRAPERS.keys()),
             max_pages=max_pages,
             max_new=None,
             download_photos=True,
-            incremental=False,
+            incremental=incremental,
         )
         _print_summary(results)
 
@@ -1513,7 +1527,7 @@ async def _nightly_refresh(
     # walk is how 3 bad nights wipe a platform's whole active set: nothing refreshed last_seen_at,
     # so everything "ages out" even though the apartments are still live on the site.
     sweep_skipped_platforms: list[str] = []
-    if not skip_sweep:
+    if not skip_sweep and not incremental:
         click.echo(f"\n→ Marking listings inactive (not seen in last {inactive_after_days} days)…")
         healthy: list[Platform] = []
         if skip_scrape:
@@ -1549,6 +1563,8 @@ async def _nightly_refresh(
             click.echo(
                 f"  ⚠️ sweep skipped for unhealthy platforms: {', '.join(sweep_skipped_platforms)}"
             )
+    elif incremental:
+        click.echo("  ℹ️ stale sweep deferred to weekly full refresh")
 
     if skip_scrape:
         return
@@ -1645,7 +1661,7 @@ async def _nightly_refresh(
     # Coverage guard: a walk that collects far less than the site holds means pagination caps /
     # dead segments are eating the active set — the exact silent failure behind the "9000 instead
     # of 20000" incident. 70% leaves slack for ads appearing/expiring mid-walk.
-    low_coverage = [
+    low_coverage = [] if incremental else [
         f"{r.platform.value} ({r.previewed}/{r.site_total})"
         for r in results
         if r.site_total and r.previewed < 0.7 * r.site_total
@@ -1668,6 +1684,8 @@ async def _nightly_refresh(
         lines.append(f"⚠️ Частичный обход (пропущены страницы): {', '.join(degraded)}")
     if sweep_skipped_platforms:
         lines.append(f"⚠️ Sweep пропущен (нездоровый скрейп): {', '.join(sweep_skipped_platforms)}")
+    if incremental:
+        lines.append("ℹ️ Daily incremental run: stale sweep deferred to weekly full refresh")
     client = await _open_userbot_if_needed()
     try:
         # bot mode → fans out to all chat_ids; userbot mode → Saved Messages.

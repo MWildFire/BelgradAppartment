@@ -30,9 +30,13 @@ import json
 import logging
 import os
 import re
+import secrets
+import shutil
+import tempfile
 from contextlib import suppress
+from pathlib import Path
 from typing import Any, ClassVar
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
 
@@ -63,6 +67,7 @@ _NON_RETRYABLE_DETAIL_STATUSES = frozenset({401, 403, 404, 410})
 
 class NekretnineScraper(Scraper):
     platform: ClassVar[Platform] = Platform.NEKRETNINE
+    use_scraper_proxy: ClassVar[bool] = True
 
     # Resilience knobs (overridable in tests to keep them fast).
     fetch_attempts: ClassVar[int] = 3  # per-page GET attempts before declaring the page failed
@@ -105,6 +110,7 @@ class NekretnineScraper(Scraper):
         # default (anti-bot denies headless-shell); prod units already run under `xvfb-run -a`.
         self._pw: Any = None
         self._pw_context: Any = None
+        self._pw_user_data_dir: Path | None = None
         self._pw_headless = os.environ.get("NEKRETNINE_HEADLESS", "false").lower() == "true"
 
     async def list_recent(
@@ -324,15 +330,46 @@ class NekretnineScraper(Scraper):
 
         Headed by default: an anti-bot layer routinely denies the headless-shell binary. The prod
         units already wrap the CLI in `xvfb-run -a`, which is what makes headed work on the VPS.
-        Persistent profile → the `datadome` cookie survives across runs, so later pages sail through.
+        Each browser session gets a fresh profile and proxy session. This avoids carrying a
+        DataDome block from one residential IP to the next while still reusing the browser for the
+        current session's pages.
         """
         from playwright.async_api import async_playwright
         from playwright_stealth import Stealth
 
         settings = get_settings()
         ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
-        user_data_dir = settings.data_dir / "playwright" / "nekretnine"
-        user_data_dir.mkdir(parents=True, exist_ok=True)
+        profile_root = settings.data_dir / "playwright" / "nekretnine"
+        profile_root.mkdir(parents=True, exist_ok=True)
+        user_data_dir = Path(tempfile.mkdtemp(prefix="session-", dir=profile_root))
+        self._pw_user_data_dir = user_data_dir
+
+        # Playwright does not accept an httpx-style proxy URL with embedded credentials as its
+        # `server` value. Split the configured URL so the browser fallback uses the same egress as
+        # the httpx client instead of silently falling back to the blocked VPS IP.
+        browser_proxy: dict[str, str] | None = None
+        proxy_url = settings.scraper_proxy_url.strip()
+        if proxy_url:
+            parsed_proxy = urlparse(proxy_url)
+            if parsed_proxy.scheme and parsed_proxy.hostname:
+                server = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}"
+                if parsed_proxy.port:
+                    server += f":{parsed_proxy.port}"
+                browser_proxy = {"server": server}
+                if parsed_proxy.username is not None:
+                    browser_proxy["username"] = unquote(parsed_proxy.username)
+                if parsed_proxy.password is not None:
+                    password = unquote(parsed_proxy.password)
+                    # IPRoyal's residential gateway uses a password suffix to pin a 30-minute
+                    # session. Strip any stale suffix from .env and create a fresh one for every
+                    # new browser profile, so a reputation block can be escaped without exposing
+                    # credentials or requiring a dashboard interaction from the service.
+                    password = re.sub(
+                        r"_session-[A-Za-z0-9]+_lifetime-\d+[smhd]$", "", password
+                    )
+                    browser_proxy["password"] = (
+                        f"{password}_session-{secrets.token_hex(4)}_lifetime-30m"
+                    )
 
         self._pw = await async_playwright().start()
         try:
@@ -346,6 +383,7 @@ class NekretnineScraper(Scraper):
                 user_data_dir=str(user_data_dir),
                 headless=self._pw_headless,
                 user_agent=ua,
+                proxy=browser_proxy,
                 viewport={"width": 1366, "height": 900},
                 locale="sr-RS",
                 timezone_id="Europe/Belgrade",
@@ -354,11 +392,40 @@ class NekretnineScraper(Scraper):
                     "--disable-features=IsolateOrigins,site-per-process",
                 ],
             )
+            # The parser needs the document and its scripts, not the visual page.  Loading every
+            # image/font/stylesheet while using a metered residential proxy can consume more
+            # traffic than the HTML itself and was the main reason the first full refresh burned
+            # through the 2 GB allowance.  Keep scripts/XHR enabled so DataDome can settle, but
+            # abort heavyweight visual subresources before they cross the proxy.
+            await self._pw_context.route("**/*", self._route_browser_request)
         except BaseException:
             # A failed launch must not leak the playwright driver process.
             await self._pw.stop()
             self._pw = None
             raise
+
+    @staticmethod
+    async def _route_browser_request(route: Any) -> None:
+        """Keep browser fallback HTML-only while preserving anti-bot scripts and JSON payloads."""
+        if route.request.resource_type in {"image", "media", "font", "stylesheet"}:
+            await route.abort()
+            return
+        await route.continue_()
+
+    async def _stop_browser(self) -> None:
+        """Stop the fallback browser and remove its short-lived profile."""
+        if self._pw_context is not None:
+            with suppress(Exception):
+                await self._pw_context.close()
+            self._pw_context = None
+        if self._pw is not None:
+            with suppress(Exception):
+                await self._pw.stop()
+            self._pw = None
+        if self._pw_user_data_dir is not None:
+            with suppress(Exception):
+                shutil.rmtree(self._pw_user_data_dir)
+            self._pw_user_data_dir = None
 
     async def _playwright_html(self, url: str) -> str | None:
         """Refetch one detail page through a real browser. Returns HTML, or None if that failed too.
@@ -368,53 +435,61 @@ class NekretnineScraper(Scraper):
         blob, so `parse_detail` is reused verbatim. Best-effort by contract — any failure returns
         None and the caller re-raises the original 403 (never a false "listing is gone").
         """
-        try:
-            if self._pw_context is None:
-                await self._start_browser()
-            page = await self._pw_context.new_page()
+        for session_attempt in range(3):
             try:
-                resp = await page.goto(url, wait_until="domcontentloaded", timeout=self.pw_timeout_ms)
-                for attempt in range(self.pw_challenge_reloads + 1):
-                    status = resp.status if resp is not None else None
-                    html = await page.content()
-                    if (status is None or status < 400) and self._has_browser_payload(url, html):
-                        return html
-
-                    if attempt == self.pw_challenge_reloads:
-                        logger.warning(
-                            "[nekretnine] playwright fallback %s → HTTP %s; no detail payload "
-                            "after %d challenge reloads",
-                            url, status, self.pw_challenge_reloads,
-                        )
-                        return None
-
-                    logger.info(
-                        "[nekretnine] playwright fallback %s → HTTP %s/no payload; "
-                        "waiting %dms before challenge reload %d/%d",
-                        url, status, self.pw_challenge_wait_ms, attempt + 1,
-                        self.pw_challenge_reloads,
+                if self._pw_context is None:
+                    await self._start_browser()
+                page = await self._pw_context.new_page()
+                try:
+                    resp = await page.goto(
+                        url, wait_until="domcontentloaded", timeout=self.pw_timeout_ms
                     )
-                    await page.wait_for_timeout(self.pw_challenge_wait_ms)
-                    resp = await page.reload(wait_until="domcontentloaded", timeout=self.pw_timeout_ms)
-            finally:
-                await page.close()
-        except Exception as e:  # noqa: BLE001 — fallback is best-effort; caller re-raises the 403
-            logger.warning(
-                "[nekretnine] playwright fallback failed for %s: %s: %s", url, type(e).__name__, e
-            )
-            return None
+                    for attempt in range(self.pw_challenge_reloads + 1):
+                        status = resp.status if resp is not None else None
+                        html = await page.content()
+                        if (status is None or status < 400) and self._has_browser_payload(url, html):
+                            return html
+
+                        if attempt == self.pw_challenge_reloads:
+                            logger.warning(
+                                "[nekretnine] playwright fallback %s → HTTP %s; no detail payload "
+                                "after %d challenge reloads",
+                                url, status, self.pw_challenge_reloads,
+                            )
+                            break
+
+                        logger.info(
+                            "[nekretnine] playwright fallback %s → HTTP %s/no payload; "
+                            "waiting %dms before challenge reload %d/%d",
+                            url, status, self.pw_challenge_wait_ms, attempt + 1,
+                            self.pw_challenge_reloads,
+                        )
+                        await page.wait_for_timeout(self.pw_challenge_wait_ms)
+                        resp = await page.reload(
+                            wait_until="domcontentloaded", timeout=self.pw_timeout_ms
+                        )
+                finally:
+                    await page.close()
+            except Exception as e:  # noqa: BLE001 — fallback is best-effort; caller re-raises 403
+                logger.warning(
+                    "[nekretnine] playwright fallback failed for %s: %s: %s",
+                    url, type(e).__name__, e,
+                )
+
+            if session_attempt < 2:
+                logger.info(
+                    "[nekretnine] rotating browser proxy session after challenge (%d/2)",
+                    session_attempt + 1,
+                )
+                await self._stop_browser()
+            else:
+                return None
+        return None
 
     async def aclose(self) -> None:
         """Close the httpx client (base) AND the fallback browser, if one was ever started."""
         await super().aclose()
-        if self._pw_context is not None:
-            with suppress(Exception):
-                await self._pw_context.close()
-            self._pw_context = None
-        if self._pw is not None:
-            with suppress(Exception):
-                await self._pw.stop()
-            self._pw = None
+        await self._stop_browser()
 
     async def _fetch_page(self, url: str) -> str | None:
         """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed.

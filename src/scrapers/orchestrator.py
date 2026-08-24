@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import func, select, update
@@ -280,16 +281,16 @@ def _make_side_client(
     *,
     headers: dict[str, str] | None = None,
     timeout: httpx.Timeout | float = 30.0,
+    use_proxy: bool = False,
 ) -> httpx.AsyncClient:
     """httpx client for the orchestrator's non-scraper side traffic — photo downloads and the
     verify-links HEAD sweep.
 
-    Honors SCRAPER_PROXY_URL exactly like the scrapers' own client (`base._make_client`): when an IP
-    block forces the scrapers behind a proxy, photo fetches and HEAD checks that still exit from the
-    blocked VPS IP defeat the point — every verify-links HEAD would come back 403 (inconclusive) and
-    photos would keep 403-ing too. T1-5.
+    Proxy use is explicit at each call site and reserved for Nekretnine. Other platforms and their
+    CDN/HEAD traffic stay on the direct VPS route so an unavailable or exhausted proxy cannot take
+    down the weekly refresh.
     """
-    proxy = get_settings().scraper_proxy_url or None
+    proxy = get_settings().scraper_proxy_url or None if use_proxy else None
     return httpx.AsyncClient(
         follow_redirects=True,
         timeout=timeout,
@@ -314,9 +315,16 @@ async def _download_photos(
     sem = asyncio.Semaphore(4)
     results: list[tuple[int, Path, str] | None] = [None] * len(detail.photo_urls)
 
+    # Nekretnine's CDN is not behind the DataDome page wall: direct VPS requests return 200
+    # while the listing pages return 403.  Keep those large immutable image transfers off the
+    # metered residential proxy; other platforms retain the configured proxy path.
+    direct_nekretnine_cdn = detail.platform == Platform.NEKRETNINE and bool(detail.photo_urls) and all(
+        urlparse(url).hostname == "pic.nekretnine.rs" for url in detail.photo_urls
+    )
     async with _make_side_client(
         headers=headers,
         timeout=httpx.Timeout(30.0, connect=10.0),
+        use_proxy=detail.platform == Platform.NEKRETNINE and not direct_nekretnine_cdn,
     ) as client:
         async def _one(idx: int, url: str) -> None:
             async with sem:
@@ -530,16 +538,24 @@ async def verify_active_links(
                     platform.value if platform else "all")
         return stats
 
-    owns_client = client is None
-    if owns_client:
+    owns_clients = client is None
+    owned_clients: dict[Platform, httpx.AsyncClient] = {}
+    if owns_clients:
         from src.scrapers.base import DEFAULT_USER_AGENT
 
         ua = get_settings().scraper_user_agent or DEFAULT_USER_AGENT
-        client = _make_side_client(headers={"User-Agent": ua}, timeout=10.0)
+        for row in rows:
+            if row.platform not in owned_clients:
+                owned_clients[row.platform] = _make_side_client(
+                    headers={"User-Agent": ua},
+                    timeout=10.0,
+                    use_proxy=row.platform == Platform.NEKRETNINE,
+                )
 
     async def _check_one(row: Any) -> None:
         try:
-            resp = await client.head(row.url, timeout=10.0)
+            check_client = client if client is not None else owned_clients[row.platform]
+            resp = await check_client.head(row.url, timeout=10.0)
         except Exception as e:
             stats.errors += 1
             logger.warning(
@@ -589,8 +605,8 @@ async def verify_active_links(
         await asyncio.gather(*(_worker() for _ in range(min(4, len(rows)))))
         stats.skipped = len(rows) - stats.checked
     finally:
-        if owns_client:
-            await client.aclose()
+        if owns_clients:
+            await asyncio.gather(*(owned.aclose() for owned in owned_clients.values()))
 
     logger.info(
         "[verify-links] checked=%d deactivated=%d errors=%d skipped=%d (platform=%s)",

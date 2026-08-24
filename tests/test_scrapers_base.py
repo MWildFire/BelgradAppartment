@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import pytest
 
+from src.config import get_settings
 from src.scrapers.base import DEFAULT_USER_AGENT, Scraper
+from src.scrapers.cetiri_zida import CetiriZidaScraper
+from src.scrapers.nekretnine import NekretnineScraper
 
 
 @pytest.mark.asyncio
@@ -33,3 +36,21 @@ async def test_make_client_sends_browser_shaped_headers() -> None:
         assert h["Accept-Language"].startswith("sr")
     finally:
         await client.aclose()
+
+
+def test_proxy_is_reserved_for_nekretnine(monkeypatch) -> None:
+    """Configured proxy must not leak into sources that work directly from the VPS."""
+    captured: list[dict] = []
+
+    class _SpyClient:
+        def __init__(self, **kwargs):
+            captured.append(kwargs)
+
+    monkeypatch.setattr("src.scrapers.base.httpx.AsyncClient", _SpyClient)
+    monkeypatch.setattr(get_settings(), "scraper_proxy_url", "http://eu-proxy:3128")
+
+    NekretnineScraper._make_client()
+    CetiriZidaScraper._make_client()
+
+    assert captured[0]["proxy"] == "http://eu-proxy:3128"
+    assert captured[1]["proxy"] is None

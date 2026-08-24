@@ -32,7 +32,7 @@ from sqlalchemy import select
 
 from src.config import get_settings
 from src.db import Listing, Match, get_session
-from src.db.models import SiteListing
+from src.db.models import Platform, SiteListing
 from src.scrapers.orchestrator import (
     _DEAD_LINK_STATUSES,
     _make_side_client,
@@ -112,7 +112,8 @@ async def site_liveness_sweep(
 
     HEADs only INACTIVE dup-group members (active members are ACTIVE without a network call), and
     each distinct URL at most once per sweep. `client` is injectable (like verify_active_links); when
-    omitted a proxy-aware side client is built (T1-5) so an IP block routes HEADs via the proxy.
+    omitted per-platform side clients are built: only Nekretnine HEADs use the paid proxy; all
+    other platforms stay on the direct VPS route.
     `dry_run` computes the exact same decisions but mutates nothing (the hidden list becomes
     would-hide). Auto-hide is gated by SITE_LIVENESS_AUTO_HIDE (D1) and capped by
     SITE_LIVENESS_MAX_HIDES (D3); overflow spills into candidates_confirmed.
@@ -127,6 +128,7 @@ async def site_liveness_sweep(
                     SiteListing.id.label("sl_id"),
                     SiteListing.keep_on_site,
                     Listing.id.label("listing_id"),
+                    Listing.platform,
                     Listing.dup_group_id,
                     Listing.is_active,
                     Listing.url,
@@ -148,61 +150,78 @@ async def site_liveness_sweep(
         # last dup_group_id (dedup only resets ACTIVE listings), so a card whose own listing went
         # inactive still resolves to the group that holds its still-active platform siblings.
         group_ids = {r.dup_group_id for r in card_rows if r.dup_group_id is not None}
-        members_by_group: dict[int, list[tuple[int, bool, str]]] = {}
+        members_by_group: dict[int, list[tuple[int, bool, str, Platform]]] = {}
         if group_ids:
             for m in (
                 await s.execute(
-                    select(Listing.id, Listing.dup_group_id, Listing.is_active, Listing.url).where(
+                    select(
+                        Listing.id,
+                        Listing.dup_group_id,
+                        Listing.is_active,
+                        Listing.url,
+                        Listing.platform,
+                    ).where(
                         Listing.dup_group_id.in_(group_ids)
                     )
                 )
             ).all():
-                members_by_group.setdefault(m.dup_group_id, []).append((m.id, m.is_active, m.url))
+                members_by_group.setdefault(m.dup_group_id, []).append(
+                    (m.id, m.is_active, m.url, m.platform)
+                )
 
     # Build per-card member lists (dup-group members, or the lone listing for a NULL group).
-    card_members: dict[int, list[tuple[int, bool, str]]] = {}
+    card_members: dict[int, list[tuple[int, bool, str, Platform]]] = {}
     for r in card_rows:
         if r.dup_group_id is not None and members_by_group.get(r.dup_group_id):
             card_members[r.sl_id] = members_by_group[r.dup_group_id]
         else:
-            card_members[r.sl_id] = [(r.listing_id, r.is_active, r.url)]
+            card_members[r.sl_id] = [(r.listing_id, r.is_active, r.url, r.platform)]
 
     # HEAD every distinct INACTIVE member URL once (active members need no network call).
-    inactive_urls = {
-        url
+    inactive_targets = {
+        (url, platform)
         for members in card_members.values()
-        for (_lid, is_active, url) in members
+        for (_lid, is_active, url, platform) in members
         if not is_active
     }
     url_status: dict[str, str] = {}
-    if inactive_urls:
-        owns_client = client is None
-        if owns_client:
+    if inactive_targets:
+        owns_clients = client is None
+        owned_clients: dict[Platform, httpx.AsyncClient] = {}
+        if owns_clients:
             from src.scrapers.base import DEFAULT_USER_AGENT
 
             ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
-            client = _make_side_client(headers={"User-Agent": ua}, timeout=10.0)
+            for _url, platform in inactive_targets:
+                if platform not in owned_clients:
+                    owned_clients[platform] = _make_side_client(
+                        headers={"User-Agent": ua},
+                        timeout=10.0,
+                        use_proxy=platform == Platform.NEKRETNINE,
+                    )
         try:
-            for url in inactive_urls:
-                status, errored = await _head_liveness(client, url)
+            for url, platform in inactive_targets:
+                check_client = client if client is not None else owned_clients[platform]
+                status, errored = await _head_liveness(check_client, url)
                 url_status[url] = status
                 if errored:
                     report.errors += 1
         finally:
-            if owns_client:
-                await client.aclose()
+            if owns_clients:
+                for owned in owned_clients.values():
+                    await owned.aclose()
 
     for r in card_rows:
         members = card_members[r.sl_id]
-        any_active = any(is_active for (_lid, is_active, _url) in members)
+        any_active = any(is_active for (_lid, is_active, _url, _platform) in members)
         dead = sum(
             1
-            for (_lid, is_active, url) in members
+            for (_lid, is_active, url, _platform) in members
             if not is_active and url_status.get(url) == _DEAD
         )
         inconclusive = sum(
             1
-            for (_lid, is_active, url) in members
+            for (_lid, is_active, url, _platform) in members
             if not is_active and url_status.get(url) == _INCONCLUSIVE
         )
         candidate = LivenessCandidate(

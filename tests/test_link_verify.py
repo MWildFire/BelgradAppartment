@@ -561,7 +561,7 @@ async def test_make_side_client_uses_proxy_when_configured(monkeypatch):
             captured.update(kw)
 
     monkeypatch.setattr(orch.httpx, "AsyncClient", _Spy)
-    orch._make_side_client(headers={"User-Agent": "x"}, timeout=10.0)
+    orch._make_side_client(headers={"User-Agent": "x"}, timeout=10.0, use_proxy=True)
     assert captured["proxy"] == "http://eu-proxy:3128"
     assert captured["headers"] == {"User-Agent": "x"}
     assert captured["follow_redirects"] is True
@@ -586,9 +586,7 @@ async def test_make_side_client_no_proxy_when_unset(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypatch):
-    """T1-5 (call site): when verify_active_links owns its client (client=None), the HEAD checks must
-    exit via SCRAPER_PROXY_URL — under an IP block, HEAD-ing from the blocked VPS IP defeats the
-    whole reason to rent the proxy (every URL would come back 403 = inconclusive = nothing verified)."""
+    """Owned liveness client uses proxy only for Nekretnine URLs."""
     from src.config import get_settings
 
     monkeypatch.setattr(get_settings(), "scraper_proxy_url", "http://eu-proxy:3128")
@@ -610,6 +608,39 @@ async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypat
     await _seed_listing(factory, url="https://nekretnine.rs/live/")
     stats = await verify_active_links()  # client=None → owns_client path builds via _make_side_client
     assert captured.get("proxy") == "http://eu-proxy:3128"
+    assert stats.checked == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_links_owned_client_bypasses_proxy_for_other_platform(factory, monkeypatch):
+    """A direct source must not depend on the paid proxy during the weekly liveness sweep."""
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "scraper_proxy_url", "http://eu-proxy:3128")
+    captured: list[dict] = []
+
+    class _SpyClient:
+        def __init__(self, **kw):
+            captured.append(kw)
+
+        async def head(self, url, **kw):
+            return httpx.Response(200, request=httpx.Request("HEAD", url))
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(orch.httpx, "AsyncClient", _SpyClient)
+    await _seed_listing(
+        factory,
+        url="https://cityexpert.rs/live/",
+        external_id="cityexpert-ext1",
+        platform=Platform.CITYEXPERT,
+    )
+
+    stats = await verify_active_links()
+
+    assert len(captured) == 1
+    assert captured[0]["proxy"] is None
     assert stats.checked == 1
 
 
