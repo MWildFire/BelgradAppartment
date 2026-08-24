@@ -30,7 +30,7 @@ from src.config import get_settings
 from src.db import Listing, get_session
 from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
 from src.matching.phash import download_and_hash
-from src.scrapers.base import ListingDetail, Scraper
+from src.scrapers.base import ListingDetail, ListingPreview, Scraper
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,11 @@ async def scrape_platform(
             break
         try:
             inserted, photos, fetched_detail = await _process_one(
-                scraper, prev.url, prev.external_id, download_photos=download_photos
+                scraper,
+                prev.url,
+                prev.external_id,
+                download_photos=download_photos,
+                preview=prev,
             )
         except _EmptyShellError:
             # The all-None-shell guard fired: a detail WAS fetched but the parser couldn't read it
@@ -201,12 +205,20 @@ class _EmptyShellError(RuntimeError):
 
 
 async def _process_one(
-    scraper: Scraper, url: str, external_id: str, *, download_photos: bool
+    scraper: Scraper,
+    url: str,
+    external_id: str,
+    *,
+    download_photos: bool,
+    preview: ListingPreview | None = None,
 ) -> tuple[bool | None, int, bool]:
     """Return (inserted, photos_downloaded, fetched_detail): inserted is True for a new Listing,
     False when an existing row was refreshed, None if skipped. fetched_detail is True only on the
     path that actually called scraper.fetch_detail and parsed a non-shell detail (re-seen rows
     return False — they must not count as a parse attempt)."""
+    snapshot = _complete_snapshot_for(scraper, preview)
+    snapshot_mode = _snapshot_mode(scraper)
+
     async with get_session() as session:
         existing = (
             await session.execute(
@@ -218,6 +230,7 @@ async def _process_one(
         ).scalar_one_or_none()
 
     if existing is not None:
+        photo_update_needed = False
         async with get_session() as session:
             stmt = select(Listing).where(Listing.id == existing.id)
             row = (await session.execute(stmt)).scalar_one()
@@ -234,9 +247,36 @@ async def _process_one(
             # active listings.
             if not row.is_active:
                 row.is_active = True
+            if snapshot_mode == "active" and snapshot is not None:
+                _merge_snapshot_scalars(row, snapshot)
+                photo_update_needed = row.photo_urls != snapshot.photo_urls
+
+        if photo_update_needed and download_photos and snapshot is not None:
+            photo_paths, photo_hashes, embeddings_blob = await _download_photos(snapshot)
+            # Never replace a complete existing album with a partial download. The next scrape
+            # will retry the same snapshot while preserving the old URLs/hashes/embeddings.
+            if len(photo_paths) == len(snapshot.photo_urls):
+                async with get_session() as session:
+                    row = (await session.execute(select(Listing).where(Listing.id == existing.id))).scalar_one()
+                    row.photo_urls = snapshot.photo_urls
+                    row.photo_phashes = photo_hashes
+                    row.photo_embeddings = embeddings_blob
+                return False, len(photo_paths), False
+            logger.warning(
+                "[%s] snapshot photo swap skipped after partial download external_id=%s",
+                scraper.platform.value,
+                external_id,
+            )
         return False, 0, False
 
-    detail = await scraper.fetch_detail(url)
+    if snapshot_mode == "active" and snapshot is not None:
+        detail = snapshot
+        fetched_detail = False
+    else:
+        detail = await scraper.fetch_detail(url)
+        fetched_detail = True
+        if snapshot_mode == "shadow" and snapshot is not None:
+            _log_snapshot_mismatch(snapshot, detail)
 
     if not detail.photo_urls and detail.price_eur is None and detail.title is None:
         # All-None shell — the detail fetch "succeeded" on a challenge/error page or a payload
@@ -274,7 +314,64 @@ async def _process_one(
             details_refreshed_at=datetime.now(timezone.utc),
         )
         session.add(listing)
-    return True, len(photo_paths), True
+    return True, len(photo_paths), fetched_detail
+
+
+def _snapshot_mode(scraper: Scraper) -> str:
+    """Read the Nekretnine mode without changing behavior for the other platforms."""
+    if scraper.platform != Platform.NEKRETNINE:
+        return "legacy"
+    return get_settings().nekretnine_list_snapshot_mode
+
+
+def _complete_snapshot_for(
+    scraper: Scraper, preview: ListingPreview | None
+) -> ListingDetail | None:
+    if preview is None or scraper.platform != Platform.NEKRETNINE or preview.snapshot is None:
+        return None
+    from src.scrapers.nekretnine import NekretnineScraper
+
+    return preview.snapshot if NekretnineScraper.is_snapshot_complete(preview.snapshot) else None
+
+
+def _merge_snapshot_scalars(row: Listing, snapshot: ListingDetail) -> None:
+    """Merge only non-null snapshot values; an incomplete upstream never clears DB truth."""
+    for field_name in (
+        "price_eur",
+        "area_m2",
+        "rooms",
+        "district",
+        "address_raw",
+        "lat",
+        "lon",
+        "title",
+    ):
+        value = getattr(snapshot, field_name)
+        if value is not None:
+            setattr(row, field_name, value)
+    if snapshot.url:
+        row.url = snapshot.url
+
+
+def _log_snapshot_mismatch(snapshot: ListingDetail, detail: ListingDetail) -> None:
+    fields = (
+        "price_eur",
+        "area_m2",
+        "rooms",
+        "district",
+        "address_raw",
+        "lat",
+        "lon",
+        "title",
+        "photo_urls",
+    )
+    mismatches = [field_name for field_name in fields if getattr(snapshot, field_name) != getattr(detail, field_name)]
+    if mismatches:
+        logger.warning(
+            "[nekretnine] snapshot shadow mismatch external_id=%s fields=%s",
+            snapshot.external_id,
+            ",".join(mismatches),
+        )
 
 
 def _make_side_client(
