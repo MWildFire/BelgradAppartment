@@ -679,6 +679,15 @@ exact integrated SHA после allowlist check, cross-review, независи�
 записана; golden/parity corpus заморожен до implementation; `INTERFACE FREEZE` опубликован; ownership
 не пересекается. С неизвестным красным baseline не продолжать и write-access агентам не выдавать.
 
+**Captain exception — 2026-08-24, по прямому указанию Дмитрия:** независимый QA Guardian был повторно
+перезапущен после закрытия шести завершённых worker-ов, но один runtime завис на полном прогоне, а
+bounded replacement завершился после проверки только exact HEAD и не успел выполнить остальные checks.
+Это не является B0 PASS. Чтобы не оставлять implementation неподвижной из-за недоступного worker
+runtime, Captain открывает provisional P1 write batch на clean `aeb8a87` с сохранением всех protected
+hashes и без production/Chrome/payment действий. Provisional P1 commits не могут закрыть B0/B1/B2,
+не могут быть merged в release wiring и требуют fresh independent QA на exact integrated SHA перед
+любым deployment или activation.
+
 ---
 
 ## 4. Wave 1 — тесты list snapshot (TDD, production не трогать)
