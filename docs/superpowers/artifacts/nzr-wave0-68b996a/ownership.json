@@ -1,0 +1,54 @@
+{
+  "batch": "P0/Wave 0",
+  "base_sha": "68b996a8c23da5f7dd5607f54d7b296980725b48",
+  "integration_branch": "codex/nzr-integration",
+  "worker_slots": {
+    "agent_a": {
+      "role": "snapshot_parser dirty-diff audit",
+      "worktree": "/Users/mvstrike/Projects/BelgradAppartment/.claude/worktrees/nzr-p0-a",
+      "write_allowlist": [],
+      "status": "STOPPED_PRE_CORRECTION_REVIEW; captain reverified corrected corpus"
+    },
+    "agent_b": {
+      "role": "proxy_config dirty-diff audit",
+      "worktree": "/Users/mvstrike/Projects/BelgradAppartment/.claude/worktrees/nzr-p0-b",
+      "write_allowlist": [],
+      "status": "STOPPED_PRE_PLAN_UPDATE; captain amended plan"
+    },
+    "agent_c": {
+      "role": "zero_regression_qa baseline and Merge Guardian",
+      "worktree": "/Users/mvstrike/Projects/BelgradAppartment/.claude/worktrees/nzr-p0-c",
+      "write_allowlist": [],
+      "status": "STOPPED_STALE_FINAL_REVIEW; fresh worker unavailable due tool thread limit"
+    }
+  },
+  "captain": {
+    "worktree": "/Users/mvstrike/Projects/BelgradAppartment",
+    "write_allowlist": [
+      "docs/superpowers/artifacts/nzr-wave0-68b996a/**",
+      "git checkpoint and integration metadata only"
+    ],
+    "forbidden": [
+      "src/telegram/**",
+      "src/jobs/pipeline.py",
+      "src/post/template.py",
+      "src/matching/**",
+      "production .env and secrets",
+      "production DB writes",
+      "Chrome checkout/payment",
+      "Telegram sends"
+    ]
+  },
+  "reserved_paths": {
+    "temp_root": "/tmp/otz-nzr-wave0-68b996a",
+    "db_root": "/tmp/otz-nzr-wave0-68b996a/db",
+    "report_root": "/tmp/otz-nzr-wave0-68b996a/reports",
+    "cache_roots": [
+      "/tmp/otz-nzr-wave0-68b996a/cache-a",
+      "/tmp/otz-nzr-wave0-68b996a/cache-b",
+      "/tmp/otz-nzr-wave0-68b996a/cache-c"
+    ],
+    "shared_db_writes": false
+  },
+  "ownership_rule": "One writer per file per batch; P0 is read-only. Any allowlist violation is an immediate STOP."
+}

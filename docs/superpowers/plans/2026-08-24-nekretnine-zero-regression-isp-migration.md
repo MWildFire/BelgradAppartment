@@ -262,7 +262,11 @@ NEKRETNINE_LIST_SNAPSHOT_MODE=legacy|shadow|active
 
 - `scrape-smoke` продолжает проверять хотя бы один реальный Nekretnine detail;
 - Nekretnine остаётся в rolling detail/heal;
-- `verify_active_links` и `site_liveness` не меняются;
+- `verify_active_links` и `site_liveness` не меняют алгоритм, DB semantics или fail-safe rules. Их
+  текущий transport baseline также заморожен: Nekretnine `verify_active_links` уже использует
+  настроенный scraper proxy после H1 hardening (это отражено в HANDOFF §0.-7), тогда как остальные
+  платформы остаются direct. Snapshot migration не расширяет этот liveness scope и не переключает
+  transport;
 - stale sweep health/coverage gates не меняются;
 - другие три scraper не получают snapshot-специфичных веток.
 
@@ -291,7 +295,9 @@ NEKRETNINE_PROXY_KIND=legacy_rotating|static_isp
 - failover только после bounded browser challenge/reload failure, не на каждой странице;
 - новый proxy получает новый browser profile/cookies;
 - proxy URLs/passwords никогда не попадают в repr/log/error/Telegram summary;
-- 4zida/Halooglasi/CityExpert/direct CDN остаются direct.
+- 4zida/Halooglasi/CityExpert и прямой Nekretnine CDN остаются direct. Для liveness сохраняется
+  описанный выше pre-migration transport baseline: Nekretnine verify-links proxy path не меняется,
+  остальные platform HEAD paths direct; новые snapshot proxy selectors туда не протекают.
 
 Добавить run telemetry без секретов:
 

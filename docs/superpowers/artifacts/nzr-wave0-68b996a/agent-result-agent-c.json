@@ -1,0 +1,15 @@
+{
+  "lane": "P0 / Agent C / zero_regression_qa Merge Guardian",
+  "base_sha": "68b996a8c23da5f7dd5607f54d7b296980725b48",
+  "worktree": "/Users/mvstrike/Projects/BelgradAppartment/.claude/worktrees/nzr-p0-c",
+  "initial_status": "STOPPED_MISSING_FULL_GOLDEN",
+  "final_status": "STOPPED_STALE_ARTIFACT_REVIEW",
+  "changed_files": [],
+  "baseline_tests": "1108 passed, 55 skipped, 34 warnings; 1163 collected; protected shard 86 passed",
+  "pipeline_probe": "PASS; golden-0001; confidence 1.000; phash",
+  "captain_resolution": "Captain created and corrected immutable golden manifest, fixed hash/field bookkeeping, and reverified locally.",
+  "fresh_independent_pass": false,
+  "blocker": "A fresh Agent C review after the final correction could not be dispatched because the multi-agent tool reached its thread limit.",
+  "protected_hashes_unchanged": true,
+  "side_effects": "none"
+}

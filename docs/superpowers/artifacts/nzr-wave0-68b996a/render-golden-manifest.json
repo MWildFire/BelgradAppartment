@@ -1,0 +1,151 @@
+{
+  "manifest_id": "nzr-b0-render-0001",
+  "status": "IMMUTABLE_WAVE0_GOLDEN",
+  "captured_at": "2026-08-24T16:40:33+04:00",
+  "base_sha": "68b996a8c23da5f7dd5607f54d7b296980725b48",
+  "purpose": "Zero-regression oracle for independent list/detail inputs through the existing matcher and Render Finder Bot contract.",
+  "raw_fixture_hashes": {
+    "nekretnine_list_html": {
+      "path": "tests/fixtures/nekretnine/list.html",
+      "sha256": "9837dd096a938eb60cb5355a00a9a0dfee0ad215039e6dd57b17e21991038967"
+    },
+    "nekretnine_detail_html": {
+      "path": "tests/fixtures/nekretnine/detail.html",
+      "sha256": "5e4a197ff3387d81d8cea864ba706e16e82be5794a6246487af973f7c98d6143"
+    },
+    "inbound_media": [
+      {
+        "path": "tests/fixtures/golden/photo_a.png",
+        "sha256": "bcaa984b2d90a8a7158529376b7e3d27b69250dfdf4882edcaf0c690b8e6bcf5"
+      },
+      {
+        "path": "tests/fixtures/golden/photo_b.png",
+        "sha256": "1c32a1e1be2d50aee09a1e558fc2f69fc0b5a5f1ae73ffbdb4c2e048fbf379c3"
+      }
+    ]
+  },
+  "independent_inputs": {
+    "legacy_detail": {
+      "source_fixture": "tests/fixtures/nekretnine/detail.html",
+      "external_id": "468187",
+      "url": "https://www.nekretnine.rs/oglasi/468187/",
+      "price_eur": 350,
+      "area_m2": 50,
+      "rooms": 2,
+      "district": "Obrenovac Centar",
+      "address_raw": "Kralja Petra I",
+      "lat": 44.65459824,
+      "lon": 20.19910049,
+      "title": "Dvosobni stan Kralja Petra I, Obrenovac Centar, Beograd",
+      "photo_urls": [
+        "https://pic.nekretnine.rs/image/12118987/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119011/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119023/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119037/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119047/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119061/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119081/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119089/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119107/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119117/xxl.jpg"
+      ]
+    },
+    "list_snapshot": {
+      "source_fixture": "tests/fixtures/nekretnine/list.html",
+      "derivation": "independent list realEstate payload; xxl URLs are derived from photo.id as required by the frozen snapshot contract",
+      "external_id": "468187",
+      "url": "https://www.nekretnine.rs/oglasi/468187/",
+      "price_eur": 350,
+      "area_m2": 50,
+      "rooms": 2,
+      "district": "Obrenovac Centar",
+      "address_raw": "Kralja Petra I",
+      "lat": 44.65459824,
+      "lon": 20.19910049,
+      "title": "Dvosobni stan Kralja Petra I, Obrenovac Centar, Beograd",
+      "photo_urls": [
+        "https://pic.nekretnine.rs/image/12118987/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119011/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119023/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119037/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119047/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119061/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119081/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119089/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119107/xxl.jpg",
+        "https://pic.nekretnine.rs/image/12119117/xxl.jpg"
+      ]
+    },
+    "equality_rule": "These objects are independently sourced representations; equality is asserted field-by-field after parsing, never by sharing a normalized object."
+  },
+  "expected_match": {
+    "corpus": "tests/fixtures/golden/photo_a.png + photo_b.png via src.cli pipeline-probe",
+    "status": "matched",
+    "listing_external_id": "golden-0001",
+    "listing_db_id": "opaque runtime integer; not part of parity",
+    "method": "phash",
+    "matched_photo_count": 2,
+    "confidence": 1.0,
+    "confidence_comparison": "exact"
+  },
+  "expected_render": {
+    "corpus": "independent fixture identity 468187 rendered with the protected template; inbound media remain the two committed golden PNGs",
+    "listing_platform": "NEKRETNINE",
+    "listing_url": "https://www.nekretnine.rs/oglasi/468187/",
+    "source_link": "https://t.me/golden-probe/1",
+    "inbound_media_order": [
+      "tests/fixtures/golden/photo_a.png",
+      "tests/fixtures/golden/photo_b.png"
+    ],
+    "rendered_text_sha256": "bdecb7da249b6c0158874f851e5b431961c0c434bfc048fd711f0eceda41385c",
+    "rendered_text": "Цена: 350 евро + залог + комиссия риэлтора 50%\nПлощадь: 50 м²\nДоступна с: 1 сентября\nЛокация: https://yandex.com/maps/?text=Kralja%20Petra%20I%2C%20Beograd&ll=20.19910049,44.65459824&z=17\n\n#Obrenovac #до600 #2k #квартирыOtz\n\nЕсли квартира, которая вам приглянулась, уже сдана или вы не нашли подходящий вариант в нашем канале, напишите @Darya_kralj, и мы обязательно подберем квартиру под ваши персональные предпочтения.",
+    "full_caption_sha256": "7a9a27c88bd40a96cf7d7403a3d88d67bfd20ac26557db04756abc20a28e6ddd",
+    "full_caption_utf8_bytes": 917,
+    "full_caption": "🏠 Кандидат на @RentBelgrad — NEKRETNINE\n🔗 площадка: https://www.nekretnine.rs/oglasi/468187/\n📥 источник: https://t.me/golden-probe/1\n🎯 совпало фото: 2 (conf 1.00, phash)\n\n─── готовый текст ↓ ───\n\nЦена: 350 евро + залог + комиссия риэлтора 50%\nПлощадь: 50 м²\nДоступна с: 1 сентября\nЛокация: https://yandex.com/maps/?text=Kralja%20Petra%20I%2C%20Beograd&ll=20.19910049,44.65459824&z=17\n\n#Obrenovac #до600 #2k #квартирыOtz\n\nЕсли квартира, которая вам приглянулась, уже сдана или вы не нашли подходящий вариант в нашем канале, напишите @Darya_kralj, и мы обязательно подберем квартиру под ваши персональные предпочтения."
+  },
+  "expected_delivery": {
+    "state_transition": "PENDING -> PUBLISHED",
+    "published_post_created": true,
+    "recipient_fanout": "same configured recipients; no recipient values stored",
+    "media_order_and_count": "same two inbound files in the order above",
+    "listing_photo_substitution": false
+  },
+  "negative_controls": [
+    {
+      "id": "missing-address",
+      "mutation": "list_snapshot.address_raw = null",
+      "expected": "snapshot incomplete; mandatory legacy detail fallback; no coords-only replacement"
+    },
+    {
+      "id": "missing-photo",
+      "mutation": "list_snapshot.photo_urls = []",
+      "expected": "snapshot incomplete; mandatory legacy detail fallback; no empty-photo shell"
+    },
+    {
+      "id": "photo-order-drift",
+      "mutation": "reverse inbound_media_order",
+      "expected": "parity failure; ordered media mismatch must be visible"
+    },
+    {
+      "id": "caption-drift",
+      "mutation": "change any rendered field or header line",
+      "expected": "full_caption_sha256 mismatch; STOP"
+    },
+    {
+      "id": "proxy-config-drift",
+      "mutation": "malformed required proxy URL or invalid static_isp mode",
+      "expected": "fail-closed configuration/selection error; never silent direct VPS traffic"
+    },
+    {
+      "id": "protected-contract-drift",
+      "mutation": "change any protected Telegram/matching blob",
+      "expected": "protected hash mismatch; STOP"
+    }
+  ],
+  "invariants": [
+    "No Telegram network call is made by this manifest/probe.",
+    "No production DB or local authoritative DB is used by this manifest/probe.",
+    "The manifest is not regenerated from implementation output after a code change.",
+    "Any mismatch is a failure, not a tolerance opportunity."
+  ]
+}
