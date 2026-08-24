@@ -17,6 +17,16 @@ Base: `68b996a8c23da5f7dd5607f54d7b296980725b48`
 - Baseline remains `1108 passed, 55 skipped`, `1163 collected`, `pipeline-probe` PASS.
 - Production read-only evidence remains endpoints `200/401`, Alembic `0011`, SQLite `quick_check ok`, and latest service results success; no production action was taken.
 
+## Captain-side revalidation at 2026-08-24 17:52 GST
+
+- A detached validation worktree at exact `2a6e59e1a59dca860a885c664ac9fad40c822739` reproduced
+  `1108 passed, 55 skipped, 34 warnings` and the golden pipeline probe
+  `listing=golden-0001`, `confidence=1.000`, `method=phash`.
+- The golden manifest sidecar SHA-256 and the embedded baseline SHA-256 match; all 13 protected blob
+  hashes match, `git diff --check` is clean, and the validation worktree is clean.
+- `ruff check src tests` reports 901 pre-existing findings; no lint or production-code change is made in
+  Wave 0. A fresh independent Merge Guardian was retried and rejected again by the worker-thread limit.
+
 ## Barrier decision
 
 `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
