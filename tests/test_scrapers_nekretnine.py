@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import httpx
 import pytest
@@ -19,6 +20,23 @@ from src.scrapers.nekretnine import NekretnineScraper
 
 # Detail fixture is /oglasi/468187/ — "Dvosobni stan Kralja Petra I, Obrenovac Centar, Beograd".
 DETAIL_URL = "https://www.nekretnine.rs/oglasi/468187/"
+SNAPSHOT_FIXTURE = Path(__file__).parent / "fixtures" / "nekretnine" / "list_snapshot.json"
+
+
+def _snapshot_html() -> str:
+    payload = json.loads(SNAPSHOT_FIXTURE.read_text(encoding="utf-8"))
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {"queries": [{"state": {"data": payload}}]}
+            }
+        }
+    }
+    return (
+        '<html><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(data)}"
+        "</script></html>"
+    )
 
 
 def test_parse_list_returns_unique_listings(nekretnine_list_html: str) -> None:
@@ -50,6 +68,93 @@ def test_parse_list_drops_slug_url_in_favour_of_canonical() -> None:
     assert len(previews) == 1
     assert previews[0].url == "https://www.nekretnine.rs/oglasi/468187/"
     assert previews[0].external_id == "468187"
+
+
+def test_list_preview_contains_complete_snapshot() -> None:
+    previews = NekretnineScraper.parse_list(_snapshot_html())
+    snapshot = previews[0].snapshot
+    assert snapshot is not None
+    assert snapshot.external_id == "990001"
+    assert snapshot.url == "https://www.nekretnine.rs/oglasi/990001/"
+    assert snapshot.price_eur == 875
+    assert snapshot.area_m2 == 74.5
+    assert snapshot.rooms == 2.5
+    assert snapshot.district == "Vračar"
+    assert snapshot.address_raw == "Njegoševa 12"
+    assert snapshot.lat == 44.805
+    assert snapshot.lon == 20.47
+    assert snapshot.title == "Dvosoban stan Njegoševa"
+    assert NekretnineScraper.is_snapshot_complete(snapshot)
+
+
+def test_snapshot_photo_ids_become_ordered_unique_xxl_urls() -> None:
+    snapshot = NekretnineScraper.parse_list(_snapshot_html())[0].snapshot
+    assert snapshot is not None
+    assert snapshot.photo_urls == [
+        "https://pic.nekretnine.rs/image/5001/xxl.jpg",
+        "https://pic.nekretnine.rs/image/5002/xxl.jpg",
+        "https://pic.nekretnine.rs/image/5003/xxl.jpg",
+    ]
+
+
+def test_snapshot_missing_required_field_is_incomplete() -> None:
+    payload = json.loads(SNAPSHOT_FIXTURE.read_text(encoding="utf-8"))
+    del payload["results"][0]["realEstate"]["properties"][0]["location"]["address"]
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {"queries": [{"state": {"data": payload}}]}
+            }
+        }
+    }
+    html = (
+        '<html><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(data)}"
+        "</script></html>"
+    )
+    snapshot = NekretnineScraper.parse_list(html)[0].snapshot
+    assert snapshot is not None
+    assert snapshot.address_raw is None
+    assert not NekretnineScraper.is_snapshot_complete(snapshot)
+
+
+def test_old_list_fixture_without_snapshot_fields_still_parses_preview() -> None:
+    previews = NekretnineScraper.parse_list(_list_html([990099]))
+    assert len(previews) == 1
+    assert previews[0].url == "https://www.nekretnine.rs/oglasi/990099/"
+    assert previews[0].title == "Stan 990099"
+    assert previews[0].snapshot is not None
+    assert not NekretnineScraper.is_snapshot_complete(previews[0].snapshot)
+
+
+def test_snapshot_never_uses_non_nekretnine_photo_host_as_direct_cdn() -> None:
+    snapshots = NekretnineScraper.parse_list(_snapshot_html())
+    for preview in snapshots:
+        assert all(
+            url.startswith("https://pic.nekretnine.rs/image/") and url.endswith("/xxl.jpg")
+            for url in (preview.snapshot.photo_urls if preview.snapshot else [])
+        )
+
+
+def test_list_snapshot_matches_detail_for_bot_visible_fields(
+    nekretnine_list_html: str, nekretnine_detail_html: str
+) -> None:
+    snapshot = NekretnineScraper.parse_list(nekretnine_list_html)[0].snapshot
+    detail = NekretnineScraper.parse_detail(DETAIL_URL, nekretnine_detail_html)
+    assert snapshot is not None
+    for field in (
+        "external_id",
+        "price_eur",
+        "area_m2",
+        "rooms",
+        "district",
+        "address_raw",
+        "lat",
+        "lon",
+        "title",
+        "photo_urls",
+    ):
+        assert getattr(snapshot, field) == getattr(detail, field), field
 
 
 def test_parse_list_handles_missing_payload() -> None:

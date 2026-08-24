@@ -28,6 +28,10 @@ class ListingPreview:
     external_id: str
     url: str
     title: str | None = None
+    # Optional list-page snapshot. Platforms that cannot provide a complete snapshot leave this
+    # populated with the fields they did parse; the orchestrator decides whether to fall back to
+    # fetch_detail. Keeping the value optional preserves every existing scraper constructor.
+    snapshot: ListingDetail | None = None
 
 
 @dataclass(slots=True)

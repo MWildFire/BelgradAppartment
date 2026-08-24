@@ -43,6 +43,7 @@ import httpx
 from src.config import get_settings
 from src.db.models import Platform
 from src.scrapers.base import DEFAULT_USER_AGENT, ListingDetail, ListingPreview, Scraper
+from src.scrapers.proxy_pool import ProxyPool
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ _NEXT_DATA_RE = re.compile(
 _NUMBER_RE = re.compile(r"\d[\d.,]*")
 _THOUSANDS_DOT_RE = re.compile(r"(?<=\d)\.(?=\d{3}(?:\D|$))")
 _OGLAS_ID_RE = re.compile(r"/oglasi/(\d+)")
+_PHOTO_ID_RE = re.compile(r"^\d+$")
+_NEKRETNINE_PHOTO_RE = re.compile(
+    r"^https://pic\.nekretnine\.rs/image/\d+/[^/?#]+\.jpg(?:[?#].*)?$"
+)
 
 # Detail-fetch statuses that are deterministic for a given URL — retrying just wastes the backoff
 # budget and burns the IP's reputation with the anti-bot layer. 403 = block (the 13.07 incident),
@@ -348,7 +353,13 @@ class NekretnineScraper(Scraper):
         # `server` value. Split the configured URL so the browser fallback uses the same egress as
         # the httpx client instead of silently falling back to the blocked VPS IP.
         browser_proxy: dict[str, str] | None = None
-        proxy_url = settings.scraper_proxy_url.strip()
+        proxy_pool = ProxyPool.from_settings(settings)
+        selected_proxy = proxy_pool.select() if proxy_pool.candidates else None
+        proxy_url = (
+            selected_proxy.materialize(session_token=secrets.token_hex(4))
+            if selected_proxy is not None
+            else ""
+        )
         if proxy_url:
             parsed_proxy = urlparse(proxy_url)
             if parsed_proxy.scheme and parsed_proxy.hostname:
@@ -359,17 +370,7 @@ class NekretnineScraper(Scraper):
                 if parsed_proxy.username is not None:
                     browser_proxy["username"] = unquote(parsed_proxy.username)
                 if parsed_proxy.password is not None:
-                    password = unquote(parsed_proxy.password)
-                    # IPRoyal's residential gateway uses a password suffix to pin a 30-minute
-                    # session. Strip any stale suffix from .env and create a fresh one for every
-                    # new browser profile, so a reputation block can be escaped without exposing
-                    # credentials or requiring a dashboard interaction from the service.
-                    password = re.sub(
-                        r"_session-[A-Za-z0-9]+_lifetime-\d+[smhd]$", "", password
-                    )
-                    browser_proxy["password"] = (
-                        f"{password}_session-{secrets.token_hex(4)}_lifetime-30m"
-                    )
+                    browser_proxy["password"] = unquote(parsed_proxy.password)
 
         self._pw = await async_playwright().start()
         try:
@@ -652,15 +653,53 @@ class NekretnineScraper(Scraper):
             url = f"{BASE_URL}/oglasi/{external_id}/"
             title = real_estate.get("title") or seo.get("anchor")
             seen.add(external_id)
+            snapshot = NekretnineScraper._detail_from_real_estate(
+                url, external_id, real_estate
+            )
+            if snapshot.title is None and isinstance(title, str):
+                snapshot.title = title
             previews.append(
                 ListingPreview(
                     platform=Platform.NEKRETNINE,
                     external_id=external_id,
                     url=urljoin(BASE_URL, url),
                     title=title if isinstance(title, str) else None,
+                    snapshot=snapshot,
                 )
             )
         return previews
+
+    @staticmethod
+    def is_snapshot_complete(snapshot: ListingDetail | None) -> bool:
+        """Return whether a list snapshot contains every bot-visible field needed for active use."""
+        if snapshot is None:
+            return False
+        required_text = (
+            snapshot.external_id,
+            snapshot.url,
+            snapshot.district,
+            snapshot.address_raw,
+            snapshot.title,
+        )
+        if any(not isinstance(value, str) or not value.strip() for value in required_text):
+            return False
+        if not snapshot.url.startswith(f"{BASE_URL}/oglasi/"):
+            return False
+        if any(
+            value is None
+            for value in (
+                snapshot.price_eur,
+                snapshot.area_m2,
+                snapshot.rooms,
+                snapshot.lat,
+                snapshot.lon,
+            )
+        ):
+            return False
+        return bool(
+            snapshot.photo_urls
+            and all(NekretnineScraper._is_valid_photo_url(url) for url in snapshot.photo_urls)
+        )
 
     @classmethod
     def _detail_from_real_estate(
@@ -720,8 +759,12 @@ class NekretnineScraper(Scraper):
         )
 
     @staticmethod
+    def _is_valid_photo_url(url: object) -> bool:
+        return isinstance(url, str) and bool(_NEKRETNINE_PHOTO_RE.fullmatch(url))
+
+    @staticmethod
     def _photo_urls(prop: dict[str, Any]) -> list[str]:
-        """Collect the largest available URL per photo, deduped, preserving order."""
+        """Collect ordered unique XXL CDN URLs from IDs, with a strict host allowlist."""
         out: list[str] = []
         seen: set[str] = set()
         multimedia = prop.get("multimedia") if isinstance(prop.get("multimedia"), dict) else {}
@@ -729,16 +772,23 @@ class NekretnineScraper(Scraper):
         for ph in photos:
             if not isinstance(ph, dict):
                 continue
+            photo_id = ph.get("id")
+            if photo_id is not None and _PHOTO_ID_RE.fullmatch(str(photo_id).strip()):
+                derived = f"https://pic.nekretnine.rs/image/{str(photo_id).strip()}/xxl.jpg"
+                if derived not in seen:
+                    seen.add(derived)
+                    out.append(derived)
+                continue
             urls = ph.get("urls") if isinstance(ph.get("urls"), dict) else {}
             best = urls.get("large") or urls.get("medium") or urls.get("small")
-            if isinstance(best, str) and best.startswith("http") and best not in seen:
+            if NekretnineScraper._is_valid_photo_url(best) and best not in seen:
                 seen.add(best)
                 out.append(best)
         if not out:
             primary = prop.get("photo") if isinstance(prop.get("photo"), dict) else {}
             urls = primary.get("urls") if isinstance(primary.get("urls"), dict) else {}
             best = urls.get("large") or urls.get("medium")
-            if isinstance(best, str) and best.startswith("http"):
+            if NekretnineScraper._is_valid_photo_url(best):
                 out.append(best)
         return out
 

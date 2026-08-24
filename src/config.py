@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -56,7 +57,15 @@ class Settings(BaseSettings):
     scrape_list_interval_min: int = 30
     scrape_recheck_interval_hours: int = 6
     scraper_user_agent: str = ""
-    scraper_proxy_url: str = ""
+    # Legacy proxy surface retained for all existing scrapers. Keep credentials out of repr/logs.
+    scraper_proxy_url: str = Field(default="", repr=False)
+    # Nekretnine list/detail browser pool. Empty candidates preserve the current direct local/test
+    # behavior; the Nekretnine scraper must fail closed when a required pool is selected.
+    nekretnine_list_snapshot_mode: Literal["legacy", "shadow", "active"] = "legacy"
+    nekretnine_proxy_mode: Literal["legacy_rotating", "static_isp"] = "legacy_rotating"
+    nekretnine_proxy_primary_url: str = Field(default="", repr=False)
+    nekretnine_proxy_secondary_url: str = Field(default="", repr=False)
+    nekretnine_proxy_metered_url: str = Field(default="", repr=False)
 
     # --- Live-smoke probe (A2: markup-change protection) ---
     # Healthy list page must yield >= this many previews (mirrors Scraper.MIN_PREVIEWS).
