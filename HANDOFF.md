@@ -2,6 +2,12 @@
 
 Цель этого документа — дать новому инстансу Claude (или человеку) исчерпывающий контекст для продолжения работы над проектом.
 
+> **Актуальный план следующей реализации (24.08.2026):**
+> [`Nekretnine Zero-Regression — list snapshot + ISP proxy без изменений Render Finder Bot`](docs/superpowers/plans/2026-08-24-nekretnine-zero-regression-isp-migration.md).
+> Выполнять через обязательный multi-agent DAG: Integration Captain + три постоянно занятых worker-lane
+> в изолированных worktree, с последовательными общими barriers. После абсолютных quality/Telegram
+> gates — shadow, Chrome quote, отдельное подтверждение оплаты, production canary и rollback-ready activation.
+
 ---
 
 ## 0. ТЕКУЩИЙ СТАТУС + ПЛАН РАЗРАБОТКИ (handoff 2026-06-12, вечер — этап H1)
