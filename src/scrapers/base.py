@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import secrets
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -90,7 +91,20 @@ class Scraper(abc.ABC):
     def _make_client(cls) -> httpx.AsyncClient:
         settings = get_settings()
         ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
-        proxy = settings.scraper_proxy_url or None if cls.use_scraper_proxy else None
+        if getattr(cls, "platform", None) == Platform.NEKRETNINE:
+            # The pool is selected once per HTTP client/session. A malformed configured candidate
+            # raises instead of silently falling back to the blocked VPS egress.
+            from src.scrapers.proxy_pool import ProxyPool
+
+            pool = ProxyPool.from_settings(settings)
+            candidate = pool.select() if pool.candidates else None
+            proxy = (
+                candidate.materialize(session_token=secrets.token_hex(4))
+                if candidate is not None
+                else None
+            )
+        else:
+            proxy = settings.scraper_proxy_url or None if cls.use_scraper_proxy else None
         return httpx.AsyncClient(
             headers={
                 "User-Agent": ua,
