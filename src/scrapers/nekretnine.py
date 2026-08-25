@@ -43,7 +43,7 @@ import httpx
 from src.config import get_settings
 from src.db.models import Platform
 from src.scrapers.base import DEFAULT_USER_AGENT, ListingDetail, ListingPreview, Scraper
-from src.scrapers.proxy_pool import ProxyPool
+from src.scrapers.proxy_pool import NoProxyAvailableError, ProxyCandidate, ProxyPool
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +117,46 @@ class NekretnineScraper(Scraper):
         self._pw_context: Any = None
         self._pw_user_data_dir: Path | None = None
         self._pw_headless = os.environ.get("NEKRETNINE_HEADLESS", "false").lower() == "true"
+        self._proxy_pool = ProxyPool.from_settings(get_settings())
+        self._failed_proxy_slots: set[str] = set()
+        self._active_proxy_slot: str | None = None
+        self._proxy_metrics: dict[str, int] = {
+            "proxy_attempts": 0,
+            "proxy_failovers": 0,
+            "proxy_errors": 0,
+            "browser_proxy_errors": 0,
+        }
+
+    @property
+    def proxy_metrics(self) -> dict[str, int]:
+        """Sanitized proxy evidence for shadow reports; never expose URLs or credentials."""
+        return {
+            **self._proxy_metrics,
+            "failed_proxy_slots": len(self._failed_proxy_slots),
+        }
+
+    def _select_proxy(self) -> ProxyCandidate | None:
+        if not self._proxy_pool.candidates:
+            self._active_proxy_slot = None
+            return None
+        try:
+            candidate = self._proxy_pool.select(failed_slots=self._failed_proxy_slots)
+        except NoProxyAvailableError:
+            self._proxy_metrics["proxy_errors"] += 1
+            raise
+        if self._active_proxy_slot != candidate.slot:
+            if self._active_proxy_slot is not None:
+                self._proxy_metrics["proxy_failovers"] += 1
+            self._active_proxy_slot = candidate.slot
+            self._proxy_metrics["proxy_attempts"] += 1
+        return candidate
+
+    def _mark_proxy_failure(self) -> None:
+        slot = self._active_proxy_slot
+        if slot is None or slot in self._failed_proxy_slots:
+            return
+        self._failed_proxy_slots.add(slot)
+        self._proxy_metrics["browser_proxy_errors"] += 1
 
     async def list_recent(
         self,
@@ -353,8 +393,7 @@ class NekretnineScraper(Scraper):
         # `server` value. Split the configured URL so the browser fallback uses the same egress as
         # the httpx client instead of silently falling back to the blocked VPS IP.
         browser_proxy: dict[str, str] | None = None
-        proxy_pool = ProxyPool.from_settings(settings)
-        selected_proxy = proxy_pool.select() if proxy_pool.candidates else None
+        selected_proxy = self._select_proxy()
         proxy_url = (
             selected_proxy.materialize(session_token=secrets.token_hex(4))
             if selected_proxy is not None
@@ -457,6 +496,7 @@ class NekretnineScraper(Scraper):
                                 "after %d challenge reloads",
                                 url, status, self.pw_challenge_reloads,
                             )
+                            self._mark_proxy_failure()
                             break
 
                         logger.info(
@@ -472,6 +512,7 @@ class NekretnineScraper(Scraper):
                 finally:
                     await page.close()
             except Exception as e:  # noqa: BLE001 — fallback is best-effort; caller re-raises 403
+                self._mark_proxy_failure()
                 logger.warning(
                     "[nekretnine] playwright fallback failed for %s: %s: %s",
                     url, type(e).__name__, e,

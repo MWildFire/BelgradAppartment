@@ -20,6 +20,7 @@ from src.db.models import InboundPost, Listing, Platform, SourceChannel
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
+from src.scrapers.shadow_audit import run_shadow_audit, write_report
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
     from src.matching.dedup import DedupStats
@@ -3342,6 +3343,42 @@ def pipeline_probe() -> None:
     only) and exits 0.
     """
     asyncio.run(_pipeline_probe())
+
+
+@cli.command("nekretnine-shadow-audit")
+@click.option("--max-pages", default=500, show_default=True, type=click.IntRange(min=1))
+@click.option("--compare-details", default=100, show_default=True, type=click.IntRange(min=0))
+@click.option(
+    "--report", "report_path", required=True, type=click.Path(path_type=Path, dir_okay=False)
+)
+def nekretnine_shadow_audit(max_pages: int, compare_details: int, report_path: Path) -> None:
+    """Read-only snapshot-vs-detail audit; exits non-zero on any quality failure."""
+    asyncio.run(_nekretnine_shadow_audit(max_pages, compare_details, report_path))
+
+
+async def _nekretnine_shadow_audit(
+    max_pages: int,
+    compare_details: int,
+    report_path: Path,
+) -> None:
+    scraper_cls = SCRAPERS[Platform.NEKRETNINE]
+    async with scraper_cls() as scraper:
+        report = await run_shadow_audit(
+            scraper,
+            max_pages=max_pages,
+            compare_details=compare_details,
+        )
+    write_report(report, report_path)
+    click.echo(
+        f"shadow-audit: {'PASS' if report.passed else 'STOP'} "
+        f"previewed={report.previewed} site_total={report.site_total} "
+        f"coverage={report.coverage:.3f} sample={report.sample_compared} "
+        f"fallback={report.fallback_count} mismatches={report.mismatched_count} "
+        f"report={report_path}"
+    )
+    if not report.passed:
+        click.echo("reasons=" + ",".join(report.failure_reasons), err=True)
+        raise click.exceptions.Exit(1)
 
 
 async def _pipeline_probe() -> None:

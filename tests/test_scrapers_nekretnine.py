@@ -17,6 +17,7 @@ import pytest
 import src.scrapers.nekretnine as nekretnine_mod
 from src.db.models import Platform
 from src.scrapers.nekretnine import NekretnineScraper
+from src.scrapers.proxy_pool import NoProxyAvailableError, ProxyCandidate, ProxyPool
 
 # Detail fixture is /oglasi/468187/ — "Dvosobni stan Kralja Petra I, Obrenovac Centar, Beograd".
 DETAIL_URL = "https://www.nekretnine.rs/oglasi/468187/"
@@ -282,6 +283,31 @@ def _make_scraper(handler) -> NekretnineScraper:
     sc.page_delay_sec = 0.0
     sc.retry_backoff_sec = 0.0
     return sc
+
+
+def test_proxy_slot_failover_is_bounded_and_fail_closed() -> None:
+    sc = _make_scraper(lambda _request: httpx.Response(200, text=""))
+    sc._proxy_pool = ProxyPool((
+        ProxyCandidate("primary", "static_isp", "http://p.example:1"),
+        ProxyCandidate("secondary", "static_isp", "http://s.example:2"),
+        ProxyCandidate("metered", "metered", "http://m.example:3"),
+    ))
+
+    assert sc._select_proxy().slot == "primary"
+    sc._mark_proxy_failure()
+    assert sc._select_proxy().slot == "secondary"
+    sc._mark_proxy_failure()
+    assert sc._select_proxy().slot == "metered"
+    sc._mark_proxy_failure()
+    with pytest.raises(NoProxyAvailableError):
+        sc._select_proxy()
+    assert sc.proxy_metrics == {
+        "proxy_attempts": 3,
+        "proxy_failovers": 2,
+        "proxy_errors": 1,
+        "browser_proxy_errors": 3,
+        "failed_proxy_slots": 3,
+    }
 
 
 def _page_of(request: httpx.Request) -> int:
