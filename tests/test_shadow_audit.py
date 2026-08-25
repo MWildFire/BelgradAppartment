@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import importlib
 import json
 
 import pytest
+from click.testing import CliRunner
 
 from src.db.models import Platform
 from src.scrapers.base import ListingDetail, ListingPreview
@@ -131,3 +133,42 @@ async def test_shadow_audit_rejects_missing_site_total() -> None:
 
     assert report.passed is False
     assert "site_total_missing" in report.failure_reasons
+
+
+def test_shadow_audit_cli_writes_report_without_db_or_telegram(tmp_path, monkeypatch) -> None:
+    cli_module = importlib.import_module("src.cli")
+    detail = _detail("1")
+
+    class FakeCliScraper(FakeScraper):
+        async def __aenter__(self) -> FakeCliScraper:
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    monkeypatch.setitem(
+        cli_module.SCRAPERS,
+        Platform.NEKRETNINE,
+        lambda: FakeCliScraper(
+            [ListingPreview(Platform.NEKRETNINE, "1", detail.url, snapshot=detail)],
+            {"1": detail},
+        ),
+    )
+    report_path = tmp_path / "shadow.json"
+
+    result = CliRunner().invoke(
+        cli_module.cli,
+        [
+            "nekretnine-shadow-audit",
+            "--max-pages",
+            "1",
+            "--compare-details",
+            "1",
+            "--report",
+            str(report_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "shadow-audit: PASS" in result.output
+    assert json.loads(report_path.read_text(encoding="utf-8"))["passed"] is True

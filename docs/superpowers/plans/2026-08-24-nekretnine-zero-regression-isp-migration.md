@@ -923,6 +923,20 @@ Thresholds:
 
 Команда и report получают unit tests с fake scraper, без live network.
 
+### Captain continuation — 2026-08-25
+
+При отсутствии user-side blocker, но сохранённом worker-runtime STOP, Captain завершил локальный
+P2/P3 continuation на exact integration SHA `ffcc3a6259ad8d94a34eb4caa93e6152613c7aca` в рамках
+документированного provisional exception. Добавлены `src/scrapers/shadow_audit.py`, его offline tests
+и тонкая CLI-команда `nekretnine-shadow-audit`; audit не импортирует DB/orchestrator/Telegram и пишет
+только явно указанный sanitized report. Proxy pool получил реальный bounded failover и non-secret
+counters для challenge/fallback evidence.
+
+Фактическая проверка: `1135 passed, 55 skipped, 34 warnings`; focused shadow/parser/proxy batch —
+`56 passed`; `pipeline-probe` — `golden-0001`, confidence `1.000`, `phash`; `git diff --check` clean.
+Это не закрывает B0/B1/B2: свежий независимый QA PASS на exact integrated SHA всё ещё обязателен;
+Chrome, payment, production env/restart/deploy и live activation остаются запрещены до этого PASS.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег

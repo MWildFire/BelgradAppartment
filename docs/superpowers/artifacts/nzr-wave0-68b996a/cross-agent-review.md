@@ -58,3 +58,26 @@ The corrected artifacts are ready, but the fresh independent Guardian runtime di
 the provisional P1 exception therefore remains active only for the Captain-owned implementation already
 listed above. No further release wiring, Chrome, payment, production env change, restart, Telegram send,
 or production activation is authorized from this state.
+
+## Captain-owned continuation — 2026-08-25
+
+The user-side blocker is absent, so Captain continued the local implementation without changing the
+release barrier. Integrated commit `ffcc3a6259ad8d94a34eb4caa93e6152613c7aca` adds the read-only
+`nekretnine-shadow-audit` core/CLI and completes the bounded proxy failover state:
+
+- `primary → secondary → metered` is selected after browser challenge/reload exhaustion;
+- all candidates exhausted raises a sanitized `NoProxyAvailableError` rather than direct/silent success;
+- proxy attempts, failovers, browser errors, failed-slot count, snapshot completeness, fallback,
+  mismatch, detail error, skipped-page and coverage evidence are reportable without URLs, addresses,
+  credentials, or raw payloads;
+- the audit has no DB/session/orchestrator/stale-sweep/Telegram imports and its report writer is the
+  only intentional local file side effect.
+
+Evidence on this exact SHA: `1135 passed, 55 skipped, 34 warnings`; focused shadow/parser/proxy batch
+`56 passed`; `pipeline-probe` `golden-0001`, confidence `1.000`, `phash`; `git diff --check` clean.
+The full `ruff check src tests` remains a known repository baseline/version-drift failure and is not
+claimed green. No production, Chrome, checkout, payment, Telegram, restart, or DB write occurred.
+
+This continuation does not change the barrier: `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
+The next required gate is an independent QA verdict on this exact integrated SHA; silence or a timeout
+is STOPPED, never PASS.

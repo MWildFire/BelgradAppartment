@@ -10,6 +10,27 @@
 
 ---
 
+## 0.0.1. Продолжение Zero-Regression плана — 25.08.2026
+
+Работа продолжена на чистой integration-ветке `codex/nzr-integration`. Реальный локальный результат:
+
+- `ffcc3a6` — добавлена read-only команда `otz nekretnine-shadow-audit` и узкий модуль
+  `src/scrapers/shadow_audit.py`. Он не открывает DB-сессию, не запускает orchestrator/stale sweep и не
+  отправляет Telegram; сравнивает bounded sample list snapshot против legacy detail, считает coverage,
+  skipped pages, fallback/mismatch/detail/proxy errors и пишет sanitized JSON без полных URL/адресов/секретов.
+- Proxy pool теперь действительно failover-ит `primary → secondary → metered` после исчерпания
+  browser challenge/reload и fail-closed останавливается после исчерпания кандидатов. В report попадают
+  только числовые proxy counters и число неудачных слотов.
+- Проверка: **1135 passed, 55 skipped, 34 warnings**; новый shadow/proxy/parser batch — 56 focused tests;
+  `pipeline-probe` — `golden-0001`, confidence `1.000`, `phash`; `git diff --check` — чисто.
+
+Это всё ещё implementation progress, не release authorization: `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
+До свежего независимого QA PASS не открывать Chrome/checkout/payment, не менять production `.env`, не делать
+restart/deploy и не переводить live mode. Следующий технический шаг — независимый QA на exact integrated SHA,
+после него B1/B2 review; user-side blocker отсутствует.
+
+---
+
 ## 0. ТЕКУЩИЙ СТАТУС + ПЛАН РАЗРАБОТКИ (handoff 2026-06-12, вечер — этап H1)
 
 > Эта секция — рабочий handoff последней сессии. Остальной документ — общий runbook.
@@ -583,6 +604,7 @@ ssh root@90.156.254.159 'otz-bg <subcommand> [args...]'
 | `daily-summary` | Ручной запуск утренней сводки |
 | `backfill-nekretnine-address` | Re-fetch только адресов для nekretnine listings |
 | `ship-log <file> --label X` | Послать tail файла в Saved Messages |
+| `nekretnine-shadow-audit --max-pages N --compare-details N --report PATH` | Read-only snapshot/detail audit; sanitized report, без DB/Telegram |
 
 После каждого `otz-bg` запуска **автоматически** прилетает tail (150 строк) в Saved Messages.
 
@@ -964,6 +986,8 @@ src/
 ├── scrapers/
 │   ├── base.py                     # Scraper ABC, ListingPreview/Detail
 │   ├── orchestrator.py             # scrape_all_with_throttle, mark_stale_inactive, photo download
+│   ├── shadow_audit.py              # read-only snapshot/detail quality gate
+│   ├── proxy_pool.py                # secret-safe Nekretnine proxy slots/failover
 │   ├── nekretnine.py
 │   ├── cetiri_zida.py
 │   └── halooglasi.py               # playwright + stealth + xvfb

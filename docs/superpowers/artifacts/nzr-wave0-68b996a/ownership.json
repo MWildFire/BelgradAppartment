@@ -1,5 +1,5 @@
 {
-  "batch": "P0/Wave 0 + provisional P1",
+  "batch": "P0/Wave 0 + provisional P1 + Captain continuation",
   "base_sha": "68b996a8c23da5f7dd5607f54d7b296980725b48",
   "integration_branch": "codex/nzr-integration",
   "worker_slots": {
@@ -64,11 +64,14 @@
       "src/config.py",
       "src/scrapers/base.py",
       "src/scrapers/nekretnine.py",
+      "src/scrapers/shadow_audit.py",
       "src/scrapers/proxy_pool.py",
       "src/scrapers/orchestrator.py",
+      "src/cli.py",
       "tests/test_scrapers_nekretnine.py",
       "tests/fixtures/nekretnine/list_snapshot.json",
       "tests/test_proxy_pool.py",
+      "tests/test_shadow_audit.py",
       "tests/test_orchestrator_snapshot.py",
       "tests/test_render_finder_zero_regression.py",
       "git checkpoint and integration metadata only"
