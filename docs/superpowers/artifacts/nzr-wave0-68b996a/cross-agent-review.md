@@ -99,3 +99,16 @@ Three new read-only workers were launched against the exact code SHA `2fcb3b35a4
 full/parity QA, security/no-write audit, and docs/evidence consistency. All three remained `running` for
 the bounded 45-second window and were closed without a verdict. No PASS is inferred; B0 remains
 `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`. No production, Chrome, payment, Telegram, or DB action occurred.
+
+## Shadow report contract completion — 2026-08-25
+
+Captain closed the remaining local report-contract gap in code commit `1d4bebb`: every
+`ShadowAuditReport` now carries a generated `run_id`, fixed `source=nekretnine`, fixed `mode=shadow`, and
+explicit `no_db_writes`, `no_telegram_sends`, and `no_stale_sweep` assertions. The serialized report keeps
+these fields alongside the existing sanitized counts and mismatch evidence; no URL, address, credential,
+or raw payload is added. The five shadow-audit tests cover the in-memory and JSON contracts, and the full
+suite remains `1140 passed, 55 skipped, 34 warnings`.
+
+This is still Captain-owned local implementation, not an independent QA verdict. The next fresh QA must
+target exact integrated SHA `1d4bebb`; B0 remains `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`. No production,
+Chrome, payment, Telegram, restart, deploy, or DB action occurred.

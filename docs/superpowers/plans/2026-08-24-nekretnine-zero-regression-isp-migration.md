@@ -953,6 +953,15 @@ Focused telemetry/orchestrator tests: `16 passed`; full suite после инт�
 docs/evidence) запущены на exact code SHA, но все остались без verdict за bounded 45 секунд и закрыты.
 Это `STOPPED`, не PASS; user-side blocker отсутствует.
 
+### Shadow report contract follow-up — 2026-08-25
+
+В Captain-owned commit `1d4bebb` отчёт получил недостающие поля интерфейсного freeze: уникальный `run_id`,
+`source=nekretnine`, `mode=shadow` и явные `no_db_writes`/`no_telegram_sends`/`no_stale_sweep` assertions.
+Они сериализуются в sanitized JSON и покрыты пятью offline fake-scraper tests; полный suite остаётся
+`1140 passed, 55 skipped, 34 warnings`. Это не меняет barrier: новый exact integrated SHA ещё должен
+получить свежий независимый QA PASS; B0 остаётся `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`, а
+Chrome/payment/production activation запрещены.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег
