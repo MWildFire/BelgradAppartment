@@ -165,3 +165,17 @@ and the full exact gate is `1143 passed, 55 skipped, 34 warnings`, `1198 collect
 
 This invalidated earlier final QA evidence on `208a35e`; fresh independent B1/B2 verdicts must target
 exact `eb6611e`. No external action has started.
+
+## B0/B1/B2 closure — 2026-08-26
+
+Final observers ran against exact implementation SHA `eb6611e` in clean docs-integrated HEAD `c0f1089`:
+
+- Full QA: `QA_PASS`; `1143 passed, 55 skipped, 34 warnings`; `1198 collected`; pipeline probe PASS;
+  Render Finder parity `5 passed` twice; `bash -n`, protected diff and `git diff --check` clean.
+- Security/no-write: `QA_PASS`; shadow tests `8 passed`; shared parity pure; numeric photo IDs, sanitization,
+  no-write flags, strict fallback and address/title/photo parity verified.
+- Cross-review: `REVIEW_PASS`; shared helper is used by audit and orchestrator; docs accurately distinguish
+  implementation SHA from docs/evidence HEAD; protected contract unchanged.
+
+This closes B0/B1/B2. The next permitted external action is a read-only Chrome quote for the 24h trial;
+no checkout, payment, production env change, restart, deploy or live activation is implied.

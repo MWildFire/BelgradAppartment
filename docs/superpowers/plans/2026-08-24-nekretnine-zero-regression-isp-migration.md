@@ -998,6 +998,14 @@ ID). Commit `eb6611e` исправил её и добавил negative test; exa
 1198 collected`, parity 5/5 дважды и protected diff пуст. Поэтому финальный B1/B2 review перенесён на exact
 `eb6611e`; Chrome/payment/production остаются закрыты до его PASS.
 
+### B0/B1/B2 closure — 2026-08-26
+
+Final exact-SHA evidence is green: implementation `eb6611e`, docs/evidence HEAD `c0f1089`; independent full
+QA `QA_PASS`, security/no-write `QA_PASS`, and cross-review `REVIEW_PASS`. The gate is `1143 passed, 55 skipped,
+1198 collected`, probe PASS, parity 5/5 twice, protected diff empty, syntax/diff-check clean. B0/B1/B2 are
+closed. The next wave is the read-only Chrome quote for the 24h ISP trial; checkout, payment and production
+activation remain separately confirmation-gated.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег

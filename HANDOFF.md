@@ -36,10 +36,10 @@
 На exact `ed52475` B0 получил три независимых PASS, а затем cross-review нашёл и закрыл contract drift
 в `e09a165`/`208a35e`; последующий security review обнаружил и исправил ошибку извлечения photo IDs в
 `eb6611e`. На exact `eb6611e` локальный detached gate зелёный: 1143 passed / 55 skipped, 1198 collected,
-probe, parity дважды, protected diff, syntax и diff-check. Пока финальный trio проверяет именно этот SHA,
-Chrome/checkout/payment/production остаются закрыты. После финального B1/B2 PASS первый
-внешний шаг — только read-only Chrome quote; покупка monthly и production canary остаются отдельными
-подтверждениями. User-side blocker отсутствует.
+probe, parity дважды, protected diff, syntax и diff-check. Финальный trio на exact implementation SHA
+`eb6611e` / docs HEAD `c0f1089` дал full QA PASS, security/no-write PASS и REVIEW_PASS. Поэтому B0/B1/B2
+закрыты. Первый внешний шаг сейчас — только read-only Chrome quote; checkout/monthly purchase и production
+canary остаются отдельными подтверждениями. User-side blocker отсутствует.
 
 ---
 
