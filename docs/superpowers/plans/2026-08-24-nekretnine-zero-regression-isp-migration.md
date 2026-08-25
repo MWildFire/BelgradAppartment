@@ -966,6 +966,15 @@ Chrome/payment/production activation запрещены.
 verdict за bounded 45 секунд; все три workers закрыты как worker-runtime STOP. Это не PASS и не blocker от
 Дмитрия. B0 остаётся `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
 
+### Generic completeness hardening — 2026-08-25
+
+В `d2c36e0` исправлен fail-open generic fallback shadow-аудита: без platform helper snapshot теперь должен
+содержать весь frozen bot-visible набор (`external_id`, URL, цена, площадь, комнаты, district, address,
+координаты, title и строгие XXL CDN photo URLs). Negative test подтверждает, что неполный snapshot не
+сравнивается как complete и не вызывает legacy detail повторно. Полный suite: `1141 passed, 55 skipped,
+34 warnings`; focused shadow: `6 passed`; probe/parity/syntax gates зелёные. B0 не меняется: новый exact SHA
+ещё требует свежего independent QA PASS.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег

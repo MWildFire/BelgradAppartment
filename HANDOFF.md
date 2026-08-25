@@ -14,23 +14,25 @@
 
 Работа продолжена на чистой integration-ветке `codex/nzr-integration`. Реальный локальный результат:
 
-- `ffcc3a6` + `cd3d11b` + `d8b298a` + `2fcb3b3` + `1d4bebb` — добавлена read-only команда `otz nekretnine-shadow-audit` и узкий модуль
+- `ffcc3a6` + `cd3d11b` + `d8b298a` + `2fcb3b3` + `1d4bebb` + `d2c36e0` — добавлена read-only команда `otz nekretnine-shadow-audit` и узкий модуль
   `src/scrapers/shadow_audit.py`. Он не открывает DB-сессию, не запускает orchestrator/stale sweep и не
   отправляет Telegram; сравнивает bounded sample list snapshot против legacy detail, считает coverage,
   skipped pages, fallback/mismatch/detail/proxy errors и пишет sanitized JSON без полных URL/адресов/секретов.
   Отчёт теперь самодостаточно маркирует `run_id`, `source=nekretnine`, `mode=shadow` и явные гарантии
   `no_db_writes`/`no_telegram_sends`/`no_stale_sweep`; это проверяется offline fake-scraper tests.
+  Generic fallback дополнительно требует полный frozen bot-visible набор полей и валидные XXL CDN URLs,
+  чтобы неполный snapshot не классифицировался как complete при отсутствии platform helper.
 - Proxy pool теперь действительно failover-ит `primary → secondary → metered` после исчерпания
   browser challenge/reload и fail-closed останавливается после исчерпания кандидатов. В report попадают
   только числовые proxy counters и число неудачных слотов; recoverable challenge отделён от residual error.
-- Проверка: **1140 passed, 55 skipped, 34 warnings**; shadow/proxy/parser/CLI batch — 57 focused tests, telemetry follow-up — 16 focused tests,
-  report-contract follow-up — 5 focused tests;
+- Проверка: **1141 passed, 55 skipped, 34 warnings**; shadow/proxy/parser/CLI batch — 57 focused tests, telemetry follow-up — 16 focused tests,
+  report-contract follow-up — 6 focused tests;
   `pipeline-probe` — `golden-0001`, confidence `1.000`, `phash`; `git diff --check` — чисто.
 
 Это всё ещё implementation progress, не release authorization: `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
 До свежего независимого QA PASS не открывать Chrome/checkout/payment, не менять production `.env`, не делать
 restart/deploy и не переводить live mode. Следующий технический шаг — независимый QA на exact integrated SHA
-`1d4bebb`; после него B1/B2 review. Предыдущая попытка трёх read-only workers 25.08 на `2fcb3b3` завершилась
+`d2c36e0`; после него B1/B2 review. Предыдущая попытка трёх read-only workers 25.08 на `2fcb3b3` завершилась
 timeout без verdict; новая попытка трёх read-only workers на `1d4bebb` также осталась running за bounded 45s
 и была закрыта без verdict. Новый report-contract commit не получил independent PASS. User-side blocker отсутствует.
 

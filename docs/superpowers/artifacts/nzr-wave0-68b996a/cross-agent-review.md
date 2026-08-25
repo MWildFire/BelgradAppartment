@@ -119,3 +119,17 @@ Three new read-only workers were started on exact SHA `1d4bebb` for full/parity,
 docs/evidence review. All three stayed `running` through the bounded 45-second wait and were closed without
 verdict. This is a repeated worker-runtime STOP, not a QA PASS and not a user-side blocker. B0 remains
 `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`; no external side effect occurred.
+
+## Generic completeness hardening — 2026-08-25
+
+Captain found and fixed a real audit classification gap in `d2c36e0`: when a scraper did not expose its
+platform completeness helper, the generic path could treat a snapshot with coordinates/photos but missing
+price or other bot-visible fields as complete. The fallback now requires the full frozen text/numeric field
+set and strict `pic.nekretnine.rs/image/<numeric-id>/xxl.jpg` URLs; a new negative fake-scraper test proves
+that the partial snapshot is classified as fallback without calling legacy detail. Focused shadow tests are
+`6 passed`; the full suite is `1141 passed, 55 skipped, 34 warnings`; probe, parity twice, shell syntax and
+diff-check remain green.
+
+This is Captain-owned hardening, not an independent QA verdict. The next fresh QA target is exact SHA
+`d2c36e0`; B0 remains `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`. No production or other external side
+effect occurred.
