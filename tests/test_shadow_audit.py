@@ -53,6 +53,12 @@ class FakeScraper:
         return snapshot is not None and bool(snapshot.photo_urls and snapshot.district)
 
 
+class BareFakeScraper(FakeScraper):
+    """Exercise the audit's protocol fallback when a scraper has no completeness helper."""
+
+    is_snapshot_complete = None
+
+
 @pytest.mark.asyncio
 async def test_shadow_audit_passes_and_fetches_only_complete_sample() -> None:
     first = _detail("1")
@@ -108,6 +114,22 @@ async def test_shadow_audit_fails_closed_on_mismatch_skip_and_proxy_error() -> N
         "browser_proxy_errors",
     } <= set(report.failure_reasons)
     assert report.mismatches == [{"external_id": "1", "fields": ["district"]}]
+
+
+@pytest.mark.asyncio
+async def test_shadow_audit_classifies_partial_snapshot_as_fallback_without_helper() -> None:
+    partial = _detail("1")
+    partial.price_eur = None
+    scraper = BareFakeScraper(
+        [ListingPreview(Platform.NEKRETNINE, "1", partial.url, snapshot=partial)],
+        {"1": _detail("1")},
+    )
+
+    report = await run_shadow_audit(scraper, max_pages=1, compare_details=1)
+
+    assert report.complete_snapshots == 0
+    assert report.fallback_count == 1
+    assert scraper.fetches == []
 
 
 @pytest.mark.asyncio

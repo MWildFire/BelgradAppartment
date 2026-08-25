@@ -112,13 +112,41 @@ def _snapshot_is_complete(scraper: ShadowAuditScraper, snapshot: ListingDetail |
         return bool(checker(snapshot))
     if snapshot is None:
         return False
-    return bool(
-        snapshot.external_id
-        and snapshot.url
-        and snapshot.district
-        and snapshot.lat is not None
-        and snapshot.lon is not None
-        and snapshot.photo_urls
+    required_text = (
+        snapshot.external_id,
+        snapshot.url,
+        snapshot.district,
+        snapshot.address_raw,
+        snapshot.title,
+    )
+    if any(not isinstance(value, str) or not value.strip() for value in required_text):
+        return False
+    if any(
+        value is None
+        for value in (
+            snapshot.price_eur,
+            snapshot.area_m2,
+            snapshot.rooms,
+            snapshot.lat,
+            snapshot.lon,
+        )
+    ):
+        return False
+    return bool(snapshot.photo_urls and all(_valid_photo_url(url) for url in snapshot.photo_urls))
+
+
+def _valid_photo_url(url: object) -> bool:
+    if not isinstance(url, str):
+        return False
+    parsed = urlparse(url)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "pic.nekretnine.rs"
+        and len(path_parts) == 3
+        and path_parts[0] == "image"
+        and path_parts[1].isdigit()
+        and path_parts[2] == "xxl.jpg"
     )
 
 
