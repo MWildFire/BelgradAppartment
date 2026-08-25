@@ -27,8 +27,8 @@ def photo_ids(urls: list[str]) -> list[str]:
     result: list[str] = []
     for url in urls:
         path_parts = [part for part in urlparse(url).path.split("/") if part]
-        if len(path_parts) >= 2 and path_parts[-2] == "image":
-            result.append(path_parts[-1].split(".", 1)[0])
+        if len(path_parts) >= 3 and path_parts[-3] == "image":
+            result.append(path_parts[-2])
         else:
             result.append(path_parts[-1] if path_parts else "unknown")
     return result
