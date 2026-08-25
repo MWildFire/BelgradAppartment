@@ -304,8 +304,9 @@ def test_proxy_slot_failover_is_bounded_and_fail_closed() -> None:
     assert sc.proxy_metrics == {
         "proxy_attempts": 3,
         "proxy_failovers": 2,
+        "proxy_challenges": 3,
         "proxy_errors": 1,
-        "browser_proxy_errors": 3,
+        "browser_proxy_errors": 0,
         "failed_proxy_slots": 3,
     }
 

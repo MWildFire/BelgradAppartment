@@ -123,6 +123,7 @@ class NekretnineScraper(Scraper):
         self._proxy_metrics: dict[str, int] = {
             "proxy_attempts": 0,
             "proxy_failovers": 0,
+            "proxy_challenges": 0,
             "proxy_errors": 0,
             "browser_proxy_errors": 0,
         }
@@ -156,7 +157,7 @@ class NekretnineScraper(Scraper):
         if slot is None or slot in self._failed_proxy_slots:
             return
         self._failed_proxy_slots.add(slot)
-        self._proxy_metrics["browser_proxy_errors"] += 1
+        self._proxy_metrics["proxy_challenges"] += 1
 
     async def list_recent(
         self,
