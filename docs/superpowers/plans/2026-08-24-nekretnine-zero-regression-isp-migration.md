@@ -1078,10 +1078,24 @@ Agent B проверяет deploy/DB boundaries, Agent C — protected/bot finge
 Не нажимать финальную кнопку без новой явной команды. Если total >$2.00, выбран не тот продукт/срок,
 появилась подписка или KYC — остановиться.
 
+**Результат live-действия (2026-08-26, Chrome):** IPRoyal подтвердил `order #80637001 was processed`:
+ISP Dedicated, Serbia, 1 IP, 1 Day (24 hours), Standard fraud score, без extras, final price `$2.00`.
+Выдан один proxy endpoint; credential не выводится и не сохраняется в репозитории/заметках. После покупки —
+trial smoke и read-only observers; production env, restart, deploy и credential activation остаются отдельными gates.
+
 Карту/CVV/3DS/OTP/KYC Дмитрий завершает локально. После покупки агент может открыть credentials page,
 но не читает/копирует secret в чат.
 
 ### 11.3 Безопасное внесение trial credential
+
+Текущий безопасный handoff: в Chrome открыт штатный IPRoyal `Proxy Tester`. После action-time разрешения
+credential был введён только туда, provider-level smoke дал location Serbia, HTTP|HTTPS, status `200` и
+`217ms`; поле после теста очищено. Это ещё не доказывает проход Nekretnine/DataDome.
+
+Следующий production gate остаётся user-controlled: Дмитрий сам вставляет credential в `NEKRETNINE_PROXY_PRIMARY`
+на production и выставляет `NEKRETNINE_PROXY_KIND=static_isp` и пока
+`NEKRETNINE_LIST_SNAPSHOT_MODE=shadow`. После этого Captain выполняет read-only preflight/shadow audit и
+три observer-проверки. В чат credential не копируется.
 
 - Агент делает backup `/opt/otz/.env` с mode 600.
 - До правки вычисляет SHA-256 только по строкам `TG_` без вывода их значений.

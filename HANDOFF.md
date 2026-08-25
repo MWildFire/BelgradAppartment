@@ -38,8 +38,27 @@
 `eb6611e`. На exact `eb6611e` локальный detached gate зелёный: 1143 passed / 55 skipped, 1198 collected,
 probe, parity дважды, protected diff, syntax и diff-check. Финальный trio на exact implementation SHA
 `eb6611e` / docs HEAD `c0f1089` дал full QA PASS, security/no-write PASS и REVIEW_PASS. Поэтому B0/B1/B2
-закрыты. Первый внешний шаг сейчас — только read-only Chrome quote; checkout/monthly purchase и production
-canary остаются отдельными подтверждениями. User-side blocker отсутствует.
+закрыты. Chrome-шаг завершён: IPRoyal показывает `order #80637001 was processed` для ISP Dedicated,
+Serbia, 1 proxy, 1 Day (24 hours), Standard fraud score, final price `$2.00`. Выдан один proxy endpoint;
+его credentials не выводятся в чат, заметки или репозиторий. Автопродление на checkout не отображалось.
+Следующий gate — trial smoke/read-only observers; production env и activation остаются отдельными gates.
+
+### 0.0.2. External action status — 2026-08-26
+
+- Использован **только Chrome**; встроенный браузер в этом шаге не использовался.
+- Авторизованный IPRoyal dashboard подтвердил live order: ISP Dedicated, Serbia, quantity 1, 24 hours,
+  Standard fraud score, без extras; exact checkout total `$2.00`; order `#80637001` processed.
+- Payment method: сохранённая Visa `****7348`; card data, пароль, OTP и KYC не вводились и не копировались.
+- Выданный proxy credential оставлен только на экране IPRoyal. В Chrome также открыт штатный `Proxy Tester`,
+  но sensitive credential туда пока не вводился. Для smoke нужен либо локальный ввод Дмитрием, либо отдельное
+  action-time разрешение на передачу credential в IPRoyal Proxy Tester.
+- После action-time разрешения IPRoyal Proxy Tester прошёл provider-level smoke: location Serbia, HTTP|HTTPS,
+  status `200`, speed `217ms`; credential после теста очищен из поля Chrome и не сохранён.
+- Read-only `https://rentbelgrad.com/healthz` через Chrome не открылся: `ERR_BLOCKED_BY_CLIENT`. Это Chrome-side
+  limitation, не доказательство неисправности production. Production `.env`, restart, deploy и DB/Telegram
+  side effects не выполнялись.
+- Для следующего plan gate Дмитрий сам вставляет выданный credential в production `NEKRETNINE_PROXY_PRIMARY`;
+  после этого Captain запускает shadow audit и раздаёт три observer-проверки. Секрет остаётся user-controlled.
 
 ---
 
