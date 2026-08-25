@@ -949,6 +949,10 @@ shadow mismatch, coverage и secret-safe proxy counters. Добавлены св
 Focused telemetry/orchestrator tests: `16 passed`; full suite после интеграции: `1140 passed, 55 skipped,
 34 warnings`; pipeline probe и два parity-run зелёные. B0 остаётся STOP до свежего независимого QA PASS.
 
+Свежая попытка barrier review 25.08: три read-only workers (full/parity QA, security/no-write,
+docs/evidence) запущены на exact code SHA, но все остались без verdict за bounded 45 секунд и закрыты.
+Это `STOPPED`, не PASS; user-side blocker отсутствует.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег

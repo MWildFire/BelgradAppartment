@@ -27,7 +27,8 @@
 Это всё ещё implementation progress, не release authorization: `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
 До свежего независимого QA PASS не открывать Chrome/checkout/payment, не менять production `.env`, не делать
 restart/deploy и не переводить live mode. Следующий технический шаг — независимый QA на exact integrated SHA,
-после него B1/B2 review; user-side blocker отсутствует.
+после него B1/B2 review; свежая попытка трёх read-only workers 25.08 снова завершилась timeout без verdict;
+user-side blocker отсутствует.
 
 ---
 

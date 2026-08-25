@@ -92,3 +92,10 @@ remain green. No DB schema or protected Render Finder files changed.
 This continuation does not change the barrier: `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
 The next required gate is an independent QA verdict on this exact integrated SHA; silence or a timeout
 is STOPPED, never PASS.
+
+## Fresh independent barrier attempt — 2026-08-25
+
+Three new read-only workers were launched against the exact code SHA `2fcb3b35a4adcbb511febe770605d5482d440555`:
+full/parity QA, security/no-write audit, and docs/evidence consistency. All three remained `running` for
+the bounded 45-second window and were closed without a verdict. No PASS is inferred; B0 remains
+`STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`. No production, Chrome, payment, Telegram, or DB action occurred.
