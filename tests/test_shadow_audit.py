@@ -117,6 +117,25 @@ async def test_shadow_audit_fails_closed_on_mismatch_skip_and_proxy_error() -> N
 
 
 @pytest.mark.asyncio
+async def test_shadow_audit_catches_address_and_title_mismatch() -> None:
+    snapshot = _detail("1")
+    legacy = _detail("1")
+    legacy.address_raw = "Different address"
+    legacy.title = "Different title"
+    scraper = FakeScraper(
+        [ListingPreview(Platform.NEKRETNINE, "1", snapshot.url, snapshot=snapshot)],
+        {"1": legacy},
+    )
+
+    report = await run_shadow_audit(scraper, max_pages=1, compare_details=1)
+
+    assert report.passed is False
+    assert report.mismatches == [
+        {"external_id": "1", "fields": ["address_raw", "title"]}
+    ]
+
+
+@pytest.mark.asyncio
 async def test_shadow_audit_classifies_partial_snapshot_as_fallback_without_helper() -> None:
     partial = _detail("1")
     partial.price_eur = None
