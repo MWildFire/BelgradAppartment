@@ -133,3 +133,11 @@ diff-check remain green.
 This is Captain-owned hardening, not an independent QA verdict. The next fresh QA target is exact SHA
 `d2c36e0`; B0 remains `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`. No production or other external side
 effect occurred.
+
+## Fresh QA retry on completeness-hardening SHA — 2026-08-25
+
+Three new read-only workers were started on exact SHA `d2c36e0` for full/parity, security/no-write, and
+docs/evidence review. All three stayed `running` through a bounded 60-second wait and were closed without
+verdict. This is a worker-runtime STOP, not a QA PASS and not a user-side blocker. B0 remains
+`STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`; no production, Chrome, payment, Telegram, restart, deploy, or
+DB action occurred.

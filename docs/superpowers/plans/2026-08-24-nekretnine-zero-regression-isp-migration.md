@@ -975,6 +975,10 @@ verdict за bounded 45 секунд; все три workers закрыты ка�
 34 warnings`; focused shadow: `6 passed`; probe/parity/syntax gates зелёные. B0 не меняется: новый exact SHA
 ещё требует свежего independent QA PASS.
 
+Повторная fresh QA попытка на `d2c36e0` (full/parity, security/no-write, docs/evidence) также не вернула
+verdict за bounded 60 секунд; все три workers закрыты как worker-runtime STOP. B0 остаётся
+`STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег

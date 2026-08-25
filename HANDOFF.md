@@ -34,7 +34,8 @@
 restart/deploy и не переводить live mode. Следующий технический шаг — независимый QA на exact integrated SHA
 `d2c36e0`; после него B1/B2 review. Предыдущая попытка трёх read-only workers 25.08 на `2fcb3b3` завершилась
 timeout без verdict; новая попытка трёх read-only workers на `1d4bebb` также осталась running за bounded 45s
-и была закрыта без verdict. Новый report-contract commit не получил independent PASS. User-side blocker отсутствует.
+и была закрыта без verdict. После generic completeness hardening новая тройка на `d2c36e0` не дала verdict
+даже за bounded 60s и также закрыта. Новый код не получил independent PASS. User-side blocker отсутствует.
 
 ---
 
