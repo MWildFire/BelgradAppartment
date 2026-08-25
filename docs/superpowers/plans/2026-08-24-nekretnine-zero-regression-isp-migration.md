@@ -926,7 +926,7 @@ Thresholds:
 ### Captain continuation — 2026-08-25
 
 При отсутствии user-side blocker, но сохранённом worker-runtime STOP, Captain завершил локальный
-P2/P3 continuation на exact integration SHA `cd3d11b1afe56a95d0b91c1d044f506f8f4e53b1` в рамках
+P2/P3 continuation на exact integration code SHA `d8b298a1dd2b08080a9d78bdc1fa382228251325` в рамках
 документированного provisional exception. Добавлены `src/scrapers/shadow_audit.py`, его offline tests
 и тонкая CLI-команда `nekretnine-shadow-audit`; audit не импортирует DB/orchestrator/Telegram и пишет
 только явно указанный sanitized report. Proxy pool получил реальный bounded failover и non-secret
@@ -934,6 +934,8 @@ counters для challenge/fallback evidence.
 
 Фактическая проверка: `1136 passed, 55 skipped, 34 warnings`; focused shadow/parser/proxy/CLI batch —
 `57 passed`; `pipeline-probe` — `golden-0001`, confidence `1.000`, `phash`; `git diff --check` clean.
+Последующий proxy telemetry follow-up отделяет recoverable `proxy_challenges` от residual
+`browser_proxy_errors`/`proxy_errors`, поэтому успешный failover не блокирует audit сам по себе.
 Это не закрывает B0/B1/B2: свежий независимый QA PASS на exact integrated SHA всё ещё обязателен;
 Chrome, payment, production env/restart/deploy и live activation остаются запрещены до этого PASS.
 

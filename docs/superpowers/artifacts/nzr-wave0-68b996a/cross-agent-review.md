@@ -62,11 +62,13 @@ or production activation is authorized from this state.
 ## Captain-owned continuation — 2026-08-25
 
 The user-side blocker is absent, so Captain continued the local implementation without changing the
-release barrier. Integrated commit `cd3d11b1afe56a95d0b91c1d044f506f8f4e53b1` adds the read-only
+release barrier. Integrated code chain through `d8b298a1dd2b08080a9d78bdc1fa382228251325` adds the read-only
 `nekretnine-shadow-audit` core/CLI and completes the bounded proxy failover state:
 
 - `primary → secondary → metered` is selected after browser challenge/reload exhaustion;
 - all candidates exhausted raises a sanitized `NoProxyAvailableError` rather than direct/silent success;
+- recoverable challenge attempts are counted separately from residual browser/proxy errors, so a successful
+  failover is not reported as an unresolved audit failure;
 - proxy attempts, failovers, browser errors, failed-slot count, snapshot completeness, fallback,
   mismatch, detail error, skipped-page and coverage evidence are reportable without URLs, addresses,
   credentials, or raw payloads;
