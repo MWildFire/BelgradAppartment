@@ -14,14 +14,14 @@
 
 Работа продолжена на чистой integration-ветке `codex/nzr-integration`. Реальный локальный результат:
 
-- `ffcc3a6` — добавлена read-only команда `otz nekretnine-shadow-audit` и узкий модуль
+- `ffcc3a6` + `cd3d11b` — добавлена read-only команда `otz nekretnine-shadow-audit` и узкий модуль
   `src/scrapers/shadow_audit.py`. Он не открывает DB-сессию, не запускает orchestrator/stale sweep и не
   отправляет Telegram; сравнивает bounded sample list snapshot против legacy detail, считает coverage,
   skipped pages, fallback/mismatch/detail/proxy errors и пишет sanitized JSON без полных URL/адресов/секретов.
 - Proxy pool теперь действительно failover-ит `primary → secondary → metered` после исчерпания
   browser challenge/reload и fail-closed останавливается после исчерпания кандидатов. В report попадают
   только числовые proxy counters и число неудачных слотов.
-- Проверка: **1135 passed, 55 skipped, 34 warnings**; новый shadow/proxy/parser batch — 56 focused tests;
+- Проверка: **1136 passed, 55 skipped, 34 warnings**; новый shadow/proxy/parser/CLI batch — 57 focused tests;
   `pipeline-probe` — `golden-0001`, confidence `1.000`, `phash`; `git diff --check` — чисто.
 
 Это всё ещё implementation progress, не release authorization: `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.

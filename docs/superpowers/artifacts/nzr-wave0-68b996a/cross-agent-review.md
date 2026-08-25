@@ -62,7 +62,7 @@ or production activation is authorized from this state.
 ## Captain-owned continuation — 2026-08-25
 
 The user-side blocker is absent, so Captain continued the local implementation without changing the
-release barrier. Integrated commit `ffcc3a6259ad8d94a34eb4caa93e6152613c7aca` adds the read-only
+release barrier. Integrated commit `cd3d11b1afe56a95d0b91c1d044f506f8f4e53b1` adds the read-only
 `nekretnine-shadow-audit` core/CLI and completes the bounded proxy failover state:
 
 - `primary → secondary → metered` is selected after browser challenge/reload exhaustion;
@@ -73,8 +73,8 @@ release barrier. Integrated commit `ffcc3a6259ad8d94a34eb4caa93e6152613c7aca` ad
 - the audit has no DB/session/orchestrator/stale-sweep/Telegram imports and its report writer is the
   only intentional local file side effect.
 
-Evidence on this exact SHA: `1135 passed, 55 skipped, 34 warnings`; focused shadow/parser/proxy batch
-`56 passed`; `pipeline-probe` `golden-0001`, confidence `1.000`, `phash`; `git diff --check` clean.
+Evidence on this exact SHA: `1136 passed, 55 skipped, 34 warnings`; focused shadow/parser/proxy/CLI batch
+`57 passed`; `pipeline-probe` `golden-0001`, confidence `1.000`, `phash`; `git diff --check` clean.
 The full `ruff check src tests` remains a known repository baseline/version-drift failure and is not
 claimed green. No production, Chrome, checkout, payment, Telegram, restart, or DB write occurred.
 
