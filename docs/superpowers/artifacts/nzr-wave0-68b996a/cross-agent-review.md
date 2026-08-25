@@ -80,6 +80,15 @@ Evidence on this exact SHA: `1136 passed, 55 skipped, 34 warnings`; focused shad
 The full `ruff check src tests` remains a known repository baseline/version-drift failure and is not
 claimed green. No production, Chrome, checkout, payment, Telegram, restart, or DB write occurred.
 
+## P2 telemetry plumbing — 2026-08-25
+
+Captain connected the snapshot/proxy evidence to the normal scrape path in code commit
+`2fcb3b35a4adcbb511febe770605d5482d440555`: `ScrapeResult` now carries snapshot mode, complete/incomplete
+counts, active uses, fallback rate, shadow mismatch count, coverage rate, and integer-only proxy metrics;
+the standard CLI scrape summary prints the non-secret counters. Focused telemetry/orchestrator tests:
+`16 passed`. Full integrated suite: `1140 passed, 55 skipped, 34 warnings`; pipeline probe and parity
+remain green. No DB schema or protected Render Finder files changed.
+
 This continuation does not change the barrier: `B0 = STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
 The next required gate is an independent QA verdict on this exact integrated SHA; silence or a timeout
 is STOPPED, never PASS.

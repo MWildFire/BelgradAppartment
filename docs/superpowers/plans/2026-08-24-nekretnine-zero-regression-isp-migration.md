@@ -939,6 +939,16 @@ counters для challenge/fallback evidence.
 Это не закрывает B0/B1/B2: свежий независимый QA PASS на exact integrated SHA всё ещё обязателен;
 Chrome, payment, production env/restart/deploy и live activation остаются запрещены до этого PASS.
 
+### P2 telemetry plumbing — 2026-08-25
+
+На exact code chain `2fcb3b35a4adcbb511febe770605d5482d440555` telemetry подключена к обычному
+`scrape_platform()`/`ScrapeResult` и CLI summary: snapshot mode, complete/incomplete/fallback/active-use,
+shadow mismatch, coverage и secret-safe proxy counters. Добавлены свойства `coverage_rate` и
+`snapshot_fallback_rate`; DB schema и protected Render Finder path не менялись.
+
+Focused telemetry/orchestrator tests: `16 passed`; full suite после интеграции: `1140 passed, 55 skipped,
+34 warnings`; pipeline probe и два parity-run зелёные. B0 остаётся STOP до свежего независимого QA PASS.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег
