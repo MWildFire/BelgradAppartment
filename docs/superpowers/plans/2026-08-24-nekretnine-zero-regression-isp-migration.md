@@ -278,10 +278,10 @@ NEKRETNINE_LIST_SNAPSHOT_MODE=legacy|shadow|active
 Добавить backward-compatible настройки:
 
 ```text
-NEKRETNINE_PROXY_PRIMARY=
-NEKRETNINE_PROXY_SECONDARY=
-NEKRETNINE_PROXY_METERED_FALLBACK=
-NEKRETNINE_PROXY_KIND=legacy_rotating|static_isp
+NEKRETNINE_PROXY_PRIMARY_URL=
+NEKRETNINE_PROXY_SECONDARY_URL=
+NEKRETNINE_PROXY_METERED_URL=
+NEKRETNINE_PROXY_MODE=legacy_rotating|static_isp
 ```
 
 Все три URL-поля объявить через `Field(default="", repr=False)` либо эквивалентный secret-safe type.
@@ -1092,18 +1092,34 @@ trial smoke и read-only observers; production env, restart, deploy и credentia
 credential был введён только туда, provider-level smoke дал location Serbia, HTTP|HTTPS, status `200` и
 `217ms`; поле после теста очищено. Это ещё не доказывает проход Nekretnine/DataDome.
 
-Следующий production gate остаётся user-controlled: Дмитрий сам вставляет credential в `NEKRETNINE_PROXY_PRIMARY`
-на production и выставляет `NEKRETNINE_PROXY_KIND=static_isp` и пока
+Следующий production gate остаётся user-controlled: Дмитрий сам вставляет credential в `NEKRETNINE_PROXY_PRIMARY_URL`
+на production и выставляет `NEKRETNINE_PROXY_MODE=static_isp` и пока
 `NEKRETNINE_LIST_SNAPSHOT_MODE=shadow`. После этого Captain выполняет read-only preflight/shadow audit и
 три observer-проверки. В чат credential не копируется.
 
 - Агент делает backup `/opt/otz/.env` с mode 600.
 - До правки вычисляет SHA-256 только по строкам `TG_` без вывода их значений.
-- Дмитрий сам вставляет proxy credential в `NEKRETNINE_PROXY_PRIMARY` на сервере.
-- Установить `NEKRETNINE_PROXY_KIND=static_isp` и пока
+- Дмитрий сам вставляет proxy credential в `NEKRETNINE_PROXY_PRIMARY_URL` на сервере.
+- Установить `NEKRETNINE_PROXY_MODE=static_isp` и пока
   `NEKRETNINE_LIST_SNAPSHOT_MODE=shadow`.
 - После правки повторить hash `TG_`; он обязан совпасть.
 - Не удалять старый `SCRAPER_PROXY_URL`: оставить как rollback/metered fallback до завершения transition.
+
+### 11.4 Trial continuation — production evidence and monthly gate — 2026-08-26
+
+Captain сам выполнил user-authorized production insertion/deploy и оставил snapshot mode в `shadow`. В actual
+code contract используются `_URL`/`_MODE` names выше; старый `SCRAPER_PROXY_URL` добавляется в pool как
+legacy-rotating fallback только при наличии нового primary, что закрывает найденный pool-construction defect.
+
+Read-only retry report `/opt/otz/data/reports/nekretnine-shadow-20260826-0137-retry.json` остановлен fail-closed:
+`previewed=3585`, `site_total=4916`, coverage `72.9%`, `skipped_pages=15`, sample `100`, `mismatches=0`,
+`browser_proxy_errors=44`, оба configured slots exhausted. DB counts/integrity совпали с pre-audit backup;
+report guarantees `no_db_writes`, `no_telegram_sends` и `no_stale_sweep`.
+
+Следовательно, monthly purchase не является waiver для failed trial: Chrome подготовил live quote для 2 Serbia
+ISP Dedicated IPs, 30 days, Standard, unlimited, auto-renewal off, final `$6.00`; финальная кнопка намеренно
+ждёт свежего action-time подтверждения. До оплаты и установки обоих credentials сохранять `shadow`, не
+включать `active` и не покупать optional emergency pool.
 
 ---
 

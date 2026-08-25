@@ -36,6 +36,7 @@ echo "→ rsync to $VPS:$REMOTE"
 rsync -rlptzv --delete-after \
   --exclude='.venv' --exclude='.git/' --exclude='__pycache__/' \
   --exclude='*.pyc' --exclude='.pytest_cache/' --exclude='.mypy_cache/' --exclude='.ruff_cache/' \
+  --exclude='.cache/' --exclude='.config/' --exclude='.local/' \
   --include='data/' --include='data/districts.yaml' --exclude='data/*' \
   --exclude='.env' --exclude='*.session' --exclude='*.session-journal' \
   --exclude='logs/' --exclude='.claude/' --exclude='.DS_Store' \

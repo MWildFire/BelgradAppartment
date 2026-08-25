@@ -79,3 +79,16 @@ def test_legacy_scraper_proxy_is_primary_compatibility_fallback() -> None:
     settings = Settings(_env_file=None, scraper_proxy_url="http://legacy.example:8080")
     pool = ProxyPool.from_settings(settings)
     assert pool.select().url == "http://legacy.example:8080"
+
+
+def test_legacy_scraper_proxy_remains_bounded_fallback_when_primary_is_new() -> None:
+    settings = Settings(
+        _env_file=None,
+        scraper_proxy_url="http://legacy.example:8080",
+        nekretnine_proxy_mode="static_isp",
+        nekretnine_proxy_primary_url="http://isp.example:1",
+    )
+    pool = ProxyPool.from_settings(settings)
+    assert [candidate.slot for candidate in pool.candidates] == ["primary", "metered"]
+    assert pool.candidates[1].kind == "legacy_rotating"
+    assert pool.select(failed_slots={"primary"}).url == "http://legacy.example:8080"

@@ -57,8 +57,28 @@ Serbia, 1 proxy, 1 Day (24 hours), Standard fraud score, final price `$2.00`. В
 - Read-only `https://rentbelgrad.com/healthz` через Chrome не открылся: `ERR_BLOCKED_BY_CLIENT`. Это Chrome-side
   limitation, не доказательство неисправности production. Production `.env`, restart, deploy и DB/Telegram
   side effects не выполнялись.
-- Для следующего plan gate Дмитрий сам вставляет выданный credential в production `NEKRETNINE_PROXY_PRIMARY`;
+- Для следующего plan gate Дмитрий сам вставляет выданный credential в production `NEKRETNINE_PROXY_PRIMARY_URL`;
   после этого Captain запускает shadow audit и раздаёт три observer-проверки. Секрет остаётся user-controlled.
+
+### 0.0.3. Production continuation — 2026-08-26
+
+Фактическое продолжение вышеописанного gate выполнено Captain после явного разрешения Дмитрия:
+
+- Production host `3.121.163.130`; `.env` mode `600`, owner `otz:otz`; snapshot mode оставлен `shadow`.
+  В actual code contract используются `NEKRETNINE_PROXY_PRIMARY_URL`, `NEKRETNINE_PROXY_MODE` и
+  `NEKRETNINE_PROXY_METERED_URL`; старый `SCRAPER_PROXY_URL` добавляется как bounded legacy-rotating fallback.
+  TG-only hash не изменился: `ea516cda420c60f6c647c0da4aac9cc5d9ad6b9872cc71cfde5f3abb13241c0e`.
+- Узкий pool fix задеплоен одинаковым SHA локально и на production; local targeted tests — `53 passed`.
+  Services `otz-monitor`, `otz-site`, `caddy` active; production timers enabled.
+- DB backup `/opt/otz/data/backups/otz-before-snapshot-20260825-211756.db`; backup/current counts совпали
+  (`listings=73449`, `matches=358`, `inbound_posts=639`, `site_listings=254`, `leads=9`), quick/integrity
+  check обеих копий — `ok`; report подтвердил no DB writes/no Telegram/no stale sweep.
+- Retry report `/opt/otz/data/reports/nekretnine-shadow-20260826-0137-retry.json` — `STOP`: `3585/4916`
+  (`72.9%`), `skipped_pages=15`, sample `100`, fallback `13`, mismatches `0`, `browser_proxy_errors=44`,
+  `proxy_attempts=2`, `proxy_failovers=1`, оба слота исчерпаны. Active mode не включать.
+- В Chrome подготовлен следующий live quote: ISP Dedicated, Serbia, 2 IP, 30 Days, Standard, unlimited,
+  auto-renewal off, final `$6.00`, без tax/доплат; вкладка оставлена перед `Complete order`. Покупка не нажата:
+  перед финансовым списанием требуется отдельное action-time подтверждение.
 
 ---
 

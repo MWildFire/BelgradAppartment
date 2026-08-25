@@ -89,11 +89,19 @@ class ProxyPool:
     def from_settings(cls, settings: Settings) -> ProxyPool:
         mode = settings.nekretnine_proxy_mode
         candidates: list[ProxyCandidate] = []
-        configured = (
-            ("primary", settings.nekretnine_proxy_primary_url or settings.scraper_proxy_url, mode),
+        # Keep the pre-migration gateway as a real bounded fallback once a new primary is
+        # configured.  Previously the `or` expression made SCRAPER_PROXY_URL disappear from the
+        # pool as soon as PRIMARY_URL was set, so one challenged ISP IP could exhaust the whole
+        # browser run even though the documented rollback/metered gateway was still available.
+        primary_url = settings.nekretnine_proxy_primary_url
+        configured = [
+            ("primary", primary_url or settings.scraper_proxy_url,
+             mode if primary_url else "legacy_rotating"),
             ("secondary", settings.nekretnine_proxy_secondary_url, mode),
             ("metered", settings.nekretnine_proxy_metered_url, "metered"),
-        )
+        ]
+        if primary_url and settings.scraper_proxy_url and not settings.nekretnine_proxy_metered_url:
+            configured[-1] = ("metered", settings.scraper_proxy_url, "legacy_rotating")
         for slot, url, kind in configured:
             if url and url.strip():
                 candidates.append(ProxyCandidate(slot=slot, kind=kind, url=url))
