@@ -107,6 +107,16 @@ class ScrapeResult:
     details_attempted: int = 0
     details_parsed_ok: int = 0
     empty_shells: int = 0
+    # Zero-regression snapshot/proxy telemetry. In-memory only; no schema or protected pipeline
+    # changes are needed for the migration gate.
+    snapshot_mode: str = "legacy"
+    snapshots_seen: int = 0
+    snapshots_complete: int = 0
+    snapshots_incomplete: int = 0
+    snapshot_fallbacks: int = 0
+    snapshot_active_uses: int = 0
+    snapshot_shadow_mismatches: int = 0
+    proxy_metrics: dict[str, int] = field(default_factory=dict)
 
     @property
     def parse_rate(self) -> float:
@@ -116,6 +126,22 @@ class ScrapeResult:
         if self.details_attempted == 0:
             return 1.0
         return self.details_parsed_ok / self.details_attempted
+
+    @property
+    def coverage_rate(self) -> float | None:
+        """Previewed/site_total, or None when the source did not expose a denominator."""
+        if self.site_total is None:
+            return None
+        if self.site_total == 0:
+            return 1.0 if self.previewed == 0 else 0.0
+        return self.previewed / self.site_total
+
+    @property
+    def snapshot_fallback_rate(self) -> float:
+        """Incomplete-snapshot fallbacks / snapshots seen; zero when no snapshots were present."""
+        if self.snapshots_seen == 0:
+            return 0.0
+        return self.snapshot_fallbacks / self.snapshots_seen
 
 
 async def scrape_platform(
@@ -132,7 +158,12 @@ async def scrape_platform(
     to the scraper, so the scraper can stop paginating after it sees full pages of already-known
     items. First run is full; subsequent runs are fast (1-5 min instead of 6-7 h).
     """
-    result = ScrapeResult(platform=scraper.platform)
+    result = ScrapeResult(
+        platform=scraper.platform,
+        snapshot_mode=_snapshot_mode(scraper),
+        proxy_metrics=_proxy_metrics_for(scraper),
+    )
+    scraper._snapshot_shadow_mismatches = 0  # type: ignore[attr-defined]
 
     known_ids: set[str] = set()
     if incremental:
@@ -161,6 +192,7 @@ async def scrape_platform(
     for prev in previews:
         if max_new is not None and new_count >= max_new:
             break
+        _record_snapshot_telemetry(result, scraper, prev)
         try:
             inserted, photos, fetched_detail = await _process_one(
                 scraper,
@@ -194,6 +226,10 @@ async def scrape_platform(
             new_count += 1
         else:
             result.updated += 1
+    result.snapshot_shadow_mismatches = int(
+        getattr(scraper, "_snapshot_shadow_mismatches", 0)
+    )
+    result.proxy_metrics = _proxy_metrics_for(scraper)
     return result
 
 
@@ -275,8 +311,14 @@ async def _process_one(
     else:
         detail = await scraper.fetch_detail(url)
         fetched_detail = True
-        if snapshot_mode == "shadow" and snapshot is not None:
-            _log_snapshot_mismatch(snapshot, detail)
+        if (
+            snapshot_mode == "shadow"
+            and snapshot is not None
+            and _log_snapshot_mismatch(snapshot, detail)
+        ):
+            scraper._snapshot_shadow_mismatches = (  # type: ignore[attr-defined]
+                int(getattr(scraper, "_snapshot_shadow_mismatches", 0)) + 1
+            )
 
     if not detail.photo_urls and detail.price_eur is None and detail.title is None:
         # All-None shell — the detail fetch "succeeded" on a challenge/error page or a payload
@@ -324,6 +366,37 @@ def _snapshot_mode(scraper: Scraper) -> str:
     return get_settings().nekretnine_list_snapshot_mode
 
 
+def _proxy_metrics_for(scraper: Scraper) -> dict[str, int]:
+    """Copy only integer, secret-safe counters exposed by a scraper."""
+    metrics = getattr(scraper, "proxy_metrics", None)
+    if not isinstance(metrics, Mapping):
+        return {}
+    return {
+        str(name): value
+        for name, value in metrics.items()
+        if isinstance(name, str) and isinstance(value, int)
+    }
+
+
+def _record_snapshot_telemetry(
+    result: ScrapeResult,
+    scraper: Scraper,
+    preview: ListingPreview,
+) -> None:
+    if scraper.platform != Platform.NEKRETNINE or preview.snapshot is None:
+        return
+    result.snapshots_seen += 1
+    complete = _complete_snapshot_for(scraper, preview) is not None
+    if complete:
+        result.snapshots_complete += 1
+        if result.snapshot_mode == "active":
+            result.snapshot_active_uses += 1
+    else:
+        result.snapshots_incomplete += 1
+        if result.snapshot_mode in {"shadow", "active"}:
+            result.snapshot_fallbacks += 1
+
+
 def _complete_snapshot_for(
     scraper: Scraper, preview: ListingPreview | None
 ) -> ListingDetail | None:
@@ -353,7 +426,7 @@ def _merge_snapshot_scalars(row: Listing, snapshot: ListingDetail) -> None:
         row.url = snapshot.url
 
 
-def _log_snapshot_mismatch(snapshot: ListingDetail, detail: ListingDetail) -> None:
+def _log_snapshot_mismatch(snapshot: ListingDetail, detail: ListingDetail) -> bool:
     fields = (
         "price_eur",
         "area_m2",
@@ -372,6 +445,7 @@ def _log_snapshot_mismatch(snapshot: ListingDetail, detail: ListingDetail) -> No
             snapshot.external_id,
             ",".join(mismatches),
         )
+    return bool(mismatches)
 
 
 def _make_side_client(

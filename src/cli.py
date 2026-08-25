@@ -135,10 +135,24 @@ def _print_summary(results: list[ScrapeResult]) -> None:
     click.echo("")
     click.echo("=== Scrape summary ===")
     for r in results:
+        extra = ""
+        if r.snapshot_mode != "legacy" or r.snapshots_seen:
+            extra += (
+                f"  snapshots={r.snapshots_complete}/{r.snapshots_seen}"
+                f"  fallback={r.snapshot_fallbacks}"
+            )
+        if r.proxy_metrics:
+            challenges = r.proxy_metrics.get("proxy_challenges", 0)
+            failovers = r.proxy_metrics.get("proxy_failovers", 0)
+            proxy_errors = r.proxy_metrics.get("proxy_errors", 0)
+            extra += (
+                f"  proxy(challenge={challenges},failover={failovers},"
+                f"errors={proxy_errors})"
+            )
         click.echo(
             f"  {r.platform.value:14} previewed={r.previewed:4d}  "
             f"new={r.inserted:4d}  refreshed={r.updated:4d}  "
-            f"photos={r.photos_downloaded:4d}  errors={r.errors}"
+            f"photos={r.photos_downloaded:4d}  errors={r.errors}{extra}"
         )
 
 
