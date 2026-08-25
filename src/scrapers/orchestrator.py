@@ -31,6 +31,7 @@ from src.db import Listing, get_session
 from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.snapshot_parity import mismatch_fields
 
 logger = logging.getLogger(__name__)
 
@@ -427,18 +428,7 @@ def _merge_snapshot_scalars(row: Listing, snapshot: ListingDetail) -> None:
 
 
 def _log_snapshot_mismatch(snapshot: ListingDetail, detail: ListingDetail) -> bool:
-    fields = (
-        "price_eur",
-        "area_m2",
-        "rooms",
-        "district",
-        "address_raw",
-        "lat",
-        "lon",
-        "title",
-        "photo_urls",
-    )
-    mismatches = [field_name for field_name in fields if getattr(snapshot, field_name) != getattr(detail, field_name)]
+    mismatches = mismatch_fields(snapshot, detail)
     if mismatches:
         logger.warning(
             "[nekretnine] snapshot shadow mismatch external_id=%s fields=%s",

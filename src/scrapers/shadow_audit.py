@@ -15,20 +15,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from src.scrapers.base import ListingDetail, ListingPreview
-
-_COMPARE_FIELDS = (
-    "external_id",
-    "url",
-    "price_eur",
-    "area_m2",
-    "rooms",
-    "district",
-    "address_raw",
-    "title",
-    "lat",
-    "lon",
-    "photo_ids",
-)
+from src.scrapers.snapshot_parity import mismatch_fields
 
 
 class ShadowAuditScraper(Protocol):
@@ -82,34 +69,6 @@ class ShadowAuditReport:
         return asdict(self)
 
 
-def _photo_ids(urls: list[str]) -> list[str]:
-    """Extract stable CDN photo IDs while keeping full image URLs out of the report."""
-    result: list[str] = []
-    for url in urls:
-        path_parts = [part for part in urlparse(url).path.split("/") if part]
-        if len(path_parts) >= 2 and path_parts[-2] == "image":
-            result.append(path_parts[-1].split(".", 1)[0])
-        else:
-            result.append(path_parts[-1] if path_parts else "unknown")
-    return result
-
-
-def _normalized(detail: ListingDetail) -> dict[str, Any]:
-    return {
-        "external_id": detail.external_id,
-        "url": detail.url,
-        "price_eur": detail.price_eur,
-        "area_m2": detail.area_m2,
-        "rooms": detail.rooms,
-        "district": detail.district,
-        "address_raw": detail.address_raw,
-        "title": detail.title,
-        "lat": detail.lat,
-        "lon": detail.lon,
-        "photo_ids": _photo_ids(detail.photo_urls),
-    }
-
-
 def _snapshot_is_complete(scraper: ShadowAuditScraper, snapshot: ListingDetail | None) -> bool:
     checker = getattr(scraper, "is_snapshot_complete", None)
     if callable(checker):
@@ -155,9 +114,7 @@ def _valid_photo_url(url: object) -> bool:
 
 
 def _mismatch_fields(snapshot: ListingDetail, detail: ListingDetail) -> list[str]:
-    left = _normalized(snapshot)
-    right = _normalized(detail)
-    return [field_name for field_name in _COMPARE_FIELDS if left[field_name] != right[field_name]]
+    return mismatch_fields(snapshot, detail)
 
 
 def _proxy_error_count(scraper: ShadowAuditScraper) -> int:
