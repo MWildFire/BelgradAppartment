@@ -141,3 +141,27 @@ docs/evidence review. All three stayed `running` through a bounded 60-second wai
 verdict. This is a worker-runtime STOP, not a QA PASS and not a user-side blocker. B0 remains
 `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`; no production, Chrome, payment, Telegram, restart, deploy, or
 DB action occurred.
+
+## Shared parity contract hardening — 2026-08-26
+
+Cross-review found that orchestrator shadow telemetry and the standalone audit had drifted: the former
+compared raw photo URLs and omitted `external_id`/URL while the latter normalized photo IDs and included
+address/title. Commit `208a35e` adds pure `src/scrapers/snapshot_parity.py` and makes both paths use the same
+field set and normalization. Focused contract/orchestrator tests: `23 passed` before integration and the
+full suite is `1142 passed, 55 skipped, 34 warnings`; detached exact gate also records `1197 collected`,
+probe PASS, parity `5 passed` twice, protected diff empty, syntax and diff-check clean.
+
+The prior B0 STOP is superseded: independent full QA, security/no-write QA, and evidence QA had PASS on
+the preceding contract SHA; fresh final B1/B2 observers are being rerun on exact `208a35e` after this fix.
+No external action has started yet.
+
+## Photo ID normalization hardening — 2026-08-26
+
+The final security review found that the shared helper still extracted `xxl` rather than the numeric photo
+ID from `/image/<id>/xxl.jpg`, allowing different photos to compare equal. Commit `eb6611e` fixes the
+numeric path-segment extraction and adds a negative audit test. Focused contract tests are now `24 passed`
+and the full exact gate is `1143 passed, 55 skipped, 34 warnings`, `1198 collected`, probe PASS, parity
+`5 passed` twice, protected diff empty, syntax/diff-check clean.
+
+This invalidated earlier final QA evidence on `208a35e`; fresh independent B1/B2 verdicts must target
+exact `eb6611e`. No external action has started.

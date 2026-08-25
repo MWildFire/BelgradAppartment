@@ -979,6 +979,25 @@ verdict за bounded 45 секунд; все три workers закрыты ка�
 verdict за bounded 60 секунд; все три workers закрыты как worker-runtime STOP. B0 остаётся
 `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
 
+### B0 closure and shared parity contract — 2026-08-26
+
+На exact `ed52475` три независимых QA/evidence lanes вернули PASS и detached validation подтвердил
+1141 passed / 55 skipped, probe, parity twice, collection 1196 и protected diff. Последующий cross-review
+нашёл реальный drift между orchestrator mismatch telemetry и shadow report: разные field sets и photo
+normalization. Commit `e09a165` добавил address/title parity test, а `208a35e` вынес общий pure
+`src/scrapers/snapshot_parity.py`, используемый обоими путями. Новый detached gate на `208a35e`: 1142
+passed / 55 skipped, 1197 collected, probe PASS, parity 5/5 дважды, protected diff пуст.
+
+B0 считается закрытым provisional implementation barrier после independent PASS; финальный B1/B2 review
+идёт на exact `208a35e`. До его PASS Chrome/payment/production не открывать. Первый разрешённый внешний
+шаг после B1/B2 — read-only Chrome quote без покупки; monthly payment и production canary требуют отдельных
+подтверждений.
+
+Последующий security review на `208a35e` выявил ошибку normalized photo ID extraction (`xxl` вместо numeric
+ID). Commit `eb6611e` исправил её и добавил negative test; exact gate теперь `1143 passed, 55 skipped,
+1198 collected`, parity 5/5 дважды и protected diff пуст. Поэтому финальный B1/B2 review перенесён на exact
+`eb6611e`; Chrome/payment/production остаются закрыты до его PASS.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег
