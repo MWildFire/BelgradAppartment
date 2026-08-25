@@ -112,3 +112,10 @@ suite remains `1140 passed, 55 skipped, 34 warnings`.
 This is still Captain-owned local implementation, not an independent QA verdict. The next fresh QA must
 target exact integrated SHA `1d4bebb`; B0 remains `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`. No production,
 Chrome, payment, Telegram, restart, deploy, or DB action occurred.
+
+## Fresh QA retry on report-contract SHA — 2026-08-25
+
+Three new read-only workers were started on exact SHA `1d4bebb` for full/parity, security/no-write, and
+docs/evidence review. All three stayed `running` through the bounded 45-second wait and were closed without
+verdict. This is a repeated worker-runtime STOP, not a QA PASS and not a user-side blocker. B0 remains
+`STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`; no external side effect occurred.

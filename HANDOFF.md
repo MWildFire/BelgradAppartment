@@ -31,7 +31,8 @@
 До свежего независимого QA PASS не открывать Chrome/checkout/payment, не менять production `.env`, не делать
 restart/deploy и не переводить live mode. Следующий технический шаг — независимый QA на exact integrated SHA
 `1d4bebb`; после него B1/B2 review. Предыдущая попытка трёх read-only workers 25.08 на `2fcb3b3` завершилась
-timeout без verdict; новый report-contract commit ещё не проходил независимый QA. User-side blocker отсутствует.
+timeout без verdict; новая попытка трёх read-only workers на `1d4bebb` также осталась running за bounded 45s
+и была закрыта без verdict. Новый report-contract commit не получил independent PASS. User-side blocker отсутствует.
 
 ---
 

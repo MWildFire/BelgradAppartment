@@ -962,6 +962,10 @@ docs/evidence) запущены на exact code SHA, но все осталис�
 получить свежий независимый QA PASS; B0 остаётся `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`, а
 Chrome/payment/production activation запрещены.
 
+Повторный fresh QA retry на exact `1d4bebb` (full/parity, security/no-write, docs/evidence) также не дал
+verdict за bounded 45 секунд; все три workers закрыты как worker-runtime STOP. Это не PASS и не blocker от
+Дмитрия. B0 остаётся `STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS`.
+
 ---
 
 ## 10. Полный локальный gate до Chrome/денег
