@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from src.scrapers.base import ListingDetail, ListingPreview
 
@@ -50,6 +51,12 @@ class ShadowAuditThresholds:
 class ShadowAuditReport:
     max_pages: int
     compare_limit: int
+    run_id: str = field(default_factory=lambda: uuid4().hex)
+    source: str = "nekretnine"
+    mode: str = "shadow"
+    no_db_writes: bool = True
+    no_telegram_sends: bool = True
+    no_stale_sweep: bool = True
     previewed: int = 0
     site_total: int | None = None
     skipped_pages: int = 0

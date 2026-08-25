@@ -72,6 +72,12 @@ async def test_shadow_audit_passes_and_fetches_only_complete_sample() -> None:
     assert report.fallback_listing_ids == ["2"]
     assert report.coverage == 1.0
     assert report.proxy_metrics == {"browser_proxy_errors": 0}
+    assert report.source == "nekretnine"
+    assert report.mode == "shadow"
+    assert len(report.run_id) == 32
+    assert report.no_db_writes is True
+    assert report.no_telegram_sends is True
+    assert report.no_stale_sweep is True
 
 
 @pytest.mark.asyncio
@@ -119,6 +125,12 @@ async def test_shadow_audit_report_is_sanitized(tmp_path) -> None:
     assert "PRIVATE ADDRESS" not in content
     assert detail.url not in content
     assert payload["mismatches"] == []
+    assert payload["source"] == "nekretnine"
+    assert payload["mode"] == "shadow"
+    assert len(payload["run_id"]) == 32
+    assert payload["no_db_writes"] is True
+    assert payload["no_telegram_sends"] is True
+    assert payload["no_stale_sweep"] is True
 
 
 @pytest.mark.asyncio
