@@ -917,7 +917,9 @@ Thresholds:
 - coverage ≥98% текущего `site_total` и не хуже последнего healthy baseline;
 - 100% sample совпадений по `external_id`, URL, price, area, rooms, district, coordinates и ordered
   photo ID set **либо** snapshot корректно classified incomplete и отправлен в fallback;
-- ни один complete snapshot не теряет bot-visible location line относительно legacy;
+- ни один complete snapshot не теряет bot-visible location line относительно legacy; если legacy
+  detail payload односторонне не отдаёт `address_raw`, непустой snapshot сохраняется как authoritative,
+  а два непустых разных значения остаются hard mismatch;
 - legacy fallback rate записан; ориентир по живой странице <15%, но качество важнее — больший rate не включает active mode,
   пока причина не понята;
 - browser/proxy errors = 0 после допустимого failover.

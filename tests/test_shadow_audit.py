@@ -136,6 +136,22 @@ async def test_shadow_audit_catches_address_and_title_mismatch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_shadow_audit_accepts_missing_detail_address_when_snapshot_has_location() -> None:
+    snapshot = _detail("1")
+    legacy = _detail("1")
+    legacy.address_raw = None
+    scraper = FakeScraper(
+        [ListingPreview(Platform.NEKRETNINE, "1", snapshot.url, snapshot=snapshot)],
+        {"1": legacy},
+    )
+
+    report = await run_shadow_audit(scraper, max_pages=1, compare_details=1)
+
+    assert report.passed is True
+    assert report.mismatches == []
+
+
+@pytest.mark.asyncio
 async def test_shadow_audit_catches_photo_id_mismatch() -> None:
     snapshot = _detail("1")
     legacy = _detail("1")

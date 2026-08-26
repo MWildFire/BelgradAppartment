@@ -53,4 +53,13 @@ def normalized(detail: ListingDetail) -> dict[str, Any]:
 def mismatch_fields(left: ListingDetail, right: ListingDetail) -> list[str]:
     left_values = normalized(left)
     right_values = normalized(right)
-    return [field for field in COMPARE_FIELDS if left_values[field] != right_values[field]]
+    mismatches: list[str] = []
+    for field in COMPARE_FIELDS:
+        # Nekretnine's detail payload can omit the street address while the list snapshot still
+        # carries the bot-visible location line. A complete snapshot wins this one-sided absence;
+        # two non-empty values must still match.
+        if field == "address_raw" and left_values[field] and right_values[field] is None:
+            continue
+        if left_values[field] != right_values[field]:
+            mismatches.append(field)
+    return mismatches

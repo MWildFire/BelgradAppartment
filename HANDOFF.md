@@ -86,10 +86,24 @@ Serbia, 1 proxy, 1 Day (24 hours), Standard fraud score, final price `$2.00`. В
   ISP Dedicated, Serbia, 2 IP, 30 days; выданные credentials не записываются в чат, заметки или репозиторий.
 - В код добавлен secret-safe `NEKRETNINE_PROXY_ADDITIONAL_URLS` (comma/newline-separated): порядок теперь
   `primary → secondary → additional-1..N → metered/legacy`, duplicate URL values отбрасываются, fail-closed
-  сохраняется. Production `.env` пока не перезапущен; новые слоты вводятся только после deploy + shadow gate.
+  сохраняется. Код задеплоен, два новых слота добавлены в production `.env`; монитор не перезапущен до
+  зелёного shadow gate.
 - Локальная проверка после расширения pool: `76 passed` (proxy pool, Nekretnine scraper, shadow audit,
   scrape metrics). Следующий шаг: задеплоить код и добавить два новых credential в additional slots через
   защищённый action-time канал, затем повторить полный read-only shadow audit.
+
+### 0.0.5. Live parity blocker isolated — 2026-08-26
+
+- Полный Xvfb shadow report `/opt/otz/data/reports/nekretnine-shadow-20260826-0835-additional-pool-xvfb.json`:
+  `4888/4893` (`99.898%`), `skipped_pages=0`, `detail_errors=0`, `browser_proxy_errors=0`,
+  `no_db_writes/no_telegram_sends/no_stale_sweep=true`.
+- Остался только `snapshot_detail_mismatch`: 40 `address_raw` fields. Targeted payload inspection
+  показал, что list snapshot содержит location line, а detail payload у этих rows односторонне отдаёт
+  `address=null`; это не proxy failure и не конфликт двух адресов. Один price mismatch исчез при
+  повторной проверке и трактуется как live price change during a long crawl, не как parser regression.
+- Shared parity contract теперь принимает missing `address_raw` только в detail при непустом snapshot;
+  два непустых разных значения по-прежнему fail. Добавлен regression test; перед activation нужен
+  новый deploy и полный shadow audit с повторной проверкой price parity.
 
 ---
 
