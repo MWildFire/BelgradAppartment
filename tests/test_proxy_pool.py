@@ -69,6 +69,40 @@ def test_pool_orders_primary_secondary_metered_and_fails_closed() -> None:
         pool.select(failed_slots={"primary", "secondary", "metered"})
 
 
+def test_pool_includes_additional_static_candidates_before_metered() -> None:
+    settings = Settings(
+        _env_file=None,
+        nekretnine_proxy_mode="static_isp",
+        nekretnine_proxy_primary_url="http://p.example:1",
+        nekretnine_proxy_secondary_url="http://s.example:2",
+        nekretnine_proxy_additional_urls="http://a.example:3,\nhttp://b.example:4",
+        nekretnine_proxy_metered_url="http://m.example:5",
+    )
+    pool = ProxyPool.from_settings(settings)
+    assert [candidate.slot for candidate in pool.candidates] == [
+        "primary",
+        "secondary",
+        "additional-1",
+        "additional-2",
+        "metered",
+    ]
+    assert [candidate.kind for candidate in pool.candidates[2:4]] == ["static_isp", "static_isp"]
+    assert pool.select(failed_slots={"primary", "secondary"}).slot == "additional-1"
+    assert pool.select(failed_slots={"primary", "secondary", "additional-1"}).slot == "additional-2"
+
+
+def test_pool_deduplicates_additional_urls_without_leaking_values() -> None:
+    settings = Settings(
+        _env_file=None,
+        nekretnine_proxy_mode="static_isp",
+        nekretnine_proxy_primary_url="http://p.example:1",
+        nekretnine_proxy_additional_urls="http://p.example:1,http://a.example:2,http://a.example:2",
+    )
+    pool = ProxyPool.from_settings(settings)
+    assert [candidate.slot for candidate in pool.candidates] == ["primary", "additional-2"]
+    assert "http://a.example:2" not in repr(pool.candidates[1])
+
+
 def test_malformed_config_is_fail_closed() -> None:
     settings = Settings(_env_file=None, nekretnine_proxy_primary_url="not-a-proxy")
     with pytest.raises(ProxyConfigurationError):

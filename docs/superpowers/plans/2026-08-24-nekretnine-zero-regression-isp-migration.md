@@ -280,6 +280,7 @@ NEKRETNINE_LIST_SNAPSHOT_MODE=legacy|shadow|active
 ```text
 NEKRETNINE_PROXY_PRIMARY_URL=
 NEKRETNINE_PROXY_SECONDARY_URL=
+NEKRETNINE_PROXY_ADDITIONAL_URLS=       # comma/newline-separated extra static ISP URLs
 NEKRETNINE_PROXY_METERED_URL=
 NEKRETNINE_PROXY_MODE=legacy_rotating|static_isp
 ```
@@ -291,7 +292,7 @@ NEKRETNINE_PROXY_MODE=legacy_rotating|static_isp
 - если новые поля пусты, использовать существующий `SCRAPER_PROXY_URL` и нынешнее поведение;
 - `static_isp`: передавать credentials как есть, **не** добавлять IPRoyal `_session-..._lifetime-...`;
 - `legacy_rotating`: сохранить нынешний session suffix;
-- порядок: primary → secondary → metered fallback;
+- порядок: primary → secondary → additional static ISP slots → metered fallback;
 - failover только после bounded browser challenge/reload failure, не на каждой странице;
 - новый proxy получает новый browser profile/cookies;
 - proxy URLs/passwords никогда не попадают в repr/log/error/Telegram summary;

@@ -80,6 +80,17 @@ Serbia, 1 proxy, 1 Day (24 hours), Standard fraud score, final price `$2.00`. В
   auto-renewal off, final `$6.00`, без tax/доплат; вкладка оставлена перед `Complete order`. Покупка не нажата:
   перед финансовым списанием требуется отдельное action-time подтверждение.
 
+### 0.0.4. Additional ISP order and pool expansion — 2026-08-26
+
+- После отдельного подтверждения оплаты в Chrome IPRoyal подтвердил `order #80647128 was processed`:
+  ISP Dedicated, Serbia, 2 IP, 30 days; выданные credentials не записываются в чат, заметки или репозиторий.
+- В код добавлен secret-safe `NEKRETNINE_PROXY_ADDITIONAL_URLS` (comma/newline-separated): порядок теперь
+  `primary → secondary → additional-1..N → metered/legacy`, duplicate URL values отбрасываются, fail-closed
+  сохраняется. Production `.env` пока не перезапущен; новые слоты вводятся только после deploy + shadow gate.
+- Локальная проверка после расширения pool: `76 passed` (proxy pool, Nekretnine scraper, shadow audit,
+  scrape metrics). Следующий шаг: задеплоить код и добавить два новых credential в additional slots через
+  защищённый action-time канал, затем повторить полный read-only shadow audit.
+
 ---
 
 ## 0. ТЕКУЩИЙ СТАТУС + ПЛАН РАЗРАБОТКИ (handoff 2026-06-12, вечер — этап H1)

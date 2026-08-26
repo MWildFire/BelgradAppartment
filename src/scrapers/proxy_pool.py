@@ -80,7 +80,7 @@ class ProxyCandidate:
 
 
 class ProxyPool:
-    """Primary → secondary → metered candidate order with fail-closed selection."""
+    """Primary → secondary → additional ISP → metered order with fail-closed selection."""
 
     def __init__(self, candidates: tuple[ProxyCandidate, ...]) -> None:
         self._candidates = candidates
@@ -98,13 +98,27 @@ class ProxyPool:
             ("primary", primary_url or settings.scraper_proxy_url,
              mode if primary_url else "legacy_rotating"),
             ("secondary", settings.nekretnine_proxy_secondary_url, mode),
-            ("metered", settings.nekretnine_proxy_metered_url, "metered"),
         ]
+        additional_urls = [
+            value.strip()
+            for value in re.split(r"[,\r\n]+", settings.nekretnine_proxy_additional_urls or "")
+            if value.strip()
+        ]
+        configured.extend(
+            (f"additional-{index}", url, mode)
+            for index, url in enumerate(additional_urls, start=1)
+        )
+        configured.append(("metered", settings.nekretnine_proxy_metered_url, "metered"))
         if primary_url and settings.scraper_proxy_url and not settings.nekretnine_proxy_metered_url:
             configured[-1] = ("metered", settings.scraper_proxy_url, "legacy_rotating")
+        seen_urls: set[str] = set()
         for slot, url, kind in configured:
             if url and url.strip():
-                candidates.append(ProxyCandidate(slot=slot, kind=kind, url=url))
+                normalized_url = url.strip()
+                if normalized_url in seen_urls:
+                    continue
+                candidates.append(ProxyCandidate(slot=slot, kind=kind, url=normalized_url))
+                seen_urls.add(normalized_url)
         return cls(tuple(candidates))
 
     @property

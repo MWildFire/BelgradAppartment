@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     nekretnine_proxy_mode: Literal["legacy_rotating", "static_isp"] = "legacy_rotating"
     nekretnine_proxy_primary_url: str = Field(default="", repr=False)
     nekretnine_proxy_secondary_url: str = Field(default="", repr=False)
+    # Comma/newline-separated extra static ISP candidates, kept out of repr/logs.
+    nekretnine_proxy_additional_urls: str = Field(default="", repr=False)
     nekretnine_proxy_metered_url: str = Field(default="", repr=False)
 
     # --- Live-smoke probe (A2: markup-change protection) ---
