@@ -38,7 +38,7 @@ rsync -rlptzv --delete-after \
   --exclude='*.pyc' --exclude='.pytest_cache/' --exclude='.mypy_cache/' --exclude='.ruff_cache/' \
   --exclude='.cache/' --exclude='.config/' --exclude='.local/' \
   --include='data/' --include='data/districts.yaml' --exclude='data/*' \
-  --exclude='.env' --exclude='*.session' --exclude='*.session-journal' \
+  --exclude='.env' --exclude='.env.bak-*' --exclude='*.session' --exclude='*.session-journal' \
   --exclude='logs/' --exclude='.claude/' --exclude='.DS_Store' \
   --exclude='tests/fixtures/halooglasi/' --exclude='tests/e2e/site/_artifacts/' \
   ./ "$VPS:$REMOTE/" | tail -10

@@ -642,6 +642,51 @@ async def test_playwright_fallback_reloads_challenge_until_detail_payload(
     assert context.page.closed
 
 
+@pytest.mark.asyncio
+async def test_playwright_fallback_closes_last_failed_context() -> None:
+    """A later detail must be able to select the next proxy after all retries fail."""
+
+    class Response:
+        status = 403
+
+    class Page:
+        async def goto(self, *_args, **_kwargs) -> Response:
+            return Response()
+
+        async def content(self) -> str:
+            return "<html>DataDome challenge</html>"
+
+        async def close(self) -> None:
+            pass
+
+    class Context:
+        def __init__(self) -> None:
+            self.closed = False
+            self.page = Page()
+
+        async def new_page(self) -> Page:
+            return self.page
+
+        async def close(self) -> None:
+            self.closed = True
+
+    sc = _make_scraper(lambda _request: httpx.Response(200))
+    contexts: list[Context] = []
+
+    async def fake_start() -> None:
+        context = Context()
+        contexts.append(context)
+        sc._pw_context = context
+
+    sc._start_browser = fake_start  # type: ignore[method-assign]
+    sc.pw_challenge_reloads = 0
+
+    assert await sc._playwright_html(_DETAIL_URL) is None
+    assert len(contexts) == 3
+    assert all(context.closed for context in contexts)
+    assert sc._pw_context is None
+
+
 def test_browser_payload_check_accepts_list_pages(nekretnine_list_html: str) -> None:
     """The fallback is shared by detail and list requests; a list must not be rejected as WAF HTML."""
     assert NekretnineScraper._has_browser_payload(

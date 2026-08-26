@@ -526,6 +526,10 @@ class NekretnineScraper(Scraper):
                 )
                 await self._stop_browser()
             else:
+                # Do not leave the last failed browser context alive.  A subsequent detail must
+                # be able to start a fresh context and select the next bounded pool slot instead
+                # of retrying the same exhausted ISP/rotating session forever.
+                await self._stop_browser()
                 return None
         return None
 
