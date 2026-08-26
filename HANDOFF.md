@@ -105,6 +105,21 @@ Serbia, 1 proxy, 1 Day (24 hours), Standard fraud score, final price `$2.00`. В
   два непустых разных значения по-прежнему fail. Добавлен regression test; перед activation нужен
   новый deploy и полный shadow audit с повторной проверкой price parity.
 
+### 0.0.6. Green shadow gate and controlled restart — 2026-08-26
+
+- После deploy `4b860e3` detached report `/opt/otz/data/reports/nekretnine-shadow-20260826-0845-parity-fix.json`
+  прошёл: `4888/4893` (`99.898%`), `skipped_pages=0`, `sample=100`, `complete=86`, `fallback=14`,
+  `mismatches=0`, `detail_errors=0`, `browser_proxy_errors=0`, `proxy_errors=0`, `failure_reasons=[]`.
+  Flags `no_db_writes`, `no_telegram_sends`, `no_stale_sweep` — `true`; proxy counters: `attempts=2`,
+  `failovers=1`, `challenges=1`, `failed_proxy_slots=1` (legacy rotating fallback remains exhausted but
+  no longer blocks the four static ISP candidates).
+- После green report выполнен controlled `systemctl restart otz-monitor`: `active/running`, `ExecMainStatus=0`,
+  `NRestarts=0`. Production `scrape-smoke --platform nekretnine` — `OK`, `previews=25`, `detail_ok=True`.
+  `otz-site`/`caddy` active and enabled, `/healthz` HTTP 200, Alembic `0011_keep_on_site (head)`, SQLite
+  `PRAGMA quick_check=ok`.
+- `NEKRETNINE_LIST_SNAPSHOT_MODE=shadow` оставлен намеренно. Следующий gate — наблюдение следующего healthy
+  run и отдельное решение по active; user-side blocker отсутствует.
+
 ---
 
 ## 0. ТЕКУЩИЙ СТАТУС + ПЛАН РАЗРАБОТКИ (handoff 2026-06-12, вечер — этап H1)
