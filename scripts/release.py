@@ -421,9 +421,25 @@ def activate(args):
         )
         new_python = release / "venv/bin/python"
         run([str(new_python), "-c", "import sqlalchemy,playwright,torch,open_clip,fastapi"])
+        # Install under the actual service account/home, not root's cache or an assumed home.
+        # Existing service environment overrides remain an operator configuration gate.
+        import pwd
+
+        service_home = pwd.getpwnam("otz").pw_dir
+        run(["chown", "-hR", "otz:otz", str(release / "venv")])
+        browser_env = {**os.environ, "HOME": service_home}
+        browser_env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
         run(
-            [str(release / "venv/bin/playwright"), "install", "chromium"],
-            env={**os.environ, "PLAYWRIGHT_BROWSERS_PATH": "/home/otz/.cache/ms-playwright"},
+            [
+                "runuser",
+                "-u",
+                "otz",
+                "--",
+                str(release / "venv/bin/playwright"),
+                "install",
+                "chromium",
+            ],
+            env=browser_env,
         )
         state = service_state()
         state.update(revision=manifest["revision"], result="activating", swapped=[], units=[])
