@@ -68,7 +68,7 @@ async def _seed(factory: async_sessionmaker) -> None:
             Listing(
                 id=3, platform=Platform.CETIRI_ZIDA, external_id="e3", url="http://x/3",
                 price_eur=500, area_m2=28.0, rooms=0.0, district="Vracar",
-                lat=44.81, lon=20.48, is_active=False, photo_urls=["http://cdn/remote3.jpg"],
+                lat=44.81, lon=20.48, is_active=False, link_status="DEAD", photo_urls=["http://cdn/remote3.jpg"],
             )
         )
         # Listing 4: Zemun, 3 rooms, 1200 EUR — but its site_listing is NOT public.

@@ -19,7 +19,12 @@ from sqlalchemy import select
 from src.config import get_settings
 from src.db.models import InboundPost, Listing, Match, PublishedPost, SiteListing
 from src.site import db as sitedb
-from src.site.availability import ApartmentKey, apartment_is_available, apartment_key
+from src.site.availability import (
+    ApartmentKey,
+    apartment_is_retained,
+    apartment_key,
+    source_presence,
+)
 from src.site.format import human_district, is_rented, public_photo_url, rooms_label
 from src.site.maps import fuzz_coords
 
@@ -76,6 +81,8 @@ class _Row:
     is_featured: bool
     legacy_visible: bool
     original_active: bool
+    legacy_primary: bool
+    source_status: str
 
 
 @dataclass(frozen=True)
@@ -153,29 +160,45 @@ async def _load_rows(
         public = (await s.execute(stmt)).all()
         group_ids = {listing.dup_group_id for _, listing, _, _ in public
                      if listing.dup_group_id is not None}
-        active_by_group: dict[int, list[bool]] = {}
+        statuses_by_group: dict[int, list[str]] = {}
+        pinned_apartments = {
+            apartment_key(listing.id, listing.dup_group_id)
+            for sl, listing, _, _ in public if sl.keep_on_site
+        }
         if group_ids:
             members = await s.execute(
-                select(Listing.dup_group_id, Listing.is_active)
+                select(Listing.dup_group_id, Listing.is_active, Listing.link_status,
+                       Listing.deactivated_at, Listing.absence_streak)
                 .where(Listing.dup_group_id.in_(group_ids))
             )
-            for group_id, active in members.all():
-                active_by_group.setdefault(group_id, []).append(active)
+            for group_id, active, link_status, deactivated_at, absence_streak in members.all():
+                statuses_by_group.setdefault(group_id, []).append(source_presence(
+                    is_active=active, link_status=link_status,
+                    confirmed_absent=deactivated_at is not None and (absence_streak or 0) >= 2,
+                ))
         for sl, listing, post, published_at in public:
-            member_active = active_by_group.get(listing.dup_group_id, [listing.is_active])
+            original_status = source_presence(
+                is_active=listing.is_active, link_status=listing.link_status,
+                confirmed_absent=listing.deactivated_at is not None
+                and (listing.absence_streak or 0) >= 2,
+            )
+            statuses = statuses_by_group.get(listing.dup_group_id, [original_status])
+            key = apartment_key(listing.id, listing.dup_group_id)
             view = _build_view(
                 sl, listing, post, published_at,
-                available=apartment_is_available(member_active),
+                available=apartment_is_retained(statuses, pinned=key in pinned_apartments),
             )
             rows.append(_Row(
                 view=view,
                 rooms_raw=listing.rooms,
                 posted_dt=published_at or sl.created_at,
-                apartment=apartment_key(listing.id, listing.dup_group_id),
+                apartment=key,
                 created_at=sl.created_at,
                 is_featured=sl.is_featured,
                 legacy_visible=listing.is_primary and not is_rented(listing),
                 original_active=listing.is_active,
+                legacy_primary=listing.is_primary,
+                source_status=original_status,
             ))
     return _representatives(rows) if representatives_only else rows
 
@@ -391,7 +414,11 @@ async def public_selection_comparison(*, database_url: str) -> dict[str, object]
         "after": {"cards": len(after), "unique_apartments": len(after_groups)},
         "newly_visible": [
             {"site_listing_id": r.view.id,
-             "reason": "active_sibling" if not r.original_active else "public_secondary"}
+             "reason": (
+                 "unknown_retained" if r.source_status == "INCONCLUSIVE"
+                 else "dead_but_pinned_or_live_sibling" if not r.original_active
+                 else "public_secondary" if not r.legacy_primary else "source_activity"
+             )}
             for r in after if r.apartment not in before_groups
         ],
         "no_longer_visible_apartments": len(before_groups - after_groups),

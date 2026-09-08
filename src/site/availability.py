@@ -18,3 +18,25 @@ def apartment_key(listing_id: int, dup_group_id: int | None) -> ApartmentKey:
 def apartment_is_available(member_active: Iterable[bool]) -> bool:
     """A live source for any member establishes availability for the whole apartment."""
     return any(member_active)
+
+
+def source_presence(
+    *, is_active: bool, link_status: str | None = None,
+    confirmed_absent: bool = False,
+) -> str:
+    """Inactive legacy flags are UNKNOWN; only explicit evidence establishes DEAD."""
+    if is_active:
+        return "ACTIVE"
+    if link_status == "DEAD" or confirmed_absent:
+        return "DEAD"
+    return "INCONCLUSIVE"
+
+
+def apartment_is_retained(member_statuses: Iterable[str], *, pinned: bool = False) -> bool:
+    """Discovery retains pinned or uncertain apartments; only all-DEAD is rented.
+
+    This is the availability half of publication policy. It grants no publishing rights;
+    callers must independently scope overlays to is_public, and removal still uses W1 caps.
+    """
+    statuses = tuple(member_statuses)
+    return pinned or not statuses or any(status != "DEAD" for status in statuses)

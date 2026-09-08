@@ -94,7 +94,7 @@ async def test_inactive_original_with_private_active_sibling_is_available(site_d
 @pytest.mark.asyncio
 async def test_all_inactive_stays_out_of_default_surfaces_but_public_url_survives(site_db: str) -> None:
     _set(site_db, """
-        UPDATE listings SET is_active=0, dup_group_id=1, is_primary=(id=1) WHERE id IN (1,2);
+        UPDATE listings SET is_active=0, link_status='DEAD', dup_group_id=1, is_primary=(id=1) WHERE id IN (1,2);
         UPDATE site_listings SET is_featured=1 WHERE id=1;
     """)
     assert (await rm.list_public(rm.Filters(), database_url=site_db))[1] == 0
@@ -131,3 +131,22 @@ async def test_comparison_is_sanitized_and_never_writes(site_db: str) -> None:
     dumped = json.dumps(report)
     assert all(value not in dumped for value in ("http://", "https://", "Vracar", "Нови", "data/inbound"))
     assert _sha256(path) == before_hash
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("link_status,pinned", [(None, False), ("INCONCLUSIVE", False), ("DEAD", True)])
+async def test_unknown_or_pinned_inactive_apartment_is_retained(site_db, link_status, pinned):
+    with sqlite3.connect(site_db.split(":///", 1)[1]) as db:
+        db.execute("UPDATE listings SET is_active=0, link_status=? WHERE id=1", (link_status,))
+        db.execute("UPDATE site_listings SET keep_on_site=? WHERE id=1", (pinned,))
+    detail = await rm.get_public(1, database_url=site_db)
+    assert detail is not None and detail.is_rented is False
+    assert 1 in {v.id for v in (await rm.list_public(rm.Filters(), database_url=site_db))[0]}
+    assert 1 in {p["id"] for p in await rm.map_points(database_url=site_db)}
+    assert 1 in await rm.public_ids(database_url=site_db)
+
+
+@pytest.mark.asyncio
+async def test_confirmed_repeated_absence_is_rented(site_db):
+    _set(site_db, "UPDATE listings SET is_active=0, absence_streak=2, deactivated_at='2026-09-08' WHERE id=1")
+    assert (await rm.get_public(1, database_url=site_db)).is_rented is True

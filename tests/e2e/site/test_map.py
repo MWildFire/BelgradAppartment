@@ -7,6 +7,7 @@ Needs network for jsdelivr (Leaflet) + OSM tiles — gated by RUN_E2E like the r
 
 from __future__ import annotations
 
+import json
 import re
 
 from tests.e2e.conftest import requires_e2e
@@ -58,8 +59,15 @@ def test_map_price_buckets_and_vnj_toggle(page, site_server: str) -> None:
     """
     base = site_server
 
-    # Confirm the seed gives us exactly the points we reason about below (1 ВНЖ + 1 non-ВНЖ).
+    # Server excludes the confirmed-dead id=3. Add an explicit active non-VNJ UI fixture
+    # to keep the two-bucket/re-clustering interaction covered without serving a dead card.
     points = page.request.get(f"{base}/api/map.json").json()["points"]
+    assert {p["id"] for p in points} == {1}
+    points.append({**points[0], "id": 900, "lat": 44.81, "lon": 20.48,
+                   "price_eur": 500, "for_vnj": False, "url": "/apt/900"})
+    page.route("**/api/map.json", lambda route: route.fulfill(
+        status=200, content_type="application/json", body=json.dumps({"points": points})
+    ))
     vnj_points = [p for p in points if p["for_vnj"]]
     assert len(points) == 2, f"expected 2 coord points, got {len(points)}"
     assert len(vnj_points) == 1, f"expected 1 ВНЖ point, got {len(vnj_points)}"
