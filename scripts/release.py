@@ -87,10 +87,24 @@ def validate_backup(receipt, now=None):
     require(created.tzinfo is not None, "backup timestamp missing timezone")
     age = ((now or datetime.now(UTC)) - created).total_seconds() / 3600
     require(-0.1 <= age <= 36, "release requires a backup no older than 36 hours")
-    require(
-        re.fullmatch(r"[0-9a-f]{64}", receipt.get("archive_sha256", "")),
-        "verified archive SHA-256 missing",
-    )
+    backup_format = receipt.get("backup_format", "tar_archive")
+    if backup_format == "directory_generation":
+        digest = receipt.get("manifest_sha256", "")
+        require(
+            re.fullmatch(r"[0-9a-f]{64}", digest)
+            and digest == receipt.get("generation_manifest_sha256"),
+            "verified generation manifest SHA-256 missing or inconsistent",
+        )
+        require(
+            re.fullmatch(r"[0-9]{8}-[0-9]{6}-[0-9a-f]{8}", receipt.get("generation_id", "")),
+            "verified generation identity missing",
+        )
+    else:
+        require(backup_format == "tar_archive", "unsupported backup receipt format")
+        require(
+            re.fullmatch(r"[0-9a-f]{64}", receipt.get("archive_sha256", "")),
+            "verified archive SHA-256 missing",
+        )
     require(receipt.get("offhost_verified") is True, "off-host backup is not verified")
     require(
         receipt.get("protected_recovery_verified") is True,
