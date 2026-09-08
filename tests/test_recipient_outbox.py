@@ -162,3 +162,38 @@ async def test_force_cannot_bypass_unknown_reconciliation(db, tmp_path, bot_conf
     with pytest.raises(ValueError, match="reconcile unknown"):
         await prepare_recipients(mid, [123], force=True)
     assert await _states(mid) == {123: "unknown"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("all_fail", [False, True])
+async def test_retry_reuses_original_override_caption_and_ordered_media(db, tmp_path, bot_config, monkeypatch, all_fail):
+    from src.db.models import InboundPost, Listing
+    mid = await _seed_match_with_real_photo(get_session, tmp_path)
+    bot = StrictBot()
+    fail = [True]
+    async def send_photo(**kwargs):
+        bot.photo_calls.append(kwargs)
+        if fail[0] and (all_fail or kwargs["chat_id"] == 456):
+            raise ValueError("definite rejection")
+        return SimpleNamespace(message_id=777)
+    bot.send_photo = send_photo
+    monkeypatch.setattr(bot_delivery, "_make_bot", lambda: bot)
+    if all_fail:
+        with pytest.raises(bot_delivery.BotDeliveryError):
+            await bot_delivery.send_match_via_bot(mid, post_text_override="Даша: точный согласованный текст")
+    else:
+        await bot_delivery.send_match_via_bot(mid, post_text_override="Даша: точный согласованный текст")
+    original_caption = bot.photo_calls[0]["caption"]
+    original_path = bot.photo_calls[0]["photo"].path
+    async with get_session() as session:
+        listing = (await session.execute(select(Listing))).scalar_one()
+        listing.price_eur = 9999
+        inbound = (await session.execute(select(InboundPost))).scalar_one()
+        inbound.photo_paths = [str(tmp_path / "unrelated-missing-new-photo.jpg")]
+    fail[0] = False
+    stats = await bot_delivery.retry_pending_match_deliveries()
+    assert stats["completed"] == 1
+    retry_calls = bot.photo_calls[2:]
+    assert len(retry_calls) == (2 if all_fail else 1)
+    assert all(call["caption"] == original_caption for call in retry_calls)
+    assert all(call["photo"].path == original_path for call in retry_calls)

@@ -34,7 +34,12 @@ from src.db import (
 )
 from src.db.models import MatchDelivery
 from src.post import render_post
-from src.telegram.delivery_ledger import claim_recipient, finish_recipient, prepare_recipients
+from src.telegram.delivery_ledger import (
+    claim_recipient,
+    claimed_payload,
+    finish_recipient,
+    prepare_recipients,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +136,12 @@ async def send_match_via_bot(
         if inbound is None or listing is None:
             raise BotDeliveryError(f"Match {match_id}: missing inbound/listing")
 
-        photo_paths = [Path(p) for p in inbound.photo_paths if p][:MAX_ALBUM]
+        saved_payload = None if force_resend else (await s.execute(
+            select(MatchDelivery.payload).where(MatchDelivery.match_id == match_id)
+            .order_by(MatchDelivery.id).limit(1)
+        )).scalar_one_or_none()
+        stored_paths = saved_payload.get("photo_paths", []) if saved_payload else inbound.photo_paths
+        photo_paths = [Path(p) for p in stored_paths if p][:MAX_ALBUM]
         if not photo_paths:
             raise BotDeliveryError(f"Match {match_id}: no inbound photos on disk")
         if any(not p.is_file() for p in photo_paths):
@@ -172,10 +182,19 @@ async def send_match_via_bot(
     first_msg_id = 0
     delivered_to = 0
     try:
-        await prepare_recipients(match_id, recipients, force=force_resend)
+        await prepare_recipients(match_id, recipients, force=force_resend, payload={
+            "caption": full_caption, "photo_paths": [str(p) for p in photo_paths],
+        })
         for chat_id in dict.fromkeys(recipients):
             token = await claim_recipient(match_id, chat_id)
             if token is None:
+                continue
+            frozen = await claimed_payload(match_id, chat_id, token)
+            full_caption = frozen["caption"]
+            photo_paths = [Path(p) for p in frozen["photo_paths"]]
+            if any(not p.is_file() for p in photo_paths):
+                await finish_recipient(match_id, chat_id, token,
+                                       error=ValueError("missing frozen photo files"))
                 continue
             media: list[InputMediaPhoto] = []
             for j, p in enumerate(photo_paths):

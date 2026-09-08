@@ -27,7 +27,12 @@ from src.db import (
 )
 from src.db.models import MatchDelivery
 from src.post import render_post
-from src.telegram.delivery_ledger import claim_recipient, finish_recipient, prepare_recipients
+from src.telegram.delivery_ledger import (
+    claim_recipient,
+    claimed_payload,
+    finish_recipient,
+    prepare_recipients,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +146,12 @@ async def _send_match_via_userbot(
         if inbound is None or listing is None:
             raise DeliveryError(f"Match {match_id}: missing inbound/listing")
 
-        photo_paths = [Path(p) for p in inbound.photo_paths if p][:MAX_ALBUM]
+        saved_payload = None if force_resend else (await s.execute(
+            select(MatchDelivery.payload).where(MatchDelivery.match_id == match_id)
+            .order_by(MatchDelivery.id).limit(1)
+        )).scalar_one_or_none()
+        stored_paths = saved_payload.get("photo_paths", []) if saved_payload else inbound.photo_paths
+        photo_paths = [Path(p) for p in stored_paths if p][:MAX_ALBUM]
         if not photo_paths:
             raise DeliveryError(f"Match {match_id}: no inbound photos on disk")
         if any(not p.is_file() for p in photo_paths):
@@ -174,7 +184,9 @@ async def _send_match_via_userbot(
 
     recipient = await _resolve_delivery_target(client)
     recipient_id = int(recipient.id)
-    await prepare_recipients(match_id, [recipient_id], force=force_resend)
+    await prepare_recipients(match_id, [recipient_id], force=force_resend, payload={
+        "caption": full_caption, "photo_paths": [str(p) for p in photo_paths],
+    })
     token = await claim_recipient(match_id, recipient_id)
     if token is None:
         async with get_session() as session:
@@ -185,6 +197,13 @@ async def _send_match_via_userbot(
             raise DeliveryError(f"Match {match_id}: delivery claimed or awaiting reconciliation")
         first_msg_id = outcome.message_ids[0]
     else:
+        frozen = await claimed_payload(match_id, recipient_id, token)
+        full_caption = frozen["caption"]
+        photo_paths = [Path(p) for p in frozen["photo_paths"]]
+        if any(not p.is_file() for p in photo_paths):
+            error = ValueError("missing frozen photo files")
+            await finish_recipient(match_id, recipient_id, token, error=error)
+            raise DeliveryError(str(error))
         try:
             messages = await client.send_file(
                 recipient, file=[str(p) for p in photo_paths], caption=full_caption,
