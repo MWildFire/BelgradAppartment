@@ -7,7 +7,9 @@ That makes the command safe to run before enabling ``active`` snapshot ingestion
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -180,6 +182,8 @@ async def run_shadow_audit(
     compare_details: int = 100,
     healthy_baseline_coverage: float | None = None,
     thresholds: ShadowAuditThresholds | None = None,
+    source_budget_sec: float = 1800,
+    detail_timeout_sec: float = 90,
 ) -> ShadowAuditReport:
     """Crawl list previews and compare a bounded sample against legacy detail pages."""
     if max_pages < 1 or compare_details < 0:
@@ -195,10 +199,13 @@ async def run_shadow_audit(
             "max_fallback_rate": limit.max_fallback_rate,
         },
     )
+    deadline = time.monotonic() + max(0.001, source_budget_sec)
+    timed_out = False
     try:
-        previews = await scraper.list_recent(
-            max_pages=max_pages, known_ids=set(), early_stop_full_known_pages=2,
-        )
+        async with asyncio.timeout(max(0.001, deadline - time.monotonic())):
+            previews = await scraper.list_recent(
+                max_pages=max_pages, known_ids=set(), early_stop_full_known_pages=2,
+            )
     except Exception as exc:
         report.failure_reasons = ["crawl_exception", type(exc).__name__]
         report.proxy_metrics = _proxy_metrics(scraper)
@@ -220,6 +227,9 @@ async def run_shadow_audit(
         scraper, previews, compare_details
     )
     for preview in sample:
+        if time.monotonic() >= deadline:
+            timed_out = True
+            break
         report.sample_compared += 1
         snapshot = preview.snapshot
         complete = _snapshot_is_complete(scraper, snapshot)
@@ -229,7 +239,8 @@ async def run_shadow_audit(
         else:
             report.complete_snapshots += 1
         try:
-            legacy = await scraper.fetch_detail(preview.url)
+            async with asyncio.timeout(min(detail_timeout_sec, deadline - time.monotonic())):
+                legacy = await scraper.fetch_detail(preview.url)
             if not legacy.title or legacy.price_eur is None or not legacy.photo_urls:
                 raise ValueError("unusable fallback/detail payload")
         except Exception:  # report the listing, then fail closed.
@@ -255,6 +266,8 @@ async def run_shadow_audit(
     )
     report.thresholds["fallback_rate"] = fallback_rate
     reasons: list[str] = []
+    if timed_out or time.monotonic() >= deadline:
+        reasons.append("source_timeout")
     if len(report.sample_segments) < report.population_segments:
         reasons.append("missing_segment_sample")
     if not report.sample_compared:

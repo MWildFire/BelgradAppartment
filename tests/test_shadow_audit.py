@@ -307,3 +307,16 @@ async def test_shadow_insufficient_segment_sample_cannot_pass():
     assert not report.passed
     assert report.population_segments == 3
     assert "missing_segment_sample" in report.failure_reasons
+
+
+@pytest.mark.asyncio
+async def test_shadow_hanging_detail_is_bounded_and_fails():
+    import asyncio
+    detail=_detail("1")
+    class Hanging(FakeScraper):
+        async def fetch_detail(self,url):
+            await asyncio.sleep(5)
+    scraper=Hanging([ListingPreview(Platform.NEKRETNINE,"1",detail.url,snapshot=detail)],{"1":detail})
+    report=await run_shadow_audit(scraper,compare_details=1,detail_timeout_sec=.01)
+    assert not report.passed and report.detail_errors == 1
+    assert "legacy_detail_errors" in report.failure_reasons
