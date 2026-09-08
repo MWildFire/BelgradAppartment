@@ -109,6 +109,7 @@ class CityExpertScraper(Scraper):
         known_ids = known_ids or set()
         seen: set[str] = set()
         previews: list[ListingPreview] = []
+        self.reset_crawl_evidence()
         self._skipped_pages = 0
         self._site_total = None
 
@@ -119,6 +120,7 @@ class CityExpertScraper(Scraper):
 
         page = 1
         while page <= limit:
+            self.record_page_attempt(observed=len(previews))
             text = await self._fetch_page(self._search_url(page))
             if text is None:
                 # Transient fetch failure: skip a few pages before giving up. A single
@@ -126,6 +128,7 @@ class CityExpertScraper(Scraper):
                 # but we count the skip so a partial under-run is surfaced.
                 consecutive_failures += 1
                 self._skipped_pages += 1
+                self.record_crawl_failure("page_fetch_failed")
                 logger.warning(
                     "[cityexpert] page %d fetch failed (consecutive=%d, skipped_total=%d)",
                     page, consecutive_failures, self._skipped_pages,
@@ -142,6 +145,7 @@ class CityExpertScraper(Scraper):
 
             payload = self._parse_payload(text)
             if payload is None:
+                self.record_crawl_failure("page_payload_missing")
                 # 200 OK but no Search payload — almost certainly an API/structure change.
                 logger.error(
                     "[cityexpert] page %d: Search result payload missing — API structure changed?",
@@ -150,10 +154,10 @@ class CityExpertScraper(Scraper):
                 break
 
             info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
-            if self._site_total is None:
-                dc = info.get("documentCount")
-                if isinstance(dc, int):
-                    self._site_total = dc
+            self.record_source_total(info.get("documentCount"))
+            if info.get("pageNumber") != page:
+                self.record_crawl_failure("pagination_mismatch")
+                break
             if page_count is None:
                 pc = info.get("pageCount")
                 if isinstance(pc, int) and pc > 0:
@@ -161,6 +165,8 @@ class CityExpertScraper(Scraper):
 
             page_previews = self._previews_from_payload(payload)
             if not page_previews:
+                if self._site_total != 0:
+                    self.record_crawl_failure("unexpected_empty_page")
                 break  # structurally empty page = end of pagination
 
             new_this_page = 0
@@ -177,6 +183,7 @@ class CityExpertScraper(Scraper):
             if known_ids and unknown_this_page == 0 and new_this_page > 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
+                    self._stopped_known = True
                     logger.info(
                         "[cityexpert] incremental early-stop at page %d (%d full-known pages)",
                         page, consecutive_full_known,
@@ -190,6 +197,7 @@ class CityExpertScraper(Scraper):
             if self.page_delay_sec > 0:
                 await asyncio.sleep(self.page_delay_sec)
             page += 1
+        self.finish_crawl_evidence(len(previews))
         return previews
 
     async def fetch_detail(self, url: str) -> ListingDetail:

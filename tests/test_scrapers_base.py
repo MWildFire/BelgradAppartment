@@ -47,7 +47,7 @@ def test_proxy_is_reserved_for_nekretnine(monkeypatch) -> None:
             captured.append(kwargs)
 
     monkeypatch.setattr("src.scrapers.base.httpx.AsyncClient", _SpyClient)
-    monkeypatch.setattr(get_settings(), "scraper_proxy_url", "http://eu-proxy:3128")
+    monkeypatch.setattr(get_settings(), "nekretnine_proxy_primary_url", "http://eu-proxy:3128")
 
     NekretnineScraper._make_client()
     CetiriZidaScraper._make_client()

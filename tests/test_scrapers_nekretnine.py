@@ -301,14 +301,12 @@ def test_proxy_slot_failover_is_bounded_and_fail_closed() -> None:
     sc._mark_proxy_failure()
     with pytest.raises(NoProxyAvailableError):
         sc._select_proxy()
-    assert sc.proxy_metrics == {
-        "proxy_attempts": 3,
-        "proxy_failovers": 2,
-        "proxy_challenges": 3,
-        "proxy_errors": 1,
-        "browser_proxy_errors": 0,
-        "failed_proxy_slots": 3,
-    }
+    assert sc.proxy_metrics["proxy_attempts"] == 0  # selection is not a network request
+    assert sc.proxy_metrics["proxy_failovers"] == 2
+    assert sc.proxy_metrics["proxy_challenges"] == 3
+    assert sc.proxy_metrics["proxy_errors"] == 0
+    assert sc.proxy_metrics["failed_proxy_slots"] == 3
+
 
 
 def _page_of(request: httpx.Request) -> int:
@@ -515,7 +513,10 @@ async def test_list_recent_breaks_on_missing_payload() -> None:
     sc = _make_scraper(handler)
     previews = await sc.list_recent(max_pages=10)
     assert previews == []
-    assert sc._skipped_pages == 0, "a 200 with no payload is a structure change, not a fetch failure"
+    assert sc._skipped_pages == 0
+    assert sc._pages_failed == 1
+    assert not sc._crawl_complete
+    assert sc._crawl_stop_reason == "page_payload_missing"
 
 
 # ------------------------------------------------------------------ fetch_detail (offline retries)
@@ -913,3 +914,86 @@ async def test_fetch_page_200_never_uses_browser() -> None:
     sc._playwright_html = fake_pw  # type: ignore[method-assign]
     assert await sc._fetch_page(sc.list_url) is not None
     assert calls["pw"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["402", "407", "timeout", "proxy_error"])
+async def test_http_failure_moves_to_healthy_secondary(failure, nekretnine_detail_html):
+    slots = []
+    sc = None
+    def handler(request):
+        slots.append(sc._http_proxy_slot)
+        if sc._http_proxy_slot == "primary":
+            if failure == "timeout":
+                raise httpx.ReadTimeout("simulated", request=request)
+            if failure == "proxy_error":
+                raise httpx.ProxyError("simulated", request=request)
+            return httpx.Response(int(failure))
+        return httpx.Response(200, text=nekretnine_detail_html)
+    sc = _make_scraper(handler)
+    sc._proxy_pool = ProxyPool((ProxyCandidate("primary", "static_isp", "http://p.example:1"),
+                                ProxyCandidate("secondary", "static_isp", "http://s.example:2")))
+    result = await sc.fetch_detail(_DETAIL_URL)
+    assert result.title
+    assert slots == ["primary", "secondary"]
+    assert sc.proxy_metrics["http_attempts"] == sc.proxy_metrics["proxy_attempts"] == 2
+    assert sc.proxy_metrics["http_errors"] == sc.proxy_metrics["http_recovered_errors"] == 1
+    assert sc.proxy_metrics["http_residual_errors"] == 0
+
+
+@pytest.mark.asyncio
+async def test_all_http_slots_fail_once_without_direct_fallback():
+    slots = []
+    sc = None
+    def handler(request):
+        slots.append(sc._http_proxy_slot)
+        return httpx.Response(402)
+    sc = _make_scraper(handler)
+    sc._proxy_pool = ProxyPool((ProxyCandidate("primary", "static_isp", "http://p.example:1"),
+                                ProxyCandidate("secondary", "static_isp", "http://s.example:2")))
+    with pytest.raises(httpx.HTTPStatusError):
+        await sc.fetch_detail(_DETAIL_URL)
+    assert slots == ["primary", "secondary"]
+    assert sc.proxy_metrics["http_residual_errors"] == 1
+    assert sc.proxy_metrics["failed_proxy_slots"] == 2
+
+
+@pytest.mark.asyncio
+async def test_200_challenge_is_unknown_without_browser_or_retry():
+    sc = _make_scraper(lambda request: httpx.Response(200, text="<html>challenge</html>"))
+    async def forbidden(*args):
+        pytest.fail("200 challenge must not start an implicit browser")
+    sc._playwright_html = forbidden
+    with pytest.raises(ValueError):
+        await sc.fetch_detail(_DETAIL_URL)
+    assert sc.proxy_metrics["http_attempts"] == 1
+    assert sc.proxy_metrics["http_residual_errors"] == 1
+
+
+@pytest.mark.asyncio
+async def test_owned_http_client_is_rebuilt_for_secondary(monkeypatch, nekretnine_detail_html):
+    from src.config import get_settings
+    settings=get_settings()
+    monkeypatch.setattr(settings,"nekretnine_proxy_primary_url","http://p.example:1")
+    monkeypatch.setattr(settings,"nekretnine_proxy_secondary_url","http://s.example:2")
+    clients=[]
+    proxies=[]
+    def make_client(cls, *, proxy_override=None):
+        proxy=proxy_override or "http://p.example:1"
+        proxies.append(proxy)
+        def handler(request):
+            return httpx.Response(402) if proxy=="http://p.example:1" else httpx.Response(200,text=nekretnine_detail_html)
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        clients.append(client)
+        return client
+    monkeypatch.setattr(NekretnineScraper,"_make_client",classmethod(make_client))
+    sc=NekretnineScraper()
+    sc.retry_backoff_sec=0
+    try:
+        result=await sc.fetch_detail(_DETAIL_URL)
+        assert result.title
+        assert proxies==["http://p.example:1","http://s.example:2"]
+        assert clients[0].is_closed
+    finally:
+        await sc.aclose()
+    assert all(client.is_closed for client in clients)

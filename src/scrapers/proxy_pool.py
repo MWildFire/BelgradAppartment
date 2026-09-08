@@ -89,13 +89,13 @@ class ProxyPool:
     def from_settings(cls, settings: Settings) -> ProxyPool:
         mode = settings.nekretnine_proxy_mode
         candidates: list[ProxyCandidate] = []
-        # Keep the pre-migration gateway as a real bounded fallback once a new primary is
-        # configured.  Previously the `or` expression made SCRAPER_PROXY_URL disappear from the
-        # pool as soon as PRIMARY_URL was set, so one challenged ISP IP could exhaust the whole
-        # browser run even though the documented rollback/metered gateway was still available.
+        # Legacy routing is an explicit rollback option; a stale legacy variable cannot
+        # silently rejoin healthy ISP routes or regain ownership of link probes.
         primary_url = settings.nekretnine_proxy_primary_url
+        allow_legacy = bool(getattr(settings, "nekretnine_proxy_allow_legacy_fallback", False))
+        legacy_url = settings.scraper_proxy_url if allow_legacy else ""
         configured = [
-            ("primary", primary_url or settings.scraper_proxy_url,
+            ("primary", primary_url or legacy_url,
              mode if primary_url else "legacy_rotating"),
             ("secondary", settings.nekretnine_proxy_secondary_url, mode),
         ]
@@ -109,8 +109,8 @@ class ProxyPool:
             for index, url in enumerate(additional_urls, start=1)
         )
         configured.append(("metered", settings.nekretnine_proxy_metered_url, "metered"))
-        if primary_url and settings.scraper_proxy_url and not settings.nekretnine_proxy_metered_url:
-            configured[-1] = ("metered", settings.scraper_proxy_url, "legacy_rotating")
+        if primary_url and legacy_url and not settings.nekretnine_proxy_metered_url:
+            configured[-1] = ("metered", legacy_url, "legacy_rotating")
         seen_urls: set[str] = set()
         for slot, url, kind in configured:
             if url and url.strip():
@@ -119,6 +119,10 @@ class ProxyPool:
                     continue
                 candidates.append(ProxyCandidate(slot=slot, kind=kind, url=normalized_url))
                 seen_urls.add(normalized_url)
+        if not candidates and settings.scraper_proxy_url and not allow_legacy:
+            raise ProxyConfigurationError(
+                "legacy proxy is disabled; configure an approved source route"
+            )
         return cls(tuple(candidates))
 
     @property

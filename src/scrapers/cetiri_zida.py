@@ -68,6 +68,7 @@ class CetiriZidaScraper(Scraper):
         known_ids = known_ids or set()
         seen: set[str] = set()
         previews: list[ListingPreview] = []
+        self.reset_crawl_evidence()
         self._skipped_pages = 0
         self._site_total = None
 
@@ -118,6 +119,7 @@ class CetiriZidaScraper(Scraper):
                 "[4zida] segmented walk done: %d collected vs site_total=%s",
                 len(previews), self._site_total,
             )
+        self.finish_crawl_evidence(len(previews))
         return previews
 
     async def _walk(
@@ -141,8 +143,10 @@ class CetiriZidaScraper(Scraper):
         # Never request past the site's hard pagination cap — deeper pages re-serve old content.
         limit = min(max_pages, self.page_cap)
 
+        search_page_ids = set()
         page = 1
         while page <= limit:
+            self.record_page_attempt(observed=len(previews))
             sep = "&" if "?" in base_url else "?"
             url = base_url if page == 1 else f"{base_url}{sep}strana={page}"
             html = await self._fetch_page(url)
@@ -152,6 +156,7 @@ class CetiriZidaScraper(Scraper):
                 # the skip so a partial under-run is surfaced rather than passing for healthy.
                 consecutive_failures += 1
                 self._skipped_pages += 1
+                self.record_crawl_failure("page_fetch_failed")
                 logger.warning(
                     "[4zida] page %d fetch failed (consecutive=%d, skipped_total=%d)",
                     page, consecutive_failures, self._skipped_pages,
@@ -162,6 +167,13 @@ class CetiriZidaScraper(Scraper):
                 page += 1
                 continue
             page_previews = self.parse_list(html)
+            page_ids = tuple(p.external_id for p in page_previews)
+            if page_ids and page_ids in search_page_ids:
+                self.record_crawl_failure("repeated_page")
+                break
+            search_page_ids.add(page_ids)
+            if is_base:
+                self.record_source_total(self._total_from_html(html))
             if search_total is None:
                 search_total = self._total_from_html(html)
                 if is_base and search_total is not None:
@@ -189,6 +201,7 @@ class CetiriZidaScraper(Scraper):
                     # how the first segmentation rollout silently collected 9% of 4zida.
                     consecutive_failures += 1
                     self._skipped_pages += 1
+                    self.record_crawl_failure("page_payload_missing")
                     logger.warning(
                         "[4zida] page %d: empty parse below expected end (page %d/%d) — soft "
                         "failure (consecutive=%d)",
@@ -201,7 +214,9 @@ class CetiriZidaScraper(Scraper):
                         await asyncio.sleep(self.retry_backoff_sec * consecutive_failures)
                     page += 1
                     continue
-                break  # structurally empty page = end of pagination
+                if search_total != 0:
+                    self.record_crawl_failure("unexpected_empty_page")
+                break  # only a source-confirmed empty search is complete
             # A page with real listings is the only success that resets the failure streak —
             # resetting on mere fetch-200 would let alternating soft-failures run forever.
             consecutive_failures = 0
@@ -210,6 +225,7 @@ class CetiriZidaScraper(Scraper):
             if known_ids and unknown_this_page == 0 and new_this_page > 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
+                    self._stopped_known = True
                     logger.info(
                         "[4zida] incremental early-stop at page %d", page,
                     )

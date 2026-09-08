@@ -595,11 +595,11 @@ async def test_make_side_client_no_proxy_when_unset(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypatch):
-    """Owned liveness client uses proxy only for Nekretnine URLs."""
+async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypatch, nekretnine_detail_html):
+    """Owned checks use the source GET parser and its configured ISP, never the legacy HEAD route."""
     from src.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "scraper_proxy_url", "http://eu-proxy:3128")
+    monkeypatch.setattr(get_settings(), "nekretnine_proxy_primary_url", "http://eu-proxy:3128")
 
     captured: dict = {}
 
@@ -607,18 +607,20 @@ async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypat
         def __init__(self, **kw):
             captured.update(kw)
 
-        async def head(self, url, **kw):
-            return httpx.Response(200, request=httpx.Request("HEAD", url))
+        async def get(self, url, **kw):
+            return httpx.Response(200, text=nekretnine_detail_html, request=httpx.Request("GET", url))
 
         async def aclose(self):
             return None
 
     monkeypatch.setattr(orch.httpx, "AsyncClient", _SpyClient)
 
-    await _seed_listing(factory, url="https://nekretnine.rs/live/")
-    stats = await verify_active_links()  # client=None → owns_client path builds via _make_side_client
+    await _seed_listing(factory, url="https://www.nekretnine.rs/oglasi/468187/")
+    stats = await verify_active_links()
     assert captured.get("proxy") == "http://eu-proxy:3128"
     assert stats.checked == 1
+
+    assert stats.errors == 0
 
 
 @pytest.mark.asyncio

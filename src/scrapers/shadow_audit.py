@@ -53,6 +53,11 @@ class ShadowAuditReport:
     sample_compared: int = 0
     complete_snapshots: int = 0
     fallback_count: int = 0
+    fallback_succeeded: int = 0
+    sample_segments: list[str] = field(default_factory=list)
+    population_segments: int = 0
+    crawl_complete: bool = False
+    stop_reason: str = "unverified"
     mismatched_count: int = 0
     detail_errors: int = 0
     browser_proxy_errors: int = 0
@@ -121,7 +126,7 @@ def _proxy_error_count(scraper: ShadowAuditScraper) -> int:
     metrics = getattr(scraper, "proxy_metrics", None)
     if not isinstance(metrics, dict):
         return 0
-    return sum(
+    return max(
         int(metrics.get(name, 0) or 0)
         for name in ("browser_proxy_errors", "proxy_errors", "failover_errors")
     )
@@ -136,6 +141,36 @@ def _proxy_metrics(scraper: ShadowAuditScraper) -> dict[str, int]:
         for name, value in metrics.items()
         if isinstance(value, int)
     }
+
+
+def _sample_previews(scraper, previews, count):
+    """Cover both snapshot paths and price bands before spreading the remaining sample."""
+    if count <= 0 or not previews:
+        return [], [], 0
+    bands = getattr(scraper, "price_bands", ((0, 300), (300, 500), (500, 700),
+                                            (700, 1000), (1000, 1500), (1500, None)))
+    groups = {}
+    for index, preview in enumerate(previews):
+        price = preview.snapshot.price_eur if preview.snapshot is not None else None
+        band = next((i for i, (lo, hi) in enumerate(bands)
+                     if price is not None and price >= lo and (hi is None or price < hi)), -1)
+        key = ("complete" if _snapshot_is_complete(scraper, preview.snapshot) else "fallback", band)
+        groups.setdefault(key, []).append(index)
+    selected = []
+    for indexes in groups.values():
+        if len(selected) >= count:
+            break
+        selected.append(indexes[len(indexes)//2])
+    for index in sorted(set(round(i * (len(previews)-1) / max(1, min(count, len(previews))-1))
+                            for i in range(min(count, len(previews))))):
+        if len(selected) >= count:
+            break
+        if index not in selected:
+            selected.append(index)
+    selected.sort()
+    covered = [f"{kind}:band-{band}" for (kind, band), indexes in groups.items()
+               if any(index in selected for index in indexes)]
+    return [previews[index] for index in selected], covered, len(groups)
 
 
 async def run_shadow_audit(
@@ -160,11 +195,15 @@ async def run_shadow_audit(
             "max_fallback_rate": limit.max_fallback_rate,
         },
     )
-    previews = await scraper.list_recent(
-        max_pages=max_pages,
-        known_ids=set(),
-        early_stop_full_known_pages=2,
-    )
+    try:
+        previews = await scraper.list_recent(
+            max_pages=max_pages, known_ids=set(), early_stop_full_known_pages=2,
+        )
+    except Exception as exc:
+        report.failure_reasons = ["crawl_exception", type(exc).__name__]
+        report.proxy_metrics = _proxy_metrics(scraper)
+        report.browser_proxy_errors = _proxy_error_count(scraper)
+        return report
     report.previewed = len(previews)
     report.site_total = getattr(scraper, "_site_total", None)
     report.skipped_pages = int(getattr(scraper, "_skipped_pages", 0) or 0)
@@ -175,19 +214,30 @@ async def run_shadow_audit(
     elif report.site_total == 0 and report.previewed == 0:
         report.coverage = 1.0
 
-    for preview in previews[:compare_details]:
+    report.crawl_complete = bool(getattr(scraper, "_crawl_complete", False))
+    report.stop_reason = str(getattr(scraper, "_crawl_stop_reason", "unverified"))
+    sample, report.sample_segments, report.population_segments = _sample_previews(
+        scraper, previews, compare_details
+    )
+    for preview in sample:
         report.sample_compared += 1
         snapshot = preview.snapshot
-        if not _snapshot_is_complete(scraper, snapshot):
+        complete = _snapshot_is_complete(scraper, snapshot)
+        if not complete:
             report.fallback_count += 1
             report.fallback_listing_ids.append(preview.external_id)
-            continue
-        report.complete_snapshots += 1
+        else:
+            report.complete_snapshots += 1
         try:
             legacy = await scraper.fetch_detail(preview.url)
+            if not legacy.title or legacy.price_eur is None or not legacy.photo_urls:
+                raise ValueError("unusable fallback/detail payload")
         except Exception:  # report the listing, then fail closed.
             report.detail_errors += 1
             report.detail_error_listing_ids.append(preview.external_id)
+            continue
+        if not complete:
+            report.fallback_succeeded += 1
             continue
         assert snapshot is not None
         mismatches = _mismatch_fields(snapshot, legacy)
@@ -197,11 +247,28 @@ async def run_shadow_audit(
                 {"external_id": preview.external_id, "fields": mismatches}
             )
 
+    # Detail/fallback operations may fail after a perfectly healthy list crawl.
+    report.proxy_metrics = _proxy_metrics(scraper)
+    report.browser_proxy_errors = _proxy_error_count(scraper)
     fallback_rate = (
         report.fallback_count / report.sample_compared if report.sample_compared else 0.0
     )
     report.thresholds["fallback_rate"] = fallback_rate
     reasons: list[str] = []
+    if len(report.sample_segments) < report.population_segments:
+        reasons.append("missing_segment_sample")
+    if not report.sample_compared:
+        reasons.append("empty_sample")
+    if not report.complete_snapshots:
+        reasons.append("no_complete_snapshot_sample")
+    if any(
+        not _snapshot_is_complete(scraper, preview.snapshot) for preview in previews
+    ) and not report.fallback_count:
+        reasons.append("missing_fallback_sample")
+    if not report.crawl_complete:
+        reasons.append("crawl_incomplete")
+    if not bool(getattr(scraper, "_site_total_trusted", False)):
+        reasons.append("untrusted_denominator")
     if report.site_total is None:
         reasons.append("site_total_missing")
     if report.skipped_pages != 0:

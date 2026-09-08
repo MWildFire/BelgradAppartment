@@ -118,6 +118,9 @@ class NekretnineScraper(Scraper):
         self._pw_user_data_dir: Path | None = None
         self._pw_headless = os.environ.get("NEKRETNINE_HEADLESS", "false").lower() == "true"
         self._proxy_pool = ProxyPool.from_settings(get_settings())
+        self._http_proxy_slot = (
+            self._proxy_pool.candidates[0].slot if self._proxy_pool.candidates else None
+        )
         self._failed_proxy_slots: set[str] = set()
         self._active_proxy_slot: str | None = None
         self._proxy_metrics: dict[str, int] = {
@@ -126,6 +129,9 @@ class NekretnineScraper(Scraper):
             "proxy_challenges": 0,
             "proxy_errors": 0,
             "browser_proxy_errors": 0,
+            "http_attempts": 0, "http_errors": 0, "http_recovered_errors": 0,
+            "http_residual_errors": 0, "browser_attempts": 0, "browser_errors": 0,
+            "browser_recovered_errors": 0,
         }
 
     @property
@@ -143,21 +149,20 @@ class NekretnineScraper(Scraper):
         try:
             candidate = self._proxy_pool.select(failed_slots=self._failed_proxy_slots)
         except NoProxyAvailableError:
-            self._proxy_metrics["proxy_errors"] += 1
             raise
         if self._active_proxy_slot != candidate.slot:
             if self._active_proxy_slot is not None:
                 self._proxy_metrics["proxy_failovers"] += 1
             self._active_proxy_slot = candidate.slot
-            self._proxy_metrics["proxy_attempts"] += 1
         return candidate
 
-    def _mark_proxy_failure(self) -> None:
+    def _mark_proxy_failure(self, *, challenge: bool = True) -> None:
         slot = self._active_proxy_slot
         if slot is None or slot in self._failed_proxy_slots:
             return
         self._failed_proxy_slots.add(slot)
-        self._proxy_metrics["proxy_challenges"] += 1
+        if challenge:
+            self._proxy_metrics["proxy_challenges"] += 1
 
     async def list_recent(
         self,
@@ -169,6 +174,7 @@ class NekretnineScraper(Scraper):
         known_ids = known_ids or set()
         seen: set[str] = set()
         previews: list[ListingPreview] = []
+        self.reset_crawl_evidence()
         self._skipped_pages = 0
         self._site_total = None
 
@@ -206,6 +212,7 @@ class NekretnineScraper(Scraper):
                 "[nekretnine] segmented walk done: %d collected vs site_total=%s",
                 len(previews), self._site_total,
             )
+        self.finish_crawl_evidence(len(previews))
         return previews
 
     async def _walk(
@@ -230,10 +237,15 @@ class NekretnineScraper(Scraper):
         # Never request past the site's hard pagination cap — pages beyond it 404 or re-serve.
         limit = min(max_pages, self.page_cap)
 
+        search_page_ids = set()
         page = 1
         while page <= limit:
+            self.record_page_attempt(observed=len(previews))
             html = await self._fetch_page(self._page_url(base_url, page))
             if html is None:
+                if getattr(self, "_last_failure_reason", None) is not None:
+                    self.record_crawl_failure(self._last_failure_reason)
+                    break
                 if self._last_status == 404:
                     # Past the site's pagination cap — semantic end of this search, not a failure.
                     logger.info("[nekretnine] page %d → 404 (pagination cap), ending walk", page)
@@ -244,6 +256,7 @@ class NekretnineScraper(Scraper):
                 # skip so a partial under-run is surfaced rather than silently passing for healthy.
                 consecutive_failures += 1
                 self._skipped_pages += 1
+                self.record_crawl_failure("page_fetch_failed")
                 logger.warning(
                     "[nekretnine] page %d fetch failed (consecutive=%d, skipped_total=%d)",
                     page, consecutive_failures, self._skipped_pages,
@@ -260,6 +273,7 @@ class NekretnineScraper(Scraper):
 
             data = self._list_payload(html)
             if data is None:
+                self.record_crawl_failure("page_payload_missing")
                 # 200 OK but no listing payload — almost certainly a site-structure change.
                 # Log loudly: this is exactly the silent-failure mode we want surfaced.
                 logger.error(
@@ -268,16 +282,20 @@ class NekretnineScraper(Scraper):
                 )
                 break
             ta = data.get("totalAds")
-            if search_total is None and isinstance(ta, int):
-                search_total = ta
+            if type(ta) is int and ta >= 0:
+                if search_total is None:
+                    search_total = ta
                 if is_base:
-                    self._site_total = ta
+                    self.record_source_total(ta)
             if site_max_pages is None:
                 mp = data.get("maxPages")
                 if isinstance(mp, int) and mp > 0:
                     site_max_pages = mp
             cp = data.get("currentPage")
-            if isinstance(cp, int) and cp != page:
+            if type(cp) is not int:
+                self.record_crawl_failure("missing_page_number")
+            elif cp != page:
+                self.record_crawl_failure("pagination_mismatch")
                 # The site ignored ?pag= and re-served another page (the original migration bug
                 # class). Without this guard a band walk would happily re-read page 1 forever.
                 logger.error(
@@ -287,6 +305,11 @@ class NekretnineScraper(Scraper):
                 break
 
             page_previews = self._previews_from_payload(data)
+            page_ids = tuple(p.external_id for p in page_previews)
+            if page_ids and page_ids in search_page_ids:
+                self.record_crawl_failure("repeated_page")
+                break
+            search_page_ids.add(page_ids)
             new_this_page = 0
             unknown_this_page = 0
             for prev in page_previews:
@@ -299,6 +322,8 @@ class NekretnineScraper(Scraper):
                     unknown_this_page += 1
 
             if not page_previews:
+                if search_total != 0:
+                    self.record_crawl_failure("unexpected_empty_page")
                 break  # structurally empty page = end of pagination
             # NB: a page whose listings are ALL already in `seen` is NOT the end — price-band
             # walks legitimately overlap the unfiltered pass (newest listings appear in both), so
@@ -306,6 +331,7 @@ class NekretnineScraper(Scraper):
             if known_ids and unknown_this_page == 0 and new_this_page > 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
+                    self._stopped_known = True
                     logger.info(
                         "[nekretnine] incremental early-stop at page %d (%d full-known pages)",
                         page, consecutive_full_known,
@@ -320,56 +346,82 @@ class NekretnineScraper(Scraper):
             page += 1
         return search_total
 
-    async def fetch_detail(self, url: str) -> ListingDetail:
-        """Fetch + parse one detail page with bounded retries (same policy as `_fetch_page`).
+    async def _prepare_http_route(self):
+        candidate = self._select_proxy()
+        slot = candidate.slot if candidate is not None else None
+        if slot != self._http_proxy_slot:
+            await self._stop_browser()
+            if self._owned_client:
+                await self._client.aclose()
+                self._client = self._make_client(proxy_override=candidate.materialize(
+                    session_token=secrets.token_hex(4)) if candidate is not None else None)
+            self._http_proxy_slot = slot
 
-        Transient failures (transport errors, 5xx, 429) are retried up to `fetch_attempts` with
-        linear backoff (429 backs off ×5, floor 10s×attempt — same as the list walk). Deterministic
-        4xx (`_NON_RETRYABLE_DETAIL_STATUSES`: 403 anti-bot/geo block, 404/410 gone, 401 auth) raise
-        immediately — hammering a hard block only burns the IP's reputation and delays the caller.
+    def _record_operation(self, kind):
+        self._proxy_metrics[f"{kind}_attempts"] += 1
+        if self._active_proxy_slot is not None:
+            self._proxy_metrics["proxy_attempts"] += 1
+            key = f"{kind}_attempts_{self._active_proxy_slot}"
+            self._proxy_metrics[key] = self._proxy_metrics.get(key, 0) + 1
 
-        Contract preserved: on ultimate failure the last exception propagates. `orchestrator.
-        _process_one` and the smoke detail-probe both rely on fetch_detail *raising* on failure.
-        """
-        # A detail page is reached by clicking a card on the list — so present it as a same-site
-        # navigation: Referer = the list URL, Sec-Fetch-Site = same-origin (overrides the client's
-        # top-level "none"). A Refererless deep-link straight to an /oglasi/<id>/ is the shape an
-        # anti-bot layer flags. T1-4.
-        detail_headers = {"Referer": self.list_url, "Sec-Fetch-Site": "same-origin"}
-        last_exc: Exception | None = None
-        for attempt in range(self.fetch_attempts):
-            status: int | None = None
+    async def _request_html(self, url: str, *, detail: bool) -> str:
+        """One bounded HTTP/browser policy; unusable proxies fail over without direct fallback."""
+        last_error = None
+        raw_errors = 0
+        attempts = max(self.fetch_attempts, len(self._proxy_pool.candidates))
+        headers = {"Referer": self.list_url, "Sec-Fetch-Site": "same-origin"} if detail else None
+        for attempt in range(attempts):
+            status = None
             try:
-                resp = await self._client.get(url, headers=detail_headers)
-                resp.raise_for_status()
-                return self.parse_detail(url, resp.text)
-            except httpx.HTTPStatusError as e:
-                status = e.response.status_code
-                if status in _NON_RETRYABLE_DETAIL_STATUSES:
-                    # Retrying over httpx is pure waste — but a 403 here is the DataDome block, not
-                    # a dead page, so refetch this one page through a real browser (D6).
-                    # 404/410/401 mean the ad is genuinely gone: no browser, raise now.
+                await self._prepare_http_route()
+                self._record_operation("http")
+                response = await self._client.get(url, headers=headers)
+                status = response.status_code
+                self._last_status = status
+                challenge = status == 403 or (
+                    status == 200 and not self._has_browser_payload(url, response.text)
+                )
+                if challenge:
+                    raw_errors += 1
+                    self._proxy_metrics["http_errors"] += 1
                     if status == 403 and get_settings().nekretnine_playwright_fallback:
                         html = await self._playwright_html(url)
-                        if html:
-                            logger.info("[nekretnine] detail %s recovered via browser fallback", url)
-                            return self.parse_detail(url, html)
+                        if html and self._has_browser_payload(url, html):
+                            self._proxy_metrics["http_recovered_errors"] += raw_errors
+                            self._last_status = 200
+                            return html
+                    response.raise_for_status()
+                    raise ValueError("listing payload missing after bounded challenge fallback")
+                response.raise_for_status()
+                self._proxy_metrics["http_recovered_errors"] += raw_errors
+                return response.text
+            except (httpx.HTTPError, ValueError, NoProxyAvailableError) as exc:
+                last_error = exc
+                status = getattr(getattr(exc, "response", None), "status_code", status)
+                if status in {401, 404, 410}:
                     raise
-                last_exc = e
-            except httpx.RequestError as e:  # transport: timeout / connect / read — retryable
-                last_exc = e
-            logger.warning(
-                "[nekretnine] detail GET %s attempt %d/%d failed: %s%s",
-                url, attempt + 1, self.fetch_attempts, type(last_exc).__name__,
-                f" (HTTP {status})" if status else "",
-            )
-            if attempt + 1 < self.fetch_attempts and self.retry_backoff_sec > 0:
-                backoff = self.retry_backoff_sec * (attempt + 1)
-                if status == 429:
-                    backoff = max(backoff * 5, 10.0 * (attempt + 1))
-                await asyncio.sleep(backoff)
-        assert last_exc is not None  # loop only exits early via return or raise
-        raise last_exc
+                if not (status == 403 or isinstance(exc, ValueError)):
+                    raw_errors += 1
+                    self._proxy_metrics["http_errors"] += 1
+                if isinstance(exc, httpx.RequestError) or status in {402, 407}:
+                    self._mark_proxy_failure(challenge=False)
+                if status == 403 or isinstance(exc, (ValueError, NoProxyAvailableError)):
+                    break
+                if self._proxy_pool.candidates and all(
+                    c.slot in self._failed_proxy_slots for c in self._proxy_pool.candidates
+                ):
+                    break
+                if attempt + 1 < attempts and self.retry_backoff_sec > 0:
+                    await asyncio.sleep(self.retry_backoff_sec * (attempt + 1))
+        self._proxy_metrics["http_residual_errors"] += 1
+        self._proxy_metrics["proxy_errors"] += 1
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("source request exhausted")
+
+    async def fetch_detail(self, url: str) -> ListingDetail:
+        html = await self._request_html(url, detail=True)
+        return self.parse_detail(url, html)
 
     async def _start_browser(self) -> None:
         """Launch the stealth Chromium used by the DataDome fallback (mirrors halooglasi's setup).
@@ -380,6 +432,7 @@ class NekretnineScraper(Scraper):
         DataDome block from one residential IP to the next while still reusing the browser for the
         current session's pages.
         """
+        await self.acquire_resource()
         from playwright.async_api import async_playwright
         from playwright_stealth import Stealth
 
@@ -476,20 +529,31 @@ class NekretnineScraper(Scraper):
         blob, so `parse_detail` is reused verbatim. Best-effort by contract — any failure returns
         None and the caller re-raises the original 403 (never a false "listing is gone").
         """
-        for session_attempt in range(3):
+        session_limit = (
+            max(1, len(self._proxy_pool.candidates)) if self._proxy_pool.candidates else 3
+        )
+        raw_errors = 0
+        for session_attempt in range(session_limit):
             try:
                 if self._pw_context is None:
                     await self._start_browser()
                 page = await self._pw_context.new_page()
                 try:
+                    self._record_operation("browser")
                     resp = await page.goto(
                         url, wait_until="domcontentloaded", timeout=self.pw_timeout_ms
                     )
                     for attempt in range(self.pw_challenge_reloads + 1):
                         status = resp.status if resp is not None else None
                         html = await page.content()
+                        if status in {404, 410}:
+                            raise httpx.HTTPStatusError("source listing removed",
+                                request=httpx.Request("GET", url), response=httpx.Response(status))
                         if (status is None or status < 400) and self._has_browser_payload(url, html):
+                            self._proxy_metrics["browser_recovered_errors"] += raw_errors
                             return html
+                        raw_errors += 1
+                        self._proxy_metrics["browser_errors"] += 1
 
                         if attempt == self.pw_challenge_reloads:
                             logger.warning(
@@ -507,19 +571,24 @@ class NekretnineScraper(Scraper):
                             self.pw_challenge_reloads,
                         )
                         await page.wait_for_timeout(self.pw_challenge_wait_ms)
+                        self._record_operation("browser")
                         resp = await page.reload(
                             wait_until="domcontentloaded", timeout=self.pw_timeout_ms
                         )
                 finally:
                     await page.close()
-            except Exception as e:  # noqa: BLE001 — fallback is best-effort; caller re-raises 403
-                self._mark_proxy_failure()
+            except httpx.HTTPStatusError:
+                raise
+            except Exception as e:  # fallback is best-effort, with sanitized failure evidence
+                raw_errors += 1
+                self._proxy_metrics["browser_errors"] += 1
+                self._mark_proxy_failure(challenge=False)
                 logger.warning(
-                    "[nekretnine] playwright fallback failed for %s: %s: %s",
-                    url, type(e).__name__, e,
+                    "[nekretnine] playwright fallback failed: %s",
+                    type(e).__name__,
                 )
 
-            if session_attempt < 2:
+            if session_attempt < session_limit - 1:
                 logger.info(
                     "[nekretnine] rotating browser proxy session after challenge (%d/2)",
                     session_attempt + 1,
@@ -530,53 +599,32 @@ class NekretnineScraper(Scraper):
                 # be able to start a fresh context and select the next bounded pool slot instead
                 # of retrying the same exhausted ISP/rotating session forever.
                 await self._stop_browser()
+                self._proxy_metrics["browser_proxy_errors"] += 1
                 return None
         return None
 
     async def aclose(self) -> None:
         """Close the httpx client (base) AND the fallback browser, if one was ever started."""
-        await super().aclose()
-        await self._stop_browser()
+        try:
+            await self._stop_browser()
+        finally:
+            await super().aclose()
 
     async def _fetch_page(self, url: str) -> str | None:
-        """GET a list page with bounded retries. Returns HTML, or None if it ultimately failed.
-
-        Sets `self._last_status` to the final HTTP status (or None on transport errors) so the
-        caller can tell a semantic 404 (past the pagination cap) from a transient failure —
-        404s short-circuit without retries.
-        """
         self._last_status = None
-        for attempt in range(self.fetch_attempts):
-            try:
-                resp = await self._client.get(url)
-                self._last_status = resp.status_code
-                if resp.status_code == 404:
-                    return None
-                resp.raise_for_status()
-                return resp.text
-            except Exception as e:
-                status = getattr(getattr(e, "response", None), "status_code", None)
-                logger.warning(
-                    "[nekretnine] GET %s attempt %d/%d failed: %s%s",
-                    url, attempt + 1, self.fetch_attempts, type(e).__name__,
-                    f" (HTTP {status})" if status else "",
-                )
-                # 403 = DataDome: it lets the FIRST httpx request through and blocks the rest, so
-                # retrying this page over httpx is pointless — fetch it through the browser, which
-                # measurably returns 200 where httpx gets 403. Without this the segmented walk
-                # skipped nearly everything (25 of ~6018 collected on 15.07).
-                if status == 403 and get_settings().nekretnine_playwright_fallback:
-                    html = await self._playwright_html(url)
-                    if html:
-                        self._last_status = 200  # effectively fetched; not a transient failure
-                        return html
-                    return None  # browser blocked too → skip this page, same as before
-                if attempt + 1 < self.fetch_attempts and self.retry_backoff_sec > 0:
-                    backoff = self.retry_backoff_sec * (attempt + 1)
-                    if status == 429:
-                        backoff = max(backoff * 5, 10.0 * (attempt + 1))
-                    await asyncio.sleep(backoff)
-        return None
+        self._last_failure_reason = None
+        try:
+            return await self._request_html(url, detail=False)
+        except Exception as exc:
+            if isinstance(exc, NoProxyAvailableError):
+                self._last_failure_reason = "proxy_unavailable"
+            elif isinstance(exc, ValueError):
+                self._last_failure_reason = "page_payload_missing"
+            self._last_status = getattr(
+                getattr(exc, "response", None), "status_code", self._last_status
+            )
+            logger.warning("[nekretnine] list request failed: %s", type(exc).__name__)
+            return None
 
     def _band_url(self, lo: int, hi: int | None) -> str:
         sep = "&" if "?" in self.list_url else "?"
@@ -654,7 +702,10 @@ class NekretnineScraper(Scraper):
         if not isinstance(nxt, dict):
             return False
         try:
-            return isinstance(nxt["props"]["pageProps"]["detailData"]["realEstate"], dict)
+            real_estate = nxt["props"]["pageProps"]["detailData"]["realEstate"]
+            expected_id = cls._external_id_from_url(url)
+            return (isinstance(real_estate, dict) and bool(real_estate)
+                    and str(real_estate.get("id", "")) == expected_id)
         except (KeyError, TypeError):
             return False
 

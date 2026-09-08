@@ -272,3 +272,47 @@ def test_weekly_completion_jitter_still_confirms_absence():
         now=t0 + timedelta(days=7, minutes=-8),
     )
     assert result.deactivate and result.streak == 2
+
+
+@pytest.mark.asyncio
+async def test_hanging_source_returns_failure_checkpoint_and_next_source_runs(db, tmp_path):
+    import asyncio
+    import json
+    class Hanging(FakeScraper):
+        async def list_recent(self, **kwargs):
+            await asyncio.sleep(5)
+    path = tmp_path / "first.json"
+    first = await scrape_platform(Hanging(), incremental=False, source_budget_sec=0.01, checkpoint_path=path)
+    assert first.outcome == "failed" and first.stop_reason == "source_timeout"
+    assert json.loads(path.read_text())["final"] is True
+    second = await scrape_platform(FakeScraper(), incremental=False, download_photos=False, checkpoint_path=tmp_path / "second.json")
+    assert second.outcome == "ok"
+
+
+@pytest.mark.asyncio
+async def test_source_cancellation_writes_final_checkpoint(db, tmp_path):
+    import asyncio
+    import json
+    class Hanging(FakeScraper):
+        async def list_recent(self, **kwargs):
+            await asyncio.sleep(5)
+    path = tmp_path / "cancelled.json"
+    task = asyncio.create_task(scrape_platform(Hanging(), incremental=False, checkpoint_path=path))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    report = json.loads(path.read_text())
+    assert report["final"] and report["stop_reason"] == "cancelled"
+    assert not report["sweep_allowed"]
+
+
+@pytest.mark.asyncio
+async def test_dry_source_timeout_writes_no_checkpoint(db, tmp_path):
+    import asyncio
+    class Hanging(FakeScraper):
+        async def list_recent(self, **kwargs):
+            await asyncio.sleep(5)
+    path = tmp_path / "dry.json"
+    result = await scrape_platform(Hanging(), dry_run=True, source_budget_sec=0.01, checkpoint_path=path)
+    assert result.stop_reason == "source_timeout" and not path.exists()

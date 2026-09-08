@@ -13,7 +13,9 @@ Idempotent: re-running won't duplicate listings; will only refresh last_seen_at 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -32,8 +34,9 @@ from src.db import Listing, get_session
 from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, ListingPreview, Scraper
-from src.scrapers.snapshot_parity import mismatch_fields
+from src.scrapers.link_probe import SourceProbeSession
 from src.scrapers.run_safety import evaluate_absence, evaluate_source
+from src.scrapers.snapshot_parity import mismatch_fields
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +193,75 @@ class ScrapeResult:
         return self.snapshot_fallbacks / self.snapshots_seen
 
 
+def _write_source_checkpoint(result: ScrapeResult, path: Path, *, final: bool) -> None:
+    """Crash-safe aggregate progress; replay recrawls and relies on normal upsert idempotency."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + f".{os.getpid()}.tmp")
+    payload = result.to_report()
+    payload.update(checkpoint_at=datetime.now(UTC).isoformat(), final=final)
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
 async def scrape_platform(
+    scraper: Scraper, *, max_pages: int = 5, max_new: int | None = None,
+    download_photos: bool = True, incremental: bool = True, dry_run: bool = False,
+    run_id: str | None = None, source_budget_sec: float = 1800,
+    item_budget_sec: float = 90, checkpoint_path: Path | None = None,
+) -> ScrapeResult:
+    """Bound one source and persist progress/final status, including timeout/cancellation.
+
+    Source/listing/publication writes and checkpoints are all disabled in ``dry_run``.
+    A restarted job recrawls source presence and safely skips previously persisted details;
+    it never replays delivery work or trusts a stale pagination cursor.
+    """
+    result = ScrapeResult(platform=scraper.platform, run_id=run_id or uuid4().hex,
+        full_crawl=not incremental and max_new is None, dry_run=dry_run,
+        snapshot_mode=_snapshot_mode(scraper), proxy_metrics=_proxy_metrics_for(scraper))
+    path = checkpoint_path or (
+        get_settings().data_dir / "state" / "scrape" / f"{scraper.platform.value.lower()}.json"
+    )
+    last_checkpoint = 0.0
+    def progress():
+        nonlocal last_checkpoint
+        result.pages_attempted = int(getattr(scraper, "_pages_attempted", 0))
+        result.pages_failed = int(getattr(scraper, "_pages_failed", 0))
+        result.previewed = int(getattr(scraper, "_observed_count", result.previewed))
+        result.site_total = getattr(scraper, "_site_total", None)
+        if not dry_run and time.monotonic() - last_checkpoint >= 30:
+            _write_source_checkpoint(result, path, final=False)
+            last_checkpoint = time.monotonic()
+    scraper._progress_callback = progress
+    try:
+        if not dry_run:
+            _write_source_checkpoint(result, path, final=False)
+        async with asyncio.timeout(max(0.001, source_budget_sec)):
+            return await _scrape_platform_impl(scraper, max_pages=max_pages, max_new=max_new,
+                download_photos=download_photos, incremental=incremental, dry_run=dry_run,
+                run_id=result.run_id, _result=result, item_budget_sec=item_budget_sec,
+                checkpoint_path=path)
+    except TimeoutError:
+        _copy_crawl_evidence(result, scraper, preserve_stop=True)
+        result.errors += 1
+        result.stop_reason = "source_timeout"
+        result.crawl_complete = False
+        result.quality_reasons.append("source_timeout")
+        return result
+    except asyncio.CancelledError:
+        _copy_crawl_evidence(result, scraper, preserve_stop=True)
+        result.stop_reason = "cancelled"
+        result.crawl_complete = False
+        result.quality_reasons.append("cancelled")
+        raise
+    finally:
+        scraper._progress_callback = None
+        result.proxy_metrics = _proxy_metrics_for(scraper)
+        if not dry_run:
+            _write_source_checkpoint(result, path, final=True)
+
+
+async def _scrape_platform_impl(
     scraper: Scraper,
     *,
     max_pages: int = 5,
@@ -199,6 +270,9 @@ async def scrape_platform(
     incremental: bool = True,
     dry_run: bool = False,
     run_id: str | None = None,
+    _result: ScrapeResult | None = None,
+    item_budget_sec: float = 90,
+    checkpoint_path: Path | None = None,
 ) -> ScrapeResult:
     """Run one scraping pass for a single platform.
 
@@ -206,7 +280,7 @@ async def scrape_platform(
     to the scraper, so the scraper can stop paginating after it sees full pages of already-known
     items. First run is full; subsequent runs are fast (1-5 min instead of 6-7 h).
     """
-    result = ScrapeResult(
+    result = _result or ScrapeResult(
         platform=scraper.platform,
         run_id=run_id or uuid4().hex,
         full_crawl=not incremental and max_new is None,
@@ -250,7 +324,11 @@ async def scrape_platform(
     )
 
     new_count = 0
-    for prev in previews:
+    if not dry_run and checkpoint_path is not None:
+        _write_source_checkpoint(result, checkpoint_path, final=False)
+    for index, prev in enumerate(previews):
+        if index and index % 25 == 0 and not dry_run and checkpoint_path is not None:
+            _write_source_checkpoint(result, checkpoint_path, final=False)
         if max_new is not None and new_count >= max_new:
             result.stop_reason = "item_limit"
             result.crawl_complete = False
@@ -258,13 +336,17 @@ async def scrape_platform(
         _record_snapshot_telemetry(result, scraper, prev)
         try:
             processor = _evaluate_one if dry_run else _process_one
-            inserted, photos, fetched_detail = await processor(
+            inserted, photos, fetched_detail = await asyncio.wait_for(processor(
                 scraper,
                 prev.url,
                 prev.external_id,
                 download_photos=download_photos,
                 preview=prev,
-            )
+            ), timeout=max(0.001, item_budget_sec))
+        except TimeoutError:
+            result.errors += 1
+            result.quality_reasons.append("item_timeout")
+            continue
         except _DetailFetchError:
             result.details_attempted += 1
             result.errors += 1
@@ -637,8 +719,8 @@ async def _download_photos(
 
 
 def _photo_request_headers(referer_url: str) -> dict[str, str]:
-    from src.scrapers.base import DEFAULT_USER_AGENT
     from src.config import get_settings
+    from src.scrapers.base import DEFAULT_USER_AGENT
 
     settings = get_settings()
     ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
@@ -812,23 +894,22 @@ async def verify_active_links(
     client: httpx.AsyncClient | None = None,
     dry_run: bool = False,
 ) -> LinkVerifyStats:
-    """A3: HEAD-check ACTIVE listings that have a PENDING/PUBLISHED match (i.e. potentially
-    shown on the site) and deactivate the ones that 404/410 — so a public card never links to
-    a page removed between the nightly walk and the render.
+    """Verify ACTIVE matched sources through bounded payload-aware GET/browser probes.
+
+    Definitive 404/410 records source removal, then the common policy controls publication.
 
     Selection: ACTIVE listings whose id is referenced by some PENDING or PUBLISHED `Match`.
     Optionally filtered by `platform`; capped by `limit`.
 
-    Each URL is HEAD-checked with `follow_redirects=True` and a ~10s per-request timeout, at a
-    concurrency of 4. A 301/302 to a canonical URL that lands on 200 is fine. Only 404/410
-    deactivate; any other outcome (timeout, 5xx, network error, or an anti-bot 403/405) is
-    counted in `errors` and leaves the listing active.
+    Production uses one bounded source session at a time, with the source's configured route.
+    Only verified payloads establish ACTIVE; only 404/410 deactivate. All uncertain outcomes
+    are recorded with a retry time. Explicit HTTP client injection supports offline HEAD tests.
 
     `deadline` is a `time.monotonic()` target shared with the heal/rolling refetch steps: once
     it passes, all still-unchecked rows are counted in `skipped` and the sweep stops cleanly.
 
-    `client` is injectable for tests (pass a MockTransport-backed AsyncClient); in production it
-    defaults to a fresh client built with the scraper User-Agent.
+    `client` is injectable for tests (pass a MockTransport-backed AsyncClient). Production does
+    not use the legacy side-client HEAD route.
     """
     checked_at = datetime.now(UTC)
     async with get_session() as s:
@@ -860,20 +941,6 @@ async def verify_active_links(
                     platform.value if platform else "all")
         return stats
 
-    owns_clients = client is None
-    owned_clients: dict[Platform, httpx.AsyncClient] = {}
-    if owns_clients:
-        from src.scrapers.base import DEFAULT_USER_AGENT
-
-        ua = get_settings().scraper_user_agent or DEFAULT_USER_AGENT
-        for row in rows:
-            if row.platform not in owned_clients:
-                owned_clients[row.platform] = _make_side_client(
-                    headers={"User-Agent": ua},
-                    timeout=10.0,
-                    use_proxy=row.platform == Platform.NEKRETNINE,
-                )
-
     observed_status: dict[int, str] = {}
     dead_ids: set[int] = set()
 
@@ -895,10 +962,21 @@ async def verify_active_links(
         async with get_session() as s:
             await s.execute(update(Listing).where(Listing.id == row.id).values(**values))
 
-    async def _check_one(row: Any) -> None:
+    async def _check_one(row: Any, probe: SourceProbeSession | None = None) -> None:
+        if probe is not None:
+            observation = await probe.probe(row.url)
+            await _record_check(
+                row, observation.status, definitive_alive=observation.status == "ACTIVE"
+            )
+            if observation.status == "DEAD":
+                dead_ids.add(row.id)
+                stats.deactivated += 1
+            elif observation.errored:
+                stats.errors += 1
+            return
         try:
-            check_client = client if client is not None else owned_clients[row.platform]
-            resp = await check_client.head(row.url, timeout=10.0)
+            assert client is not None
+            resp = await client.head(row.url, timeout=10.0)
         except Exception as e:
             stats.errors += 1
             await _record_check(row, "INCONCLUSIVE")
@@ -933,12 +1011,20 @@ async def verify_active_links(
             stats.checked += 1
             await _check_one(row)
 
-    try:
+    if client is not None:
         await asyncio.gather(*(_worker() for _ in range(min(4, len(rows)))))
-        stats.skipped = len(rows) - stats.checked
-    finally:
-        if owns_clients:
-            await asyncio.gather(*(owned.aclose() for owned in owned_clients.values()))
+    else:
+        # Never hold two platform leases at once, avoiding a cross-entrypoint lock cycle.
+        for source in sorted({row.platform for row in rows}, key=lambda value: value.value):
+            if deadline is not None and time.monotonic() > deadline:
+                break
+            async with SourceProbeSession(source) as probe:
+                for row in (row for row in rows if row.platform == source):
+                    if deadline is not None and time.monotonic() > deadline:
+                        break
+                    stats.checked += 1
+                    await _check_one(row, probe)
+    stats.skipped = len(rows) - stats.checked
 
     if dead_ids and not dry_run:
         # All source observations are complete before one serialized cap-controlled policy pass.

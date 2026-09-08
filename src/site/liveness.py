@@ -7,8 +7,9 @@ Card age is NOT a reason to remove (Дмитрий, 14.07); the 21-day notice is
 
 Member status (C0):
   ACTIVE        is_active=1
-  DEAD          is_active=0 AND a target HEAD of its URL returned 404/410 (definitively gone)
-  INCONCLUSIVE  is_active=0 but HEAD gave 403/405/5xx/timeout/network — state unknown → fail-safe
+  DEAD          is_active=0 AND a source GET/browser probe returned 404/410
+  INCONCLUSIVE  is_active=0 but its source probe was blocked, incomplete or failed
+                → unknown, keep the card
 
 Decision per public card (site_listings.is_public=1, resolved match_id → listing → dup-group):
   keep_on_site=1 (pin, D4)              → KEEP (pinned)
@@ -17,8 +18,8 @@ Decision per public card (site_listings.is_public=1, resolved match_id → listi
   ALL members DEAD                      → HIDE (SITE_LIVENESS_AUTO_HIDE=1, up to the nightly cap D3),
                                           otherwise «🪦 candidate (confirmed)»
 
-No "platform unhealthy tonight" guard in v1: the per-URL target HEAD is already fail-safe (a blocked
-platform → 403 → INCONCLUSIVE → KEEP). Recorded as a deliberate simplification.
+Source probes use the scraper route and validate a listing payload; a blocked or unavailable
+source stays INCONCLUSIVE. Bounded source leases prevent concurrent browser/profile use.
 """
 
 from __future__ import annotations
@@ -33,10 +34,8 @@ from sqlalchemy import select
 from src.config import get_settings
 from src.db import Listing, Match, get_session
 from src.db.models import Platform, SiteListing
-from src.scrapers.orchestrator import (
-    _DEAD_LINK_STATUSES,
-    _make_side_client,
-)
+from src.scrapers.link_probe import SourceProbeSession
+from src.scrapers.orchestrator import _DEAD_LINK_STATUSES
 from src.site.publication_policy import apply_publication_policy, evaluate_publication
 from src.telegram.bot_delivery import send_text_via_bot
 
@@ -111,10 +110,9 @@ async def site_liveness_sweep(
 ) -> LivenessReport:
     """Sweep every public card and decide KEEP / candidate / HIDE per the C0 matrix.
 
-    HEADs only INACTIVE dup-group members (active members are ACTIVE without a network call), and
-    each distinct URL at most once per sweep. `client` is injectable (like verify_active_links); when
-    omitted per-platform side clients are built: only Nekretnine HEADs use the paid proxy; all
-    other platforms stay on the direct VPS route.
+    Probes only INACTIVE dup-group members and each URL at most once per sweep. Production
+    uses the shared source GET/browser route with payload validation. An explicitly injected
+    HTTP client supports offline HEAD tests; a HEAD 200 alone never establishes ACTIVE.
     `dry_run` computes the exact same decisions but mutates nothing (the hidden list becomes
     would-hide). Auto-hide is gated by SITE_LIVENESS_AUTO_HIDE (D1) and capped by
     SITE_LIVENESS_MAX_HIDES (D3); overflow spills into candidates_confirmed.
@@ -188,30 +186,22 @@ async def site_liveness_sweep(
     }
     url_status: dict[str, str] = {}
     if inactive_targets:
-        owns_clients = client is None
-        owned_clients: dict[Platform, httpx.AsyncClient] = {}
-        if owns_clients:
-            from src.scrapers.base import DEFAULT_USER_AGENT
-
-            ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
-            for _url, platform in inactive_targets:
-                if platform not in owned_clients:
-                    owned_clients[platform] = _make_side_client(
-                        headers={"User-Agent": ua},
-                        timeout=10.0,
-                        use_proxy=platform == Platform.NEKRETNINE,
-                    )
-        try:
-            for url, platform in inactive_targets:
-                check_client = client if client is not None else owned_clients[platform]
-                status, errored = await _head_liveness(check_client, url)
+        if client is not None:
+            for url, _platform in inactive_targets:
+                status, errored = await _head_liveness(client, url)
                 url_status[url] = status
-                if errored:
-                    report.errors += 1
-        finally:
-            if owns_clients:
-                for owned in owned_clients.values():
-                    await owned.aclose()
+                report.errors += int(errored)
+        else:
+            for platform in sorted(
+                {platform for _, platform in inactive_targets}, key=lambda value: value.value
+            ):
+                async with SourceProbeSession(platform) as probe:
+                    for url, source in inactive_targets:
+                        if source != platform:
+                            continue
+                        observation = await probe.probe(url)
+                        url_status[url] = observation.status
+                        report.errors += int(observation.errored)
 
     for r in card_rows:
         members = card_members[r.sl_id]

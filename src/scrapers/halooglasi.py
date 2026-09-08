@@ -101,7 +101,6 @@ class HalooglasiScraper(Scraper):
         settings = get_settings()
         self.list_url = settings.halooglasi_list_url
         self._user_data_dir = settings.data_dir / "playwright" / "halooglasi"
-        self._user_data_dir.mkdir(parents=True, exist_ok=True)
         self._pw = None
         self._context = None
         self._skipped_pages = 0
@@ -117,6 +116,15 @@ class HalooglasiScraper(Scraper):
         self._headless = os.environ.get("HALOOGLASI_HEADLESS", "false").lower() == "true"
 
     async def __aenter__(self) -> HalooglasiScraper:
+        await super().__aenter__()
+        try:
+            return await self._start_browser_context()
+        except BaseException:
+            await self.aclose()
+            raise
+
+    async def _start_browser_context(self) -> HalooglasiScraper:
+        self._user_data_dir.mkdir(parents=True, exist_ok=True)
         from playwright.async_api import async_playwright
         from playwright_stealth import Stealth
 
@@ -153,16 +161,23 @@ class HalooglasiScraper(Scraper):
             # (e.g. nightly _run_all) treats this platform as failed, not the whole run.
             await self._pw.stop()
             self._pw = None
+            await super().aclose()
             raise
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
-        if self._context is not None:
-            await self._context.close()
-            self._context = None
-        if self._pw is not None:
-            await self._pw.stop()
-            self._pw = None
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        try:
+            if self._context is not None:
+                await self._context.close()
+                self._context = None
+            if self._pw is not None:
+                await self._pw.stop()
+                self._pw = None
+        finally:
+            await super().aclose()
 
     async def list_recent(
         self,
@@ -178,10 +193,12 @@ class HalooglasiScraper(Scraper):
         consecutive_failures = 0
         known_ids = known_ids or set()
         consecutive_full_known = 0
+        self.reset_crawl_evidence()
         self._skipped_pages = 0
         self._site_total = None
 
         for page_num in range(1, max_pages + 1):
+            self.record_page_attempt(observed=len(previews))
             url = self.list_url if page_num == 1 else f"{self.list_url}?page={page_num}"
 
             # Single-page retry with browser restart on Chromium network errors. A returned page
@@ -217,6 +234,7 @@ class HalooglasiScraper(Scraper):
             if not html or _LIST_VAR not in html:
                 consecutive_failures += 1
                 self._skipped_pages += 1
+                self.record_crawl_failure("page_fetch_failed")
                 logger.warning("[halooglasi] page %d: no data after retries (consec_fail=%d, skipped=%d)",
                                page_num, consecutive_failures, self._skipped_pages)
                 if consecutive_failures >= 5:
@@ -227,12 +245,14 @@ class HalooglasiScraper(Scraper):
             if page_num == 1:
                 self._last_list_html = html  # for the A2 smoke fingerprint (see __init__)
 
-            if self._site_total is None:
-                data = _extract_json_var(html, _LIST_VAR)
-                if isinstance(data, dict):
-                    tc = data.get("TotalCount")
-                    if isinstance(tc, int) and tc > 0:
-                        self._site_total = tc
+            data = _extract_json_var(html, _LIST_VAR)
+            if not isinstance(data, dict) or not isinstance(data.get("Ads"), list):
+                self.record_crawl_failure("page_payload_missing")
+                break
+            self.record_source_total(data.get("TotalCount"))
+            if data.get("PageNumber") != page_num:
+                self.record_crawl_failure("pagination_mismatch")
+                break
 
             page_previews = self.parse_list(html)
             added = 0
@@ -246,18 +266,23 @@ class HalooglasiScraper(Scraper):
                 if prev.external_id not in known_ids:
                     unknown_this_page += 1
             if added == 0:
-                # Empty page = end of pagination.
+                if self._site_total != len(previews):
+                    self.record_crawl_failure("unexpected_empty_or_repeated_page")
                 break
             if known_ids and unknown_this_page == 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
+                    self._stopped_known = True
                     logger.info(
                         "[halooglasi] incremental early-stop at page %d", page_num,
                     )
                     break
             else:
                 consecutive_full_known = 0
+            if type(data.get("TotalPages")) is int and page_num >= data["TotalPages"]:
+                break
             await asyncio.sleep(1.5)
+        self.finish_crawl_evidence(len(previews))
         return previews
 
     async def _recycle_browser(self) -> None:

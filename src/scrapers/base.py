@@ -11,10 +11,13 @@ import httpx
 
 from src.config import get_settings
 from src.db.models import Platform
+from src.scrapers.crawl_evidence import CrawlEvidence
 
 # HTTP-only platform fetches and photo downloads need a conservative desktop identity. Browser
 # scrapers intentionally use Chromium's native UA instead: a hard-coded UA can drift from the
 # bundled Playwright version and become an anti-bot fingerprint.
+_DEFAULT_PROXY = object()
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
@@ -55,7 +58,7 @@ class ListingDetail:
     raw_payload: dict[str, Any] | None = None
 
 
-class Scraper(abc.ABC):
+class Scraper(CrawlEvidence, abc.ABC):
     """Base contract every platform scraper must satisfy."""
 
     platform: ClassVar[Platform]
@@ -84,16 +87,23 @@ class Scraper(abc.ABC):
         return {}
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        from src.scrapers.resources import ResourceLease
+        self._resource_lease = ResourceLease(
+            get_settings().data_dir / "state" / "locks"
+            / f"source-{self.platform.value.lower()}.lock"
+        )
         self._owned_client = client is None
         self._client = client or self._make_client()
 
     @classmethod
-    def _make_client(cls) -> httpx.AsyncClient:
+    def _make_client(cls, *, proxy_override=_DEFAULT_PROXY) -> httpx.AsyncClient:
         settings = get_settings()
         ua = settings.scraper_user_agent or DEFAULT_USER_AGENT
-        if getattr(cls, "platform", None) == Platform.NEKRETNINE:
-            # The pool is selected once per HTTP client/session. A malformed configured candidate
-            # raises instead of silently falling back to the blocked VPS egress.
+        if proxy_override is not _DEFAULT_PROXY:
+            proxy = proxy_override
+        elif getattr(cls, "platform", None) == Platform.NEKRETNINE:
+            # Initial HTTP route. Nekretnine rebuilds the client on bounded failover; invalid
+            # configuration raises instead of silently selecting direct egress.
             from src.scrapers.proxy_pool import ProxyPool
 
             pool = ProxyPool.from_settings(settings)
@@ -131,15 +141,26 @@ class Scraper(abc.ABC):
             proxy=proxy,
         )
 
+    async def acquire_resource(self) -> None:
+        await self._resource_lease.acquire()
+
     async def __aenter__(self) -> Scraper:
-        return self
+        try:
+            await self.acquire_resource()
+            return self
+        except BaseException:
+            await self.aclose()
+            raise
 
     async def __aexit__(self, *_exc: object) -> None:
         await self.aclose()
 
     async def aclose(self) -> None:
-        if self._owned_client:
-            await self._client.aclose()
+        try:
+            if self._owned_client:
+                await self._client.aclose()
+        finally:
+            self._resource_lease.release()
 
     @abc.abstractmethod
     async def list_recent(

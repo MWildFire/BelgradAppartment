@@ -109,19 +109,25 @@ def test_malformed_config_is_fail_closed() -> None:
         ProxyPool.from_settings(settings)
 
 
-def test_legacy_scraper_proxy_is_primary_compatibility_fallback() -> None:
+def test_legacy_scraper_proxy_requires_explicit_opt_in() -> None:
     settings = Settings(_env_file=None, scraper_proxy_url="http://legacy.example:8080")
+    with pytest.raises(ProxyConfigurationError):
+        ProxyPool.from_settings(settings)
+    settings = settings.model_copy(update={"nekretnine_proxy_allow_legacy_fallback": True})
     pool = ProxyPool.from_settings(settings)
     assert pool.select().url == "http://legacy.example:8080"
 
 
-def test_legacy_scraper_proxy_remains_bounded_fallback_when_primary_is_new() -> None:
+def test_legacy_scraper_proxy_is_excluded_unless_explicitly_enabled() -> None:
     settings = Settings(
         _env_file=None,
         scraper_proxy_url="http://legacy.example:8080",
         nekretnine_proxy_mode="static_isp",
         nekretnine_proxy_primary_url="http://isp.example:1",
     )
+    pool = ProxyPool.from_settings(settings)
+    assert [candidate.slot for candidate in pool.candidates] == ["primary"]
+    settings = settings.model_copy(update={"nekretnine_proxy_allow_legacy_fallback": True})
     pool = ProxyPool.from_settings(settings)
     assert [candidate.slot for candidate in pool.candidates] == ["primary", "metered"]
     assert pool.candidates[1].kind == "legacy_rotating"
