@@ -207,7 +207,7 @@ async def site_liveness_sweep(
             retry = record.link_next_retry_at
             checked = checked.replace(tzinfo=UTC) if checked and checked.tzinfo is None else checked
             retry = retry.replace(tzinfo=UTC) if retry and retry.tzinfo is None else retry
-            recent = checked and now - checked < timedelta(hours=24)
+            recent = checked and timedelta(0) <= now - checked < timedelta(hours=24)
             if recent and record.link_status in {_ACTIVE, _DEAD}:
                 url_status[url] = record.link_status
             elif retry and retry > now:
@@ -215,11 +215,21 @@ async def site_liveness_sweep(
             else:
                 queue.append((record.id, url, platform))
 
+    async def begin_probe(row):
+        # Commit before network I/O. Outer cancellation must not leave a hung oldest
+        # URL eligible at the front of the same source's queue forever.
+        if not dry_run:
+            async with get_session() as session:
+                await session.execute(update(Listing).where(Listing.id == row[0]).values(
+                    link_checked_at=now, link_status=_INCONCLUSIVE,
+                    link_next_retry_at=now + timedelta(hours=6),
+                ))
+        report.checked += 1
+
     async def record_probe(row, observation):
         lid, url, _platform = row
         url_status[url] = observation.status
         report.errors += int(observation.errored)
-        report.checked += 1
         if not dry_run:
             values = {
                 "link_checked_at": now, "link_status": observation.status,
@@ -239,6 +249,7 @@ async def site_liveness_sweep(
         for row in queue:
             if time.monotonic() >= deadline:
                 break
+            await begin_probe(row)
             status, errored = await _head_liveness(client, row[1])
             await record_probe(row, LinkObservation(status, errored))
     else:
@@ -256,6 +267,7 @@ async def site_liveness_sweep(
                             left = source_deadline - time.monotonic()
                             if left <= 0:
                                 break
+                            await begin_probe(row)
                             try:
                                 async with asyncio.timeout(left):
                                     observation = await probe.probe(row[1])

@@ -503,3 +503,39 @@ async def test_liveness_unknown_backoff_allows_later_rows_next_run(db, monkeypat
     assert len(calls) == 3
     assert len(second.candidates_unconfirmed) == 3
     assert not second.hidden
+
+
+async def test_hung_oldest_link_does_not_starve_next_same_source_run(db, monkeypatch):
+    import asyncio
+
+    import src.site.liveness as live
+    from src.scrapers.link_probe import LinkObservation
+
+    ids = [await _listing(is_active=False) for _ in range(3)]
+    for listing_id in ids:
+        await _card(listing_id)
+    calls = []
+
+    class Probe:
+        def __init__(self, _platform): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return None
+        async def probe(self, url):
+            calls.append(url)
+            if len(calls) == 1:
+                await asyncio.sleep(20)
+            return LinkObservation('ACTIVE')
+
+    monkeypatch.setattr(live, 'SourceProbeSession', Probe)
+    monkeypatch.setattr(get_settings(), 'site_liveness_budget_sec', 0.15)
+    first = await site_liveness_sweep()
+    assert first.checked == 1
+    second = await site_liveness_sweep()
+    assert second.checked == 2
+    assert len(set(calls)) == 3
+    async with get_session() as session:
+        oldest = await session.get(Listing, ids[0])
+        assert oldest.link_checked_at is not None
+        assert oldest.link_next_retry_at is not None
+        assert oldest.link_status == 'INCONCLUSIVE'
+        assert not oldest.is_active

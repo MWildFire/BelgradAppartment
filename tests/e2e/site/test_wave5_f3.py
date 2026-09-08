@@ -62,12 +62,12 @@ def test_filter_swap_single_results_node_and_stable_counter(page, site_server: s
         "document.getElementById('results-status').textContent.trim() === '1 квартира'"
     )
 
-    # своп 2: снимаем ВНЖ → снова 2 квартиры
+    # своп 2: снимаем ВНЖ → все 3 public квартиры, включая retained DEAD
     page.locator(".filters input[name='vnj'][value='1']").uncheck()
-    page.wait_for_function("document.querySelectorAll('#results .card-l').length === 2")
+    page.wait_for_function("document.querySelectorAll('#results .card-l').length === 3")
     assert page.evaluate("document.querySelectorAll('#results').length") == 1
     page.wait_for_function(
-        "document.getElementById('results-status').textContent.trim() === '2 квартир'"
+        "document.getElementById('results-status').textContent.trim() === '3 квартир'"
     )
     # тот же узел пережил оба свопа → SR-объявление стабильно (не «вставка нового region»)
     assert page.evaluate("document.getElementById('results-status').__persist") == "orig"
@@ -80,7 +80,7 @@ def test_clear_all_appears_for_district_only_and_resets_it(page, site_server: st
     сбрасывает и select[name=district], и чипы комбобокса, и re-swap показывает все карточки.
     Фильтр матчится по НОРМАЛИЗОВАННОМУ Cyrillic-имени (human_district: Vracar → Врачар)."""
     page.goto(f"{site_server}/catalog?district=Врачар", wait_until="networkidle")
-    assert page.evaluate("document.querySelectorAll('#results .card-l').length") == 1
+    assert page.evaluate("document.querySelectorAll('#results .card-l').length") == 2
     assert page.locator(".filters .combobox-chip").count() == 1  # чип применённого района
 
     btn = page.locator(".filters .clear-all")
@@ -88,7 +88,7 @@ def test_clear_all_appears_for_district_only_and_resets_it(page, site_server: st
     assert btn.is_visible(), "clear-all must be visible when only район is active (W5-25)"
 
     btn.click()
-    page.wait_for_function("document.querySelectorAll('#results .card-l').length === 2")
+    page.wait_for_function("document.querySelectorAll('#results .card-l').length === 3")
     assert page.evaluate(
         "document.querySelectorAll(\".filters select[name='district'] option:checked\").length"
     ) == 0

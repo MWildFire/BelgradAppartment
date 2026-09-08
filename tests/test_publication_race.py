@@ -1,3 +1,6 @@
+from datetime import UTC, datetime
+
+import pytest
 from sqlalchemy import select, update
 from sqlalchemy.sql.dml import Update
 
@@ -7,7 +10,8 @@ from src.db.session import get_session
 from src.site.publication_policy import apply_publication_policy
 
 
-async def test_dedup_reassignment_before_hide_preserves_public_card(db, monkeypatch):
+@pytest.mark.parametrize("race", ["group", "link_unknown"])
+async def test_changed_evidence_before_hide_preserves_public_card(db, monkeypatch, race):
     monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     async with get_session() as session:
         session.add(SourceChannel(id=1, tg_id=100))
@@ -18,6 +22,8 @@ async def test_dedup_reassignment_before_hide_preserves_public_card(db, monkeypa
                 external_id="old",
                 url="https://x/1",
                 is_active=False,
+                link_status="DEAD",
+                link_checked_at=datetime.now(UTC),
                 dup_group_id=1,
             )
         )
@@ -51,7 +57,8 @@ async def test_dedup_reassignment_before_hide_preserves_public_card(db, monkeypa
 
         async def reassign_before_update(statement, *args, **kwargs):
             if isinstance(statement, Update) and statement.table.name == "site_listings":
-                await execute(update(Listing).where(Listing.id == 1).values(dup_group_id=99))
+                values = {"dup_group_id": 99} if race == "group" else {"link_status": "INCONCLUSIVE"}
+                await execute(update(Listing).where(Listing.id == 1).values(**values))
             return await execute(statement, *args, **kwargs)
 
         monkeypatch.setattr(session, "execute", reassign_before_update)

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from src.config import get_settings
 from src.db.models import Listing, Match, SiteListing
@@ -72,12 +73,24 @@ async def apply_publication_policy(
         if card.dup_group_id is not None
         else (Listing.id == card.listing_id)
     )
-    members = (await session.execute(select(Listing.id, Listing.is_active).where(membership))).all()
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(hours=24)
+    members = (await session.execute(select(
+        Listing.id, Listing.is_active, Listing.link_status, Listing.link_checked_at,
+    ).where(membership))).all()
+
+    def current_status(member):
+        if member.is_active:
+            return ACTIVE
+        checked = member.link_checked_at
+        checked = checked.replace(tzinfo=UTC) if checked and checked.tzinfo is None else checked
+        if (member.link_status != DEAD or checked is None
+                or not cutoff <= checked <= now):
+            return INCONCLUSIVE
+        return member_status_by_id.get(member.id, INCONCLUSIVE)
+
     decision = evaluate_publication(
-        (
-            ACTIVE if member.is_active else member_status_by_id.get(member.id, INCONCLUSIVE)
-            for member in members
-        ),
+        (current_status(member) for member in members),
         pinned=card.keep_on_site,
         auto_hide=get_settings().site_liveness_auto_hide,
         remaining_hides=remaining_hides,
@@ -97,7 +110,13 @@ async def apply_publication_policy(
                 Listing.dup_group_id.is_not_distinct_from(card.dup_group_id),
             )
             .exists(),
-            ~select(Listing.id).where(membership, Listing.is_active.is_(True)).exists(),
+            ~select(Listing.id).where(membership, or_(
+                Listing.is_active.is_(True),
+                Listing.link_status.is_distinct_from(DEAD),
+                Listing.link_checked_at.is_(None),
+                Listing.link_checked_at < cutoff,
+                Listing.link_checked_at > now,
+            )).exists(),
         )
         .values(is_public=False, is_featured=False)
     )

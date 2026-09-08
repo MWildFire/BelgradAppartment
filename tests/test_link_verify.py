@@ -12,11 +12,12 @@ global session factory. HTTP is faked with httpx.MockTransport — no network.
 from __future__ import annotations
 
 import itertools
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import src.db.session as db_session
@@ -393,6 +394,9 @@ async def test_hide_helper_hides_public_card(factory, monkeypatch):
         site_public=True, site_featured=True,
     )
     async with db_session.get_session() as s:
+        await s.execute(update(Listing).where(Listing.id == lid).values(
+            link_status="DEAD", link_checked_at=datetime.now(UTC),
+        ))
         n = await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert n == 1
     assert await _site_state(factory, lid) == (False, False)
@@ -411,6 +415,9 @@ async def test_hide_helper_invalidates_cache_when_it_hides(factory, monkeypatch)
     )
     cache.catalog_cache.set(("k",), "v")
     async with db_session.get_session() as s:
+        await s.execute(update(Listing).where(Listing.id == lid).values(
+            link_status="DEAD", link_checked_at=datetime.now(UTC),
+        ))
         await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert cache.catalog_cache.get(("k",)) is cache.MISS
 
