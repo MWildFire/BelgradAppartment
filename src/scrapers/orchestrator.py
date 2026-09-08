@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
@@ -34,6 +35,17 @@ from src.db import Listing, get_session
 from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.freshness import (
+    CallbackResult,
+    FairRefreshPlan,
+    RefreshCandidate,
+    RefreshEvidence,
+    assess_detail,
+    load_candidates,
+    record_attempt,
+    run_fair_refresh,
+    select_fair,
+)
 from src.scrapers.link_probe import SourceProbeSession
 from src.scrapers.run_safety import evaluate_absence, evaluate_source
 from src.scrapers.snapshot_parity import mismatch_fields
@@ -219,6 +231,7 @@ async def scrape_platform(
     result = ScrapeResult(platform=scraper.platform, run_id=run_id or uuid4().hex,
         full_crawl=not incremental and max_new is None, dry_run=dry_run,
         snapshot_mode=_snapshot_mode(scraper), proxy_metrics=_proxy_metrics_for(scraper))
+    scraper.last_scrape_result = result
     path = checkpoint_path or (
         get_settings().data_dir / "state" / "scrape" / f"{scraper.platform.value.lower()}.json"
     )
@@ -497,6 +510,7 @@ async def _process_one(
             )
         return False, 0, False
 
+    attempted_at = datetime.now(UTC)
     if snapshot_mode == "active" and snapshot is not None:
         detail = snapshot
         fetched_detail = False
@@ -543,11 +557,14 @@ async def _process_one(
             photo_phashes=photo_hashes,
             photo_embeddings=embeddings_blob,
             raw_payload=detail.raw_payload,
-            # Details were just fetched — start the rolling-refresh clock now instead of
-            # leaving NULL (NULL = "never fetched", which jumps the refresh queue).
-            details_refreshed_at=datetime.now(timezone.utc),
         )
         session.add(listing)
+        await session.flush()
+        if fetched_detail:
+            evidence = assess_detail(
+                detail, ready_photo_count=_usable_photo_count(photo_paths, photo_hashes),
+            )
+            await record_attempt(session, listing.id, evidence, attempted_at=attempted_at)
     return True, len(photo_paths), fetched_detail
 
 
@@ -653,11 +670,15 @@ def _make_side_client(
 
 async def _download_photos(
     detail: ListingDetail,
+    *,
+    target_dir: Path | None = None,
 ) -> tuple[list[Path], list[str], bytes | None]:
     """Download every photo, compute pHash, batch CLIP embeddings. Returns (paths, phashes, embeddings_blob)."""
     settings = get_settings()
     settings.ensure_dirs()
-    target_dir = settings.listings_photos_dir / detail.platform.value / detail.external_id
+    target_dir = target_dir or (
+        settings.listings_photos_dir / detail.platform.value / detail.external_id
+    )
     target_dir.mkdir(parents=True, exist_ok=True)
 
     headers = _photo_request_headers(detail.url)
@@ -1109,15 +1130,17 @@ class PriceChange(NamedTuple):
 
 @dataclass
 class DetailRefetchStats:
-    """Outcome of a batch detail re-fetch (refetch-details CLI, heal & rolling steps)."""
+    """Accepted content updates and verified full refreshes are separate counters."""
 
     selected: int = 0
     updated: int = 0
+    verified: int = 0
     photos: int = 0
     errors: int = 0
-    deactivated: int = 0  # rows flipped is_active=False on a 404/410 (listing removed)
-    skipped: int = 0  # rows left unprocessed when the wall-clock budget (deadline) ran out
-    price_changes: list[PriceChange] = field(default_factory=list)  # see PriceChange
+    deactivated: int = 0
+    skipped: int = 0
+    source_errors: dict[str, str] = field(default_factory=dict)
+    price_changes: list[PriceChange] = field(default_factory=list)
 
 
 @dataclass
@@ -1125,6 +1148,19 @@ class _RefetchOutcome:
     photos_added: int
     old_price: int | None
     new_price: int | None
+    evidence: RefreshEvidence
+
+
+def _write_refresh_state(name: str, payload: dict[str, Any]) -> None:
+    path = get_settings().data_dir / "state" / "freshness" / f"{name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f".{uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 async def refetch_listing_details(
@@ -1138,104 +1174,144 @@ async def refetch_listing_details(
     progress: Callable[[DetailRefetchStats, Any, Exception | None], None] | None = None,
     deadline: float | None = None,
 ) -> DetailRefetchStats:
-    """Re-fetch detail pages for `rows` of (id, platform, url) and update the stored listings.
+    """Refresh with a reserved time share for every selected source, including browser startup.
 
-    Shared core of the `refetch-details` CLI command and the nightly heal / rolling-refresh
-    steps. `touch_on_error=True` bumps `details_refreshed_at` even on failures so the rolling
-    queue rotates past permanently-dead rows (404 etc.) instead of starving on them forever.
-    `progress(stats, row, error)` is called after every row attempt (error=None on success).
-
-    `deadline` is a `time.monotonic()` target: once it passes, ALL still-unprocessed rows
-    (across every platform) are counted in `stats.skipped` and processing stops cleanly, so a
-    night of slow Cloudflare-challenged refetches can't overrun a shared wall-clock budget.
+    Every real attempt records evidence and retry state; the legacy touch flags remain
+    accepted for existing callers. Only complete fields and verified local photos advance
+    details_succeeded_at. An external cancellation records the in-flight failed attempt
+    and a final aggregate checkpoint before propagating to the command runner.
     """
     if scrapers is None:
-        from src.scrapers import SCRAPERS  # lazy: avoids circular import
+        from src.scrapers import SCRAPERS
 
         scrapers = SCRAPERS
-
     stats = DetailRefetchStats(selected=len(rows))
-    by_platform: dict[Platform, list[Any]] = {}
-    for row in rows:
-        by_platform.setdefault(row.platform, []).append(row)
+    candidates = tuple(RefreshCandidate(row.id, row.platform, row.url) for row in rows)
+    order = tuple(dict.fromkeys(row.platform for row in rows))
+    plan = FairRefreshPlan(candidates, order, 0, len(rows), 0)
+    budget = (
+        deadline - time.monotonic()
+        if deadline is not None
+        else get_settings().nightly_refetch_budget_sec
+    )
+    run_id = uuid4().hex
+    stop_reason = "running"
+    next_fetch_at = 0.0
+    attempted_ids: set[int] = set()
 
-    budget_exhausted = False
-    for plat, plat_rows in by_platform.items():
-        if budget_exhausted:
-            # Deadline already hit in an earlier platform — count this whole platform's rows.
-            stats.skipped += len(plat_rows)
-            continue
-        scraper_cls = scrapers[plat]
-        attempted = 0
+    def checkpoint(*, final: bool) -> None:
+        _write_refresh_state("refetch", {
+            "run_id": run_id, "checkpoint_at": datetime.now(UTC).isoformat(),
+            "final": final, "stop_reason": stop_reason, **asdict(stats),
+            "price_changes": len(stats.price_changes),
+        })
+
+    def account(row: RefreshCandidate, outcome: _RefetchOutcome) -> None:
+        stats.updated += 1
+        stats.verified += int(outcome.evidence.succeeded)
+        stats.errors += int(not outcome.evidence.succeeded)
+        stats.photos += outcome.photos_added
+        if outcome.old_price != outcome.new_price:
+            stats.price_changes.append(
+                PriceChange(row.id, outcome.old_price, outcome.new_price)
+            )
+
+    async def refresh(row: RefreshCandidate, scraper: Scraper) -> CallbackResult:
+        nonlocal next_fetch_at
+        # Delay before starting a real attempt: cancellation while waiting is not a fetch.
+        if sleep_between and next_fetch_at > time.monotonic():
+            await asyncio.sleep(next_fetch_at - time.monotonic())
+        attempted_at = datetime.now(UTC)
+        attempted_ids.add(row.id)
         try:
-            async with scraper_cls() as scraper:
-                for row in plat_rows:
-                    if deadline is not None and time.monotonic() > deadline:
-                        # Stop ALL remaining work; un-attempted rows here + every later
-                        # platform's rows are skipped (counted below / in the outer loop).
-                        budget_exhausted = True
-                        stats.skipped += len(plat_rows) - attempted
-                        break
-                    attempted += 1
-                    try:
-                        outcome = await _refetch_one_listing(
-                            scraper,
-                            row.id,
-                            row.url,
-                            download_photos=download_photos,
-                            touch_refreshed_at=touch_refreshed_at,
-                        )
-                        if outcome is None:
-                            continue  # row deleted meanwhile
-                        stats.updated += 1
-                        stats.photos += outcome.photos_added
-                        if outcome.old_price != outcome.new_price:
-                            stats.price_changes.append(
-                                PriceChange(row.id, outcome.old_price, outcome.new_price)
-                            )
-                        if progress is not None:
-                            with suppress(Exception):
-                                progress(stats, row, None)
-                        if sleep_between:
-                            await asyncio.sleep(sleep_between)
-                    except Exception as e:
-                        stats.errors += 1
-                        logger.warning(
-                            "[refetch %s] #%s (%s) failed: %s: %s",
-                            plat.value, row.id, row.url, type(e).__name__, e,
-                        )
-                        status = getattr(getattr(e, "response", None), "status_code", None)
-                        if status in (404, 410):
-                            # Listing removed from the platform — deactivate so we never serve a
-                            # broken link. Also stamp details_refreshed_at (the rolling-refresh
-                            # contract: every attempted row gets a fresh timestamp) so the
-                            # nulls-first selection doesn't keep re-picking this dead row.
-                            async with get_session() as s:
-                                await s.execute(
-                                    update(Listing)
-                                    .where(Listing.id == row.id)
-                                    .values(
-                                        is_active=False,
-                                        details_refreshed_at=datetime.now(timezone.utc),
-                                    )
-                                )
-                            stats.deactivated += 1
-                            logger.info("[refetch %s] #%s → %s, deactivated", plat.value, row.id, status)
-                        elif touch_on_error:
-                            async with get_session() as s:
-                                await s.execute(
-                                    update(Listing)
-                                    .where(Listing.id == row.id)
-                                    .values(details_refreshed_at=datetime.now(timezone.utc))
-                                )
-                        if progress is not None:
-                            with suppress(Exception):
-                                progress(stats, row, e)
-        except Exception:
-            # Scraper construction/teardown blew up — rows never attempted count as errors.
-            stats.errors += max(len(plat_rows) - attempted, 0)
-            logger.exception("[refetch %s] platform failed", plat.value)
-    return stats
+            outcome = await _refetch_one_listing(
+                scraper, row.id, row.url, download_photos=download_photos,
+                touch_refreshed_at=touch_refreshed_at, attempted_at=attempted_at,
+            )
+            if outcome is None:
+                stats.skipped += 1
+                return CallbackResult(RefreshEvidence.failed("listing_deleted"))
+            account(row, outcome)
+            if progress is not None:
+                with suppress(Exception):
+                    progress(stats, row, None if outcome.evidence.succeeded else
+                             RuntimeError(outcome.evidence.reason))
+            return CallbackResult(outcome.evidence, outcome)
+        except BaseException as error:
+            committed_outcome = getattr(error, "committed_refresh_outcome", None)
+            if isinstance(error, asyncio.CancelledError) and isinstance(
+                committed_outcome, _RefetchOutcome,
+            ):
+                account(row, committed_outcome)
+                raise
+            evidence = RefreshEvidence.failed(type(error).__name__)
+            stats.errors += 1
+            status = getattr(getattr(error, "response", None), "status_code", None)
+            try:
+                async with get_session() as session:
+                    if status in (404, 410):
+                        now = datetime.now(UTC)
+                        await session.execute(update(Listing).where(Listing.id == row.id).values(
+                            is_active=False, deactivated_at=now, link_status="DEAD",
+                            link_checked_at=now, link_next_retry_at=None,
+                        ))
+                        stats.deactivated += 1
+                    await record_attempt(session, row.id, evidence, attempted_at=attempted_at)
+            except BaseException as persistence_error:
+                if isinstance(error, asyncio.CancelledError):
+                    raise error from persistence_error
+                raise
+            if isinstance(error, Exception) and progress is not None:
+                with suppress(Exception):
+                    progress(stats, row, error)
+            raise
+        finally:
+            next_fetch_at = time.monotonic() + max(0, sleep_between)
+            checkpoint(final=False)
+
+    checkpoint(final=False)
+    try:
+        if not rows or budget <= 0:
+            stats.skipped = len(rows)
+            stop_reason = "budget_exhausted" if rows else "empty"
+            return stats
+        execution = await run_fair_refresh(
+            plan, refresh, budget_sec=budget,
+            item_timeout_sec=get_settings().refetch_per_fetch_timeout_sec,
+            context_factory=lambda platform: scrapers[platform](),
+        )
+        stats.source_errors = dict(execution.source_errors)
+        stats.skipped += sum(item.row.id not in attempted_ids for item in execution.items)
+        stop_reason = (
+            "degraded" if stats.errors or stats.skipped or stats.source_errors else "completed"
+        )
+        return stats
+    except asyncio.CancelledError:
+        stop_reason = "cancelled"
+        raise
+    except BaseException:
+        stop_reason = "failed"
+        raise
+    finally:
+        checkpoint(final=True)
+
+
+def _usable_photo_count(paths: Sequence[Path], hashes: Sequence[str]) -> int:
+    """Count readable image/hash pairs; an index or a remote URL alone is not evidence."""
+    from PIL import Image
+
+    ready = 0
+    for path, digest in zip(paths, hashes, strict=False):
+        if not isinstance(digest, str) or len(digest) != 16:
+            continue
+        try:
+            int(digest, 16)
+            with Image.open(path) as photo:
+                photo.verify()
+            ready += 1
+        except (OSError, ValueError, SyntaxError):
+            continue
+    return ready
 
 
 async def _refetch_one_listing(
@@ -1245,81 +1321,158 @@ async def _refetch_one_listing(
     *,
     download_photos: bool,
     touch_refreshed_at: bool,
+    attempted_at: datetime | None = None,
 ) -> _RefetchOutcome | None:
-    # Hard cap one fetch: a pathological page (goto + content-poll × retries + browser recycle)
-    # can otherwise run minutes. TimeoutError raises here and is handled by the caller's
-    # `except Exception` (asyncio.TimeoutError subclasses Exception) like any other fetch failure.
+    attempted_at = attempted_at or datetime.now(UTC)
     detail = await asyncio.wait_for(
-        scraper.fetch_detail(url),
-        timeout=get_settings().refetch_per_fetch_timeout_sec,
+        scraper.fetch_detail(url), timeout=get_settings().refetch_per_fetch_timeout_sec,
     )
     if not detail.photo_urls and detail.price_eur is None and detail.title is None:
-        raise RuntimeError("still an empty payload")
-
-    # Read current state and DOWNLOAD photos before touching the row: committing the new
-    # photo_urls first would make a failed download undetectable forever (urls match,
-    # phashes non-empty → no filter ever selects the row again).
-    async with get_session() as s:
-        current = await s.get(Listing, listing_id)
-        if current is None:
-            return None
-        old_urls = list(current.photo_urls or [])
-        old_phash_count = len(current.photo_phashes or [])
-        old_price = current.price_eur
-
-    need_photos = bool(
-        download_photos
-        and detail.photo_urls
-        and (
-            list(detail.photo_urls) != old_urls
-            or old_phash_count < len(detail.photo_urls)
-        )
-    )
+        raise RuntimeError("empty_detail")
+    async with get_session() as session:
+        current = (await session.execute(select(
+            Listing.platform, Listing.external_id, Listing.photo_urls,
+            Listing.photo_phashes, Listing.price_eur,
+        ).where(Listing.id == listing_id))).one_or_none()
+    if current is None:
+        return None
+    if detail.platform != current.platform or detail.external_id != current.external_id:
+        raise RuntimeError("detail_identity_mismatch")
+    old_urls = list(current.photo_urls or [])
+    old_hashes = list(current.photo_phashes or [])
+    target = get_settings().listings_photos_dir / current.platform.value / current.external_id
+    old_paths = [target / f"{index:03d}{_guess_extension(photo_url)}"
+                 for index, photo_url in enumerate(old_urls)]
+    ready = _usable_photo_count(old_paths, old_hashes) if detail.photo_urls == old_urls else 0
+    need_photos = bool(download_photos and detail.photo_urls and ready < len(detail.photo_urls))
     hashes: list[str] = []
-    emb: bytes | None = None
-    if need_photos:
-        _paths, hashes, emb = await _download_photos(detail)
-        if not hashes:
-            raise RuntimeError("photo download produced no hashes — row left untouched")
-
-    async with get_session() as s:
-        listing = await s.get(Listing, listing_id)
-        if listing is None:
-            return None
-        listing.price_eur = detail.price_eur
-        listing.area_m2 = detail.area_m2
-        listing.rooms = detail.rooms
-        listing.district = detail.district
-        listing.address_raw = detail.address_raw
-        listing.lat = detail.lat
-        listing.lon = detail.lon
-        listing.title = detail.title
-        listing.description = detail.description
-        listing.raw_payload = detail.raw_payload
+    embeddings: bytes | None = None
+    stage = target.with_name(f".{target.name}.pending-{uuid4().hex}")
+    backup = target.with_name(f".{target.name}.previous-{uuid4().hex}")
+    promoted = False
+    committed = False
+    try:
         if need_photos:
-            listing.photo_urls = detail.photo_urls
-            listing.photo_phashes = hashes
-            listing.photo_embeddings = emb
-        if touch_refreshed_at:
-            listing.details_refreshed_at = datetime.now(timezone.utc)
-    return _RefetchOutcome(
-        photos_added=len(hashes), old_price=old_price, new_price=detail.price_eur
-    )
+            paths, hashes, embeddings = await _download_photos(detail, target_dir=stage)
+            ready = _usable_photo_count(paths, hashes)
+            if len(hashes) != len(detail.photo_urls) or ready != len(detail.photo_urls):
+                raise RuntimeError("incomplete_photos")
+            # Validate the canonical index layout too before touching the accepted album.
+            expected = [stage / f"{index:03d}{_guess_extension(photo_url)}"
+                        for index, photo_url in enumerate(detail.photo_urls)]
+            if _usable_photo_count(expected, hashes) != len(detail.photo_urls):
+                raise RuntimeError("incomplete_photo_layout")
+        evidence = assess_detail(detail, ready_photo_count=ready)
+        async def accept() -> int | None:
+            nonlocal promoted, committed
+            async with get_session() as session:
+                listing = await session.get(Listing, listing_id)
+                if listing is None:
+                    return None
+                if need_photos:
+                    if target.exists():
+                        target.rename(backup)
+                    stage.rename(target)
+                    promoted = True
+                    listing.photo_urls = list(detail.photo_urls)
+                    listing.photo_phashes = hashes
+                    listing.photo_embeddings = embeddings
+                # Partial upstream fields must not erase previously accepted content.
+                for name in ("price_eur", "area_m2", "rooms", "district", "address_raw", "lat",
+                             "lon", "title", "description"):
+                    value = getattr(detail, name)
+                    if value is not None and name not in evidence.missing_fields:
+                        setattr(listing, name, value)
+                if evidence.succeeded:
+                    now = datetime.now(UTC)
+                    listing.is_active = True
+                    listing.last_seen_at = now
+                    listing.deactivated_at = None
+                    listing.absence_streak = 0
+                    listing.absence_first_seen_at = None
+                    listing.absence_last_seen_at = None
+                    listing.absence_last_run_id = None
+                    listing.link_status = "ACTIVE"
+                    listing.link_checked_at = listing.link_succeeded_at = now
+                    listing.link_next_retry_at = None
+                listing.raw_payload = detail.raw_payload
+                await record_attempt(session, listing_id, evidence, attempted_at=attempted_at)
+                new_price = listing.price_eur
+                # Acknowledged commit precedes session-close awaits. The caller shields only
+                # this local acceptance task and settles it before rollback on cancellation.
+                await session.commit()
+                committed = True
+            return new_price
+
+        transaction = asyncio.create_task(accept())
+        try:
+            new_price = await asyncio.shield(transaction)
+        except asyncio.CancelledError as cancellation:
+            # SQLite may have committed on its worker thread already. Resolve the same
+            # transaction task before deciding whether restoring previous files is valid.
+            while not transaction.done():
+                try:
+                    await asyncio.shield(transaction)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
+            try:
+                new_price = transaction.result()
+            except BaseException as acceptance_error:
+                raise cancellation from acceptance_error
+            if committed:
+                # Keep the exact CancelledError type: asyncio.timeout recognizes it to
+                # convert a source/item deadline into TimeoutError and continue its queue.
+                cancelled = asyncio.CancelledError("refresh_committed_before_cancellation")
+                cancelled.committed_refresh_outcome = _RefetchOutcome(
+                    len(hashes), current.price_eur, new_price, evidence,
+                )
+                raise cancelled from None
+            raise
+        if not committed:
+            return None
+        return _RefetchOutcome(len(hashes), current.price_eur, new_price, evidence)
+    finally:
+        if not committed:
+            if promoted:
+                shutil.rmtree(target, ignore_errors=True)
+            if backup.exists() and not target.exists():
+                backup.rename(target)
+        if committed:
+            shutil.rmtree(backup, ignore_errors=True)
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 @dataclass
 class HealResult:
-    """W2-C1 outcome: «heal: исправлено {fixed} / осталось {remaining}»."""
-
     selected: int
     fixed: int
     remaining: int
     errors: int
-    skipped: int = 0  # rows left unprocessed when the shared nightly budget ran out
+    skipped: int = 0
 
 
-# "Broken" = active listing the matcher can't see: no photo hashes at all.
 _BROKEN_LISTING = (Listing.is_active.is_(True), Listing.photo_phashes == [])
+
+
+async def _freshness_queue(
+    *, name: str, limit: int, scrapers: Mapping[Platform, type[Scraper]], only_broken: bool,
+) -> FairRefreshPlan:
+    path = get_settings().data_dir / "state" / "freshness" / f"{name}_cursor.json"
+    try:
+        cursor = int(json.loads(path.read_text())["next_cursor"])
+    except (OSError, ValueError, KeyError, TypeError):
+        cursor = 0
+    async with get_session() as session:
+        inventory = await load_candidates(session, platforms=scrapers, only_broken=only_broken)
+    plan = select_fair(inventory, limit=limit, source_cursor=cursor)
+    _write_refresh_state(f"{name}_cursor", {
+        "next_cursor": plan.next_cursor, "selected": len(plan.rows),
+        "eligible": plan.eligible, "deferred": plan.deferred,
+        "checkpoint_at": datetime.now(UTC).isoformat(),
+    })
+    return plan
 
 
 async def heal_broken_listings(
@@ -1328,70 +1481,27 @@ async def heal_broken_listings(
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
     deadline: float | None = None,
 ) -> HealResult:
-    """W2-C1: re-fetch details/photos for up to `limit` broken active listings.
+    """Repair due broken rows fairly; only verified full repairs count as fixed."""
+    if scrapers is None:
+        from src.scrapers import SCRAPERS
 
-    `fixed` counts selected rows that are no longer broken afterwards; `remaining` is the
-    total broken count left in the DB (selected-but-unfixed + never-selected overflow).
-    """
-    async with get_session() as s:
-        # Rotate, don't starve: touch_on_error stamps failed rows' details_refreshed_at, and
-        # selecting oldest-stamp-first pushes permanently-dead rows (404s, photo-less listings)
-        # behind never-tried ones instead of re-fetching the same dead head every night.
-        rows = (
-            await s.execute(
-                select(Listing.id, Listing.platform, Listing.url)
-                .where(*_BROKEN_LISTING)
-                .order_by(Listing.details_refreshed_at.asc().nulls_first(), Listing.id)
-                .limit(limit)
-            )
-        ).all()
-
-    stats = await refetch_listing_details(
-        rows,
-        download_photos=True,
-        touch_refreshed_at=True,
-        touch_on_error=True,
-        scrapers=scrapers,
-        deadline=deadline,
-    )
-
-    selected_ids = [r.id for r in rows]
-    async with get_session() as s:
-        still_broken_selected = 0
-        if selected_ids:
-            still_broken_selected = (
-                await s.execute(
-                    select(func.count(Listing.id)).where(
-                        *_BROKEN_LISTING, Listing.id.in_(selected_ids)
-                    )
-                )
-            ).scalar_one()
-        remaining = (
-            await s.execute(select(func.count(Listing.id)).where(*_BROKEN_LISTING))
-        ).scalar_one()
-    logger.info(
-        "[heal] selected=%d fixed=%d remaining=%d errors=%d skipped=%d",
-        len(rows), len(rows) - still_broken_selected, remaining, stats.errors, stats.skipped,
-    )
-    return HealResult(
-        selected=len(rows),
-        fixed=len(rows) - still_broken_selected,
-        remaining=remaining,
-        errors=stats.errors,
-        skipped=stats.skipped,
-    )
+        scrapers = SCRAPERS
+    plan = await _freshness_queue(name="heal", limit=limit, scrapers=scrapers, only_broken=True)
+    stats = await refetch_listing_details(plan.rows, scrapers=scrapers, deadline=deadline)
+    async with get_session() as session:
+        remaining = len(await load_candidates(session, platforms=scrapers, only_broken=True))
+    logger.info("[heal] selected=%d fixed=%d remaining=%d errors=%d skipped=%d",
+                len(plan.rows), stats.verified, remaining, stats.errors, stats.skipped)
+    return HealResult(len(plan.rows), stats.verified, remaining, stats.errors, stats.skipped)
 
 
 @dataclass
 class RollingRefreshResult:
-    """W2-C2 outcome — `price_changes` is the return contract for the Wave-3 price-drop
-    alert, see PriceChange."""
-
     selected: int
     refreshed: int
     errors: int
     price_changes: list[PriceChange]
-    skipped: int = 0  # rows left unprocessed when the shared nightly budget ran out
+    skipped: int = 0
 
 
 async def rolling_detail_refresh(
@@ -1400,54 +1510,17 @@ async def rolling_detail_refresh(
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
     deadline: float | None = None,
 ) -> RollingRefreshResult:
-    """W2-C2: re-fetch details for the `limit` ACTIVE listings with the oldest
-    `details_refreshed_at` (NULL = never → first), split evenly across platforms.
-
-    Per-platform quota is limit//n (+1 for the first limit%n platforms); a platform with
-    fewer rows than its quota does NOT donate the leftover to others — keeps selection simple
-    and the nightly budget bounded.
-    """
+    """Public, broken, oldest-success priority within fair, retry-aware source queues."""
     if scrapers is None:
-        from src.scrapers import SCRAPERS  # lazy: avoids circular import
+        from src.scrapers import SCRAPERS
 
         scrapers = SCRAPERS
-
-    platforms = list(scrapers.keys())
-    base, rem = divmod(max(limit, 0), len(platforms))
-    rows: list[Any] = []
-    async with get_session() as s:
-        for i, plat in enumerate(platforms):
-            quota = base + (1 if i < rem else 0)
-            if quota <= 0:
-                continue
-            plat_rows = (
-                await s.execute(
-                    select(Listing.id, Listing.platform, Listing.url)
-                    .where(Listing.platform == plat, Listing.is_active.is_(True))
-                    .order_by(Listing.details_refreshed_at.asc().nulls_first(), Listing.id)
-                    .limit(quota)
-                )
-            ).all()
-            rows.extend(plat_rows)
-
-    stats = await refetch_listing_details(
-        rows,
-        download_photos=True,  # only re-downloads when the photo set actually changed
-        touch_refreshed_at=True,
-        touch_on_error=True,
-        scrapers=scrapers,
-        deadline=deadline,
-    )
-    logger.info(
-        "[rolling-refresh] selected=%d refreshed=%d price_changes=%d errors=%d skipped=%d",
-        len(rows), stats.updated, len(stats.price_changes), stats.errors, stats.skipped,
-    )
+    plan = await _freshness_queue(name="rolling", limit=limit, scrapers=scrapers, only_broken=False)
+    stats = await refetch_listing_details(plan.rows, scrapers=scrapers, deadline=deadline)
+    logger.info("[rolling-refresh] selected=%d verified=%d errors=%d skipped=%d",
+                len(plan.rows), stats.verified, stats.errors, stats.skipped)
     return RollingRefreshResult(
-        selected=len(rows),
-        refreshed=stats.updated,
-        errors=stats.errors,
-        price_changes=stats.price_changes,
-        skipped=stats.skipped,
+        len(plan.rows), stats.verified, stats.errors, stats.price_changes, stats.skipped,
     )
 
 

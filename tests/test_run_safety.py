@@ -297,7 +297,8 @@ async def test_source_cancellation_writes_final_checkpoint(db, tmp_path):
         async def list_recent(self, **kwargs):
             await asyncio.sleep(5)
     path = tmp_path / "cancelled.json"
-    task = asyncio.create_task(scrape_platform(Hanging(), incremental=False, checkpoint_path=path))
+    scraper = Hanging()
+    task = asyncio.create_task(scrape_platform(scraper, incremental=False, checkpoint_path=path))
     await asyncio.sleep(0.01)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -305,6 +306,8 @@ async def test_source_cancellation_writes_final_checkpoint(db, tmp_path):
     report = json.loads(path.read_text())
     assert report["final"] and report["stop_reason"] == "cancelled"
     assert not report["sweep_allowed"]
+    assert scraper.last_scrape_result.stop_reason == "cancelled"
+    assert scraper.last_scrape_result.to_report()["run_id"] == report["run_id"]
 
 
 @pytest.mark.asyncio

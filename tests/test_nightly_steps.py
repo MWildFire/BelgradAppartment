@@ -8,6 +8,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+from PIL import Image
 from sqlalchemy import select
 
 import src.db.session as db_session
@@ -84,11 +86,30 @@ def make_fake_scraper(platform: Platform, details: dict[str, ListingDetail], fai
 
 def detail_for(listing_url: str, platform: Platform, **kw) -> ListingDetail:
     ext = listing_url.rsplit("/", 1)[-1]
+    kw.setdefault("area_m2", 50)
+    kw.setdefault("photo_urls", ["https://example.test/image.jpg"])
     return ListingDetail(platform=platform, external_id=ext, url=listing_url, **kw)
 
 
-async def fake_download_photos(detail: ListingDetail):
-    return ([Path("/tmp/fake.jpg")], ["ff00ff00ff00ff00"], None)
+async def fake_download_photos(detail: ListingDetail, *, target_dir: Path | None = None):
+    folder = target_dir or (
+        orchestrator.get_settings().listings_photos_dir / detail.platform.value / detail.external_id
+    )
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for index, url in enumerate(detail.photo_urls):
+        path = folder / f"{index:03d}{orchestrator._guess_extension(url)}"
+        Image.new("RGB", (8, 8), "blue").save(path)
+        paths.append(path)
+    return paths, ["ff00ff00ff00ff00"] * len(paths), None
+
+
+@pytest.fixture(autouse=True)
+def isolated_complete_media(tmp_path, monkeypatch):
+    settings = orchestrator.get_settings()
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "listings_photos_dir", tmp_path / "listings")
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
 
 
 # ------------------------------------------------------------------ W2-C1 heal
