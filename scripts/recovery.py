@@ -682,6 +682,55 @@ def create_snapshot(args: argparse.Namespace) -> dict:
     return {"result": "snapshot_staged_not_verified", "directory": str(output)}
 
 
+def prepared_snapshot_metadata(destination: Path, checksum: str, project_root: Path) -> dict:
+    """Check pinned completed staging metadata, never rehash live source media.
+
+    This is only an admission check. The receiver must still hash every transferred
+    byte and run its isolated application restore before accepting a generation.
+    """
+    require(re.fullmatch(r"[0-9a-f]{64}", checksum or ""), "invalid prepared manifest hash")
+    require(
+        destination.is_absolute()
+        and destination.resolve() == destination
+        and destination.parent == project_root / "data/backups"
+        and re.fullmatch(r"\.(?:manual-|offhost-)[A-Za-z0-9_-]{1,100}", destination.name),
+        "unsafe prepared snapshot path",
+    )
+    manifest_path = destination / "manifest.json"
+    require(
+        manifest_path.is_file()
+        and not manifest_path.is_symlink()
+        and manifest_path.stat().st_size < MAX_MANIFEST_BYTES,
+        "prepared manifest unavailable or oversized",
+    )
+    raw = manifest_path.read_bytes()
+    require(hashlib.sha256(raw).hexdigest() == checksum, "prepared manifest hash differs")
+    manifest = json.loads(raw)
+    require(manifest["format"] == FORMAT, "invalid prepared snapshot format")
+    require(manifest["source_project_root"] == str(project_root), "wrong prepared source root")
+    created = datetime.fromisoformat(manifest["created_at"])
+    require(created.tzinfo is not None, "prepared timestamp missing timezone")
+    require(
+        0 <= (datetime.now(UTC) - created).total_seconds() <= 36 * 3600,
+        "prepared snapshot stale or future",
+    )
+    require(
+        set(manifest["components"]) == {"state", "inbound", "listings", "published"},
+        "prepared component inventory incomplete",
+    )
+    state_prefix = str(safe_relative(manifest["components"]["state"]["archive"])) + "/"
+    require(state_prefix == "data/state/", "prepared state archive must be separate")
+    staged = {
+        name
+        for name in manifest["files"]
+        if name in {"data/otz.db", "data/photo_manifest.json"} or name.startswith(state_prefix)
+    }
+    require("data/otz.db" in staged, "prepared database missing")
+    actual = {path.relative_to(destination).as_posix() for path in files_below(destination)}
+    require(actual == staged | {"manifest.json"}, "prepared staging inventory differs")
+    return {"result": "prepared_metadata_checked_not_restored", "manifest_sha256": checksum}
+
+
 def main() -> None:
     global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
@@ -710,6 +759,10 @@ def main() -> None:
     )
     directory = commands.add_parser("verify-directory")
     directory.add_argument("directory", type=Path)
+    prepared = commands.add_parser("check-snapshot-metadata")
+    prepared.add_argument("directory", type=Path)
+    prepared.add_argument("--manifest-sha256", required=True)
+    prepared.add_argument("--project-root", type=Path, required=True)
     snapshot = commands.add_parser("snapshot")
     for option in (
         "db",
@@ -730,7 +783,7 @@ def main() -> None:
         )
     smoke = commands.add_parser("_smoke", help=argparse.SUPPRESS)
     smoke.add_argument("restored", type=Path)
-    for command in (backup, verify, directory, snapshot, smoke):
+    for command in (backup, verify, directory, snapshot, smoke, prepared):
         command.add_argument(
             "--application-project-root",
             type=Path,
@@ -744,6 +797,10 @@ def main() -> None:
             result = create_backup(args)
         elif args.command == "snapshot":
             result = create_snapshot(args)
+        elif args.command == "check-snapshot-metadata":
+            result = prepared_snapshot_metadata(
+                args.directory, args.manifest_sha256, args.project_root
+            )
         elif args.command == "verify-directory":
             manifest = verify_directory(args.directory, args.max_age_hours, args.expected_schema)
             result = verify_application(args.directory, manifest)

@@ -257,3 +257,17 @@ An accepted local receipt includes `backup_format: directory_generation`, both d
 hash fields, `generation_id`, `protected_recovery_verified: true` and the fresh
 `protected_proof`. It contains no fabricated archive hash. Release consumers must validate
 the directory format explicitly.
+
+For a one-time continuation of a source snapshot that already completed with exit 0,
+the `run` command also accepts `--prepared-snapshot-dir` and
+`--prepared-snapshot-manifest-sha256`. Obtain the SHA-256 of the completed manifest and
+pass it explicitly; these options must never be used while its writer is still running.
+The directory must be a direct `.manual-*` or `.offhost-*` child of the source backup
+folder. Update the trusted staged `recovery.py` helper too: the runner calls its read-only
+`check-snapshot-metadata` command while holding a new remote lease. It validates the
+pinned manifest, age, source root and staged inventory without rehashing live source
+media. The receiver checks the transferred manifest against the pinned SHA again, then
+still hashes every data file and runs the isolated application restore. Fresh protected
+snapshots and health publication use the normal gates. The manually prepared source
+directory is preserved on both success and failure for operator review. These options
+are rejected for `launch-agent`; scheduled backups must create fresh source snapshots.

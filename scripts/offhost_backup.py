@@ -288,6 +288,47 @@ def transfer(args, remote_stage, pending, seed):
     return manifest
 
 
+def prepared_snapshot_options(args):
+    stage = getattr(args, "prepared_snapshot_dir", None)
+    checksum = getattr(args, "prepared_snapshot_manifest_sha256", None)
+    recovery.require(bool(stage) == bool(checksum), "prepared snapshot requires path and hash")
+    if stage is not None:
+        safe_remote_path(stage, args.remote_root / "data/backups")
+        recovery.require(
+            stage.parent == args.remote_root / "data/backups"
+            and re.fullmatch(r"\.(?:manual-|offhost-)[A-Za-z0-9_-]{1,100}", stage.name)
+            and re.fullmatch(r"[0-9a-f]{64}", checksum),
+            "invalid prepared snapshot identity",
+        )
+    return stage, checksum
+
+
+def check_prepared_snapshot(args, stage, checksum):
+    response = remote(
+        args,
+        [
+            args.remote_python,
+            str(
+                getattr(args, "remote_recovery_script", None)
+                or args.remote_root / "scripts/recovery.py"
+            ),
+            "check-snapshot-metadata",
+            str(stage),
+            "--manifest-sha256",
+            checksum,
+            "--project-root",
+            str(args.remote_root),
+        ],
+    )
+    metadata = json.loads(response.stdout)
+    recovery.require(
+        metadata.get("result") == "prepared_metadata_checked_not_restored"
+        and metadata.get("manifest_sha256") == checksum,
+        "prepared metadata check not confirmed",
+    )
+    assert_lease()
+
+
 def protected_configuration(args):
     files = (getattr(args, "protected_env_file", None), getattr(args, "protected_caddy_file", None))
     sessions = getattr(args, "protected_session", None) or []
@@ -397,6 +438,7 @@ def publish_health(args, data_stage, protected_stage, receipt):
 
 
 def backup(args):
+    prepared_stage, prepared_checksum = prepared_snapshot_options(args)
     root = args.private_root.resolve()
     if getattr(args, "application_project_root", None) is not None:
         recovery.ROOT = args.application_project_root.resolve()
@@ -432,6 +474,7 @@ def backup(args):
                 last_protected_good = False
         if (
             accepted
+            and prepared_stage is None
             and last_protected_good
             and (
                 not getattr(args, "publish_health_receipt", False)
@@ -458,7 +501,7 @@ def backup(args):
         identifier = now.strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8]
         pending = root / "pending" / identifier
         pending.mkdir(mode=0o700)
-        stage = args.remote_root / "data/backups" / f".offhost-{uuid4().hex}"
+        stage = prepared_stage or args.remote_root / "data/backups" / f".offhost-{uuid4().hex}"
         secret_stage = args.remote_root / "data/backups" / f".protected-{uuid4().hex}"
         secret_args = protected_arguments(args)
         secret_local = root / "protected-pending" / identifier
@@ -487,8 +530,16 @@ def backup(args):
                 for role in ("state", "inbound", "listings"):
                     command += [f"--{role}-dir", str(args.remote_root / "data" / role)]
                 command += ["--published-dir", str(args.remote_published_dir)]
-                remote(args, command)
+                if prepared_stage is not None:
+                    check_prepared_snapshot(args, stage, prepared_checksum)
+                else:
+                    remote(args, command)
                 transfer(args, stage, pending, seed.resolve())
+                if prepared_stage is not None:
+                    recovery.require(
+                        recovery.digest(pending / "manifest.json") == prepared_checksum,
+                        "prepared snapshot manifest changed during transfer",
+                    )
                 assert_lease()
                 manifest = recovery.verify_directory(pending, progress_check=assert_lease)
                 receipt = recovery.verify_application(pending, manifest, run_child=guarded_child)
@@ -541,7 +592,7 @@ def backup(args):
                 return receipt
             finally:
                 # Generated staging only; never delete original configuration/session/media.
-                cleanup = [(args, stage)]
+                cleanup = [] if prepared_stage is not None else [(args, stage)]
                 if protected_enabled:
                     cleanup.append((secret_args, secret_stage))
                 for cleanup_args, cleanup_stage in cleanup:
@@ -575,6 +626,12 @@ def main():
     parser.add_argument("--remote-published-dir", required=True, type=Path)
     parser.add_argument("--seed-dir", type=Path)
     parser.add_argument(
+        "--prepared-snapshot-dir",
+        type=Path,
+        help="one-time reuse of a completed manual source snapshot; preserve staging",
+    )
+    parser.add_argument("--prepared-snapshot-manifest-sha256")
+    parser.add_argument(
         "--remote-recovery-script",
         type=Path,
         help="staged recovery helper outside production runtime",
@@ -606,6 +663,11 @@ def main():
         "canonical /opt/otz remote root and absolute private root required",
     )
     safe_remote_path(args.remote_published_dir, args.remote_root / "data")
+    prepared_stage, _prepared_checksum = prepared_snapshot_options(args)
+    recovery.require(
+        args.command != "launch-agent" or prepared_stage is None,
+        "prepared snapshots cannot be reused by a scheduled LaunchAgent",
+    )
     recovery.require(
         0 < args.interval_hours <= 24 and args.min_free_gib > 0,
         "invalid cadence/free-space threshold",
