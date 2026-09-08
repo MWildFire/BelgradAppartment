@@ -1,0 +1,38 @@
+{
+  "revision": "1f60abc5ab3ac5b125622a33734ddd5e6662f242",
+  "completed_at": "2026-09-08T08:39:57.346391+00:00",
+  "environment": "isolated_ubuntu_copy_with_selected_media",
+  "selected": 20,
+  "updated": 20,
+  "verified": 20,
+  "errors": 0,
+  "skipped": 0,
+  "source_errors": {},
+  "elapsed_sec": 100.08,
+  "photos_downloaded": 38,
+  "public_set_unchanged": true,
+  "production_app_modified": false,
+  "no_notify": true,
+  "source_counts": [
+    {
+      "platform": "CETIRI_ZIDA",
+      "selected": 5,
+      "verified": 5
+    },
+    {
+      "platform": "CITYEXPERT",
+      "selected": 5,
+      "verified": 5
+    },
+    {
+      "platform": "HALOOGLASI",
+      "selected": 5,
+      "verified": 5
+    },
+    {
+      "platform": "NEKRETNINE",
+      "selected": 5,
+      "verified": 5
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "after": {
+    "foreign_key_errors": 0,
+    "new_lead_count": 1,
+    "new_lead_sha256": "1bfc1b77db5a7a6558f58d774af5e4f3414d9e2ec5cb5c0940b64a513a2131e2",
+    "new_outbox_count": 1,
+    "new_outbox_sha256": "64fc95486537ff736afd4da6c5ede9952e5dfd3a552b6a3918acd0e4d529fed5",
+    "old_lead_count": 1,
+    "schema": [
+      "0013_delivery_outcomes"
+    ],
+    "schema_sha256": "dce42d1de3ecf75fc01441180bd0cae03475e337e331ab2bfb729377f67cc29e"
+  },
+  "before": {
+    "foreign_key_errors": 0,
+    "new_lead_count": 1,
+    "new_lead_sha256": "1bfc1b77db5a7a6558f58d774af5e4f3414d9e2ec5cb5c0940b64a513a2131e2",
+    "new_outbox_count": 1,
+    "new_outbox_sha256": "64fc95486537ff736afd4da6c5ede9952e5dfd3a552b6a3918acd0e4d529fed5",
+    "old_lead_count": 1,
+    "schema": [
+      "0013_delivery_outcomes"
+    ],
+    "schema_sha256": "dce42d1de3ecf75fc01441180bd0cae03475e337e331ab2bfb729377f67cc29e"
+  },
+  "first_verified_at": "2026-09-08T08:49:09.560617+00:00",
+  "foreign_key_errors": 0,
+  "integrity_check": "ok",
+  "limitations": [
+    "Previous production virtual environment and Linux service lifecycle were not exercised; this proof uses old source with the main Python 3.12 environment and an isolated migrated copy."
+  ],
+  "network": "disabled",
+  "new_lead_preserved": true,
+  "new_outbox_preserved": true,
+  "old_code_insert_probe_passed": true,
+  "old_code_lead_inserted": true,
+  "old_code_lead_write": "updated_existing_fixture_idempotently",
+  "old_code_responses": {
+    "card": 200,
+    "catalog": 200,
+    "health": 200
+  },
+  "old_source_revision": "33490b00998bb29d3e2be421829f6ac3ea8b59f7",
+  "old_source_schema_head": [
+    "0011_keep_on_site"
+  ],
+  "production_modified": false,
+  "proof_script_sha256": "b79e0f934ba405a0923e76057147ec704052a712e409e3b1d7218e9d6a1fe77b",
+  "result": "old_source_migrated_copy_compatible",
+  "runtime": {
+    "environment": "main project venv",
+    "previous_production_venv_tested": false,
+    "python": "3.12.13"
+  },
+  "schema": [
+    "0013_delivery_outcomes"
+  ],
+  "schema_preserved": true,
+  "selected_card_from_catalog_is_public": true,
+  "selected_public_card_id": 259,
+  "successful_runs": 2,
+  "transient_probe_rolled_back": true,
+  "verified_at": "2026-09-08T08:50:04.215625+00:00"
+}
