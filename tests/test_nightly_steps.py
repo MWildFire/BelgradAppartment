@@ -646,8 +646,10 @@ async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):
 
     lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
 
-    assert "heal: исправлено 2 / осталось 3, пропущено по бюджету: 3" in lines
-    assert "деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6" in lines
+    assert any(line.startswith("🚨 heal: исправлено 2 / осталось 3, пропущено по бюджету: 3")
+               for line in lines)
+    assert any(line.startswith("🚨 деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6")
+               for line in lines)
 
 
 async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
@@ -744,3 +746,20 @@ async def test_photo_coverage_by_platform(db):
     assert coverage["NEKRETNINE"] == (1, 2)
     assert coverage["CETIRI_ZIDA"] == (0, 1)
     assert coverage["HALOOGLASI"] == (0, 0)
+
+
+async def test_completed_refresh_with_source_timeout_is_reported_degraded(monkeypatch):
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    _canned_step_stubs(monkeypatch)
+    monkeypatch.setattr(get_settings(), 'nightly_detail_refresh', 2)
+
+    async def deadline_after_commit(*, limit, deadline=None):
+        return orchestrator.RollingRefreshResult(
+            selected=2, refreshed=2, errors=0, price_changes=[],
+            source_errors={'NEKRETNINE': 'TimeoutError'},
+        )
+
+    monkeypatch.setattr(orchestrator, 'rolling_detail_refresh', deadline_after_commit)
+    result = await _run_nightly_steps(notify=False)
+    assert any(line.startswith('🚨') and 'обновлено: 2' in line for line in result.summary_lines)

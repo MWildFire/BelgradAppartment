@@ -1,0 +1,92 @@
+{
+  "status": "insufficient_even_at_full_success",
+  "sources": {
+    "CETIRI_ZIDA": {
+      "active": 4799,
+      "fresh_active_7d": 0,
+      "active_target_deficit": 4560,
+      "public": 45,
+      "fresh_public_24h": 0,
+      "public_target_deficit": 45,
+      "broken": 53,
+      "eligible_due": 4832,
+      "retry_backoff": 0,
+      "minimum_daily_successes": 695,
+      "measured_success_rate": null,
+      "estimated_daily_attempts": null,
+      "latest_attempt_sample": {
+        "succeeded": 0,
+        "failed": 0,
+        "unknown": 1040
+      }
+    },
+    "CITYEXPERT": {
+      "active": 748,
+      "fresh_active_7d": 0,
+      "active_target_deficit": 711,
+      "public": 29,
+      "fresh_public_24h": 0,
+      "public_target_deficit": 29,
+      "broken": 0,
+      "eligible_due": 771,
+      "retry_backoff": 0,
+      "minimum_daily_successes": 130,
+      "measured_success_rate": null,
+      "estimated_daily_attempts": null,
+      "latest_attempt_sample": {
+        "succeeded": 0,
+        "failed": 0,
+        "unknown": 445
+      }
+    },
+    "HALOOGLASI": {
+      "active": 3753,
+      "fresh_active_7d": 0,
+      "active_target_deficit": 3566,
+      "public": 67,
+      "fresh_public_24h": 0,
+      "public_target_deficit": 67,
+      "broken": 31,
+      "eligible_due": 3803,
+      "retry_backoff": 0,
+      "minimum_daily_successes": 574,
+      "measured_success_rate": null,
+      "estimated_daily_attempts": null,
+      "latest_attempt_sample": {
+        "succeeded": 0,
+        "failed": 0,
+        "unknown": 1196
+      }
+    },
+    "NEKRETNINE": {
+      "active": 3889,
+      "fresh_active_7d": 0,
+      "active_target_deficit": 3695,
+      "public": 36,
+      "fresh_public_24h": 0,
+      "public_target_deficit": 36,
+      "broken": 43,
+      "eligible_due": 3912,
+      "retry_backoff": 0,
+      "minimum_daily_successes": 562,
+      "measured_success_rate": null,
+      "estimated_daily_attempts": null,
+      "latest_attempt_sample": {
+        "succeeded": 0,
+        "failed": 0,
+        "unknown": 920
+      }
+    }
+  },
+  "active": 13189,
+  "public_originals": 177,
+  "minimum_daily_successes": 1961,
+  "configured_daily_attempts": 200,
+  "configured_heal_attempts": 50,
+  "shared_budget_sec": 7200,
+  "minimum_daily_shortfall": 1761,
+  "estimated_daily_attempts": null,
+  "sample_window_days": 7,
+  "sample_kind": "latest_attempt_per_listing",
+  "attainment_confirmed": false
+}

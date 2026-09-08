@@ -67,3 +67,27 @@ async def test_dry_run_skips_every_mutating_maintenance_step(monkeypatch):
     await commands._nightly_refresh(1, 3, False, True, dry_run=True)
     evaluated.assert_awaited_once_with(dry_run=True)
     forbidden.assert_not_called()
+
+
+async def test_context_teardown_failure_keeps_actual_partial_counts(monkeypatch):
+    from src.db.models import Platform
+
+    class Context:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            raise TimeoutError('teardown')
+
+    async def scrape(scraper, **_options):
+        result = ScrapeResult(platform=Platform.NEKRETNINE, previewed=10, fetched=3, updated=3)
+        scraper.last_scrape_result = result
+        return result
+
+    monkeypatch.setitem(commands.SCRAPERS, Platform.NEKRETNINE, Context)
+    monkeypatch.setattr(commands, 'scrape_platform', scrape)
+    results = await commands._run_all([Platform.NEKRETNINE], 1, None, False)
+    assert results[0].previewed == 10
+    assert results[0].fetched == 3
+    assert results[0].updated == 3
+    assert results[0].outcome == 'degraded'
+    assert not results[0].sweep_allowed

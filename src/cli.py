@@ -120,8 +120,7 @@ async def _run_all(
         if not dry_run:
             progress(f"scrape:{plat.value}")
         scraper_cls = SCRAPERS[plat]
-        # `async with` stays INSIDE the try: an __aenter__ failure (e.g. halooglasi's Playwright
-        # browser refusing to launch) must skip that one platform, not crash the whole run.
+        scraper = None
         try:
             settings = get_settings()
             source_budget = (settings.scrape_incremental_source_budget_sec if incremental
@@ -130,18 +129,34 @@ async def _run_all(
                 async with scraper_cls() as scraper:
                     options = {"dry_run": True} if dry_run else {}
                     result = await scrape_platform(
-                        scraper,
-                        max_pages=max_pages,
-                        max_new=max_new,
-                        download_photos=download_photos,
-                        incremental=incremental,
+                        scraper, max_pages=max_pages, max_new=max_new,
+                        download_photos=download_photos, incremental=incremental,
+                        source_budget_sec=source_budget,
+                        item_budget_sec=settings.scrape_item_budget_sec,
                         **options,
                     )
+        except asyncio.CancelledError:
+            partial = getattr(scraper, "last_scrape_result", None)
+            if not dry_run and isinstance(partial, ScrapeResult):
+                progress(f"cancelled:{plat.value}", partial)
+            raise
         except Exception as exc:
-            logging.getLogger(__name__).error("[%s] scrape failed (%s)",
-                                              plat.value, type(exc).__name__)
-            result = ScrapeResult.failed(plat, reason=type(exc).__name__,
-                                         full_crawl=not incremental)
+            logging.getLogger(__name__).error(
+                "[%s] scrape failed (%s)", plat.value, type(exc).__name__
+            )
+            partial = getattr(scraper, "last_scrape_result", None)
+            if isinstance(partial, ScrapeResult):
+                result = partial
+                result.errors += 1
+                result.crawl_complete = False
+                result.quality_reasons.append(type(exc).__name__)
+                result.stop_reason = (
+                    "source_timeout" if isinstance(exc, TimeoutError) else "source_exception"
+                )
+            else:
+                result = ScrapeResult.failed(
+                    plat, reason=type(exc).__name__, full_crawl=not incremental
+                )
         results.append(result)
         if not dry_run:
             progress(f"scraped:{plat.value}", result)
@@ -1855,6 +1870,9 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             line = f"heal: исправлено {heal.fixed} / осталось {heal.remaining}"
             if heal.skipped:
                 line += f", пропущено по бюджету: {heal.skipped}"
+            if heal.errors or heal.skipped or getattr(heal, "source_errors", {}):
+                line = (f"🚨 {line}, ошибок: {heal.errors}; "
+                        f"ошибок источников: {len(getattr(heal, 'source_errors', {}))}")
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: heal")
@@ -1875,6 +1893,9 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             )
             if rolling.skipped:
                 line += f", пропущено по бюджету: {rolling.skipped}"
+            if rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {}):
+                line = (f"🚨 {line}, ошибок: {rolling.errors}; "
+                        f"ошибок источников: {len(getattr(rolling, 'source_errors', {}))}")
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: detail-refresh")
@@ -2609,7 +2630,9 @@ async def _refetch_details(
     )
 
     click.echo(
-        f"=== DONE: updated={stats.updated} photos={stats.photos} errors={stats.errors} ==="
+        f"=== DONE: updated={stats.updated} verified={stats.verified} "
+        f"photos={stats.photos} errors={stats.errors} skipped={stats.skipped} "
+        f"source_errors={len(stats.source_errors)} ==="
     )
 
 
