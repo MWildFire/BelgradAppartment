@@ -505,6 +505,7 @@ class MatchDelivery(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     message_ids: Mapped[list[int]] = mapped_column(JSON, default=list, server_default="[]")
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error_code: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

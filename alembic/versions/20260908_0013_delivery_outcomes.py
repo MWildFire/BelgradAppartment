@@ -33,6 +33,7 @@ def upgrade() -> None:
         sa.Column("match_id", sa.Integer(), sa.ForeignKey("matches.id", ondelete="CASCADE"), nullable=False),
         sa.Column("recipient_id", sa.BigInteger(), nullable=False),
         sa.Column("message_ids", sa.JSON(), nullable=False, server_default="[]"),
+        sa.Column("payload", sa.JSON(), nullable=True),
         *_outcome_columns(),
         sa.UniqueConstraint("match_id", "recipient_id", name="uq_match_recipient"),
     )
