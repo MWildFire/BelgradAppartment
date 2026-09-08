@@ -386,6 +386,8 @@ class Subscription(Base):
         ),
     )
 
+    notification_cursor_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     # Filters mirror: {"vnj": bool, "wc": bool, "district": [..], "price_min": int|None,
     # "price_max": int|None, "rooms": [..]}. Stored as JSON so matching reuses Filters directly.
@@ -488,3 +490,42 @@ class SiteStatsDaily(Base):
     metric: Mapped[str] = mapped_column(Text, primary_key=True)  # см. §A.2 (views_path, uniques, …)
     key: Mapped[str] = mapped_column(Text, primary_key=True, default="")
     value: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class MatchDelivery(Base):
+    """Per-recipient outcomes; historical PublishedPost is not recipient confirmation."""
+
+    __tablename__ = "match_deliveries"
+    __table_args__ = (UniqueConstraint("match_id", "recipient_id", name="uq_match_recipient"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    match_id: Mapped[int] = mapped_column(ForeignKey("matches.id", ondelete="CASCADE"))
+    recipient_id: Mapped[int] = mapped_column(BigInteger)
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    claim_token: Mapped[str | None] = mapped_column(String(64))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    message_ids: Mapped[list[int]] = mapped_column(JSON, default=list, server_default="[]")
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class SubscriptionDelivery(Base):
+    """Durable subscription backlog independent of the discovery age window."""
+
+    __tablename__ = "subscription_deliveries"
+    __table_args__ = (
+        UniqueConstraint("subscription_id", "site_listing_id", name="uq_subscription_delivery"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id", ondelete="CASCADE"))
+    site_listing_id: Mapped[int] = mapped_column(ForeignKey("site_listings.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    claim_token: Mapped[str | None] = mapped_column(String(64))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
