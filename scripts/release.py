@@ -25,7 +25,10 @@ from urllib.parse import quote
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ("src", "alembic", "scripts", "deploy", "pyproject.toml", "uv.lock", "alembic.ini")
 SERVICES = ("otz-monitor", "otz-site", "otz-admin", "otz-subscription-bot")
-JOBS = ("otz-nightly-refresh", "otz-weekly-full-refresh", "otz-scrape-smoke", "otz-daily-summary")
+JOBS = (
+    "otz-nightly-refresh", "otz-weekly-full-refresh", "otz-scrape-smoke",
+    "otz-daily-summary", "otz-public-detail-refresh",
+)
 TIMERS = tuple(f"{name}.timer" for name in JOBS)
 CHECKS = ("unit", "changed_lint", "shell", "browser")
 MAINTENANCE_PATTERN = (
