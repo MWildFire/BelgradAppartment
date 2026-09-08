@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -17,6 +18,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from src.scrapers.base import ListingDetail, ListingPreview
+from src.scrapers.crawl_evidence import source_total_report
 from src.scrapers.snapshot_parity import mismatch_fields
 
 
@@ -50,6 +52,7 @@ class ShadowAuditReport:
     no_stale_sweep: bool = True
     previewed: int = 0
     site_total: int | None = None
+    source_totals: dict[str, Any] = field(default_factory=dict)
     skipped_pages: int = 0
     coverage: float = 0.0
     sample_compared: int = 0
@@ -67,6 +70,7 @@ class ShadowAuditReport:
     mismatches: list[dict[str, Any]] = field(default_factory=list)
     fallback_listing_ids: list[str] = field(default_factory=list)
     detail_error_listing_ids: list[str] = field(default_factory=list)
+    detail_failures: list[dict[str, Any]] = field(default_factory=list)
     thresholds: dict[str, Any] = field(default_factory=dict)
     passed: bool = False
     failure_reasons: list[str] = field(default_factory=list)
@@ -74,6 +78,11 @@ class ShadowAuditReport:
     def to_dict(self) -> dict[str, Any]:
         """Return only sanitized evidence; no URLs, addresses, credentials, or raw payloads."""
         return asdict(self)
+
+
+def _error_code(error: Exception) -> str:
+    code = type(error).__name__
+    return code if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,79}", code) else "Exception"
 
 
 def _snapshot_is_complete(scraper: ShadowAuditScraper, snapshot: ListingDetail | None) -> bool:
@@ -207,12 +216,14 @@ async def run_shadow_audit(
                 max_pages=max_pages, known_ids=set(), early_stop_full_known_pages=2,
             )
     except Exception as exc:
-        report.failure_reasons = ["crawl_exception", type(exc).__name__]
+        report.failure_reasons = ["crawl_exception", _error_code(exc)]
+        report.source_totals = source_total_report(scraper)
         report.proxy_metrics = _proxy_metrics(scraper)
         report.browser_proxy_errors = _proxy_error_count(scraper)
         return report
     report.previewed = len(previews)
     report.site_total = getattr(scraper, "_site_total", None)
+    report.source_totals = source_total_report(scraper)
     report.skipped_pages = int(getattr(scraper, "_skipped_pages", 0) or 0)
     report.proxy_metrics = _proxy_metrics(scraper)
     report.browser_proxy_errors = _proxy_error_count(scraper)
@@ -238,14 +249,29 @@ async def run_shadow_audit(
             report.fallback_listing_ids.append(preview.external_id)
         else:
             report.complete_snapshots += 1
+        phase = "fetch_detail"
+        missing_fields = []
         try:
             async with asyncio.timeout(min(detail_timeout_sec, deadline - time.monotonic())):
                 legacy = await scraper.fetch_detail(preview.url)
-            if not legacy.title or legacy.price_eur is None or not legacy.photo_urls:
+            phase = "validate_detail"
+            missing_fields = [name for name, missing in (
+                ("title", not legacy.title), ("price_eur", legacy.price_eur is None),
+                ("photo_urls", not legacy.photo_urls),
+            ) if missing]
+            if missing_fields:
                 raise ValueError("unusable fallback/detail payload")
-        except Exception:  # report the listing, then fail closed.
+        except Exception as exc:  # Record codes, never exception text/request/response bodies.
             report.detail_errors += 1
             report.detail_error_listing_ids.append(preview.external_id)
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            report.detail_failures.append({
+                "external_id": preview.external_id,
+                "sample_kind": "complete" if complete else "fallback",
+                "phase": phase, "error_code": _error_code(exc),
+                "http_status": status if type(status) is int and 100 <= status <= 599 else None,
+                "missing_fields": missing_fields,
+            })
             continue
         if not complete:
             report.fallback_succeeded += 1

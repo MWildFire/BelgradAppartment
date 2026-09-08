@@ -56,6 +56,16 @@ least 31 successful refreshes daily; at a measured 50% success rate that is 62 a
 A quota is a capacity requirement, not proof that source failures are repaired. Actual
 attainment requires new successful timestamps measured after real runs.
 
+Source crawl and shadow reports expose `source_totals`: first/last/min/max source count,
+observation and change counts, and UTC time/scope/page for the first, last and changed
+observations. At most 64 change records are retained; `changes_omitted` counts the rest.
+Nekretnine records only the unfiltered base search here, so price-band totals cannot be
+mistaken for the global denominator. This telemetry does not change census trust or sweep
+authorization. A changed total remains untrusted even if it later returns to the first value.
+Failed shadow details additionally report sample kind, fetch/validation phase, exception
+code, available HTTP status and missing required field names. Exception messages, source
+URLs, response bodies and credentials are excluded; existing readiness gates remain intact.
+
 Public-only maintenance writes `data/state/freshness/public_refetch.json`. The admin
 health report exposes its sanitized `public_refresh` status, checkpoint time, selected/
 verified/error/skipped counts and source error codes separately from `latest_run`.

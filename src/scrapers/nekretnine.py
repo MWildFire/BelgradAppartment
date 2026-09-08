@@ -286,7 +286,7 @@ class NekretnineScraper(Scraper):
                 if search_total is None:
                     search_total = ta
                 if is_base:
-                    self.record_source_total(ta)
+                    self.record_source_total(ta, scope="base", page=page)
             if site_max_pages is None:
                 mp = data.get("maxPages")
                 if isinstance(mp, int) and mp > 0:

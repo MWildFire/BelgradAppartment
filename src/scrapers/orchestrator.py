@@ -35,6 +35,7 @@ from src.db import Listing, get_session
 from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.crawl_evidence import source_total_report
 from src.scrapers.freshness import (
     CallbackResult,
     FairRefreshPlan,
@@ -127,6 +128,7 @@ class ScrapeResult:
     errors: int = 0
     skipped_pages: int = 0  # list pages we couldn't fetch and walked past (partial under-run signal)
     site_total: int | None = None  # listings the SITE says exist for the search (coverage denominator)
+    source_totals: dict[str, Any] = field(default_factory=dict)
     # B1 — per-parser parse-success-rate. In-memory only (no DB migration this phase).
     # details_attempted: a detail page was actually fetched (re-seen rows DON'T count).
     # details_parsed_ok: that fetch produced a non-shell detail we inserted.
@@ -242,6 +244,7 @@ async def scrape_platform(
         result.pages_failed = int(getattr(scraper, "_pages_failed", 0))
         result.previewed = int(getattr(scraper, "_observed_count", result.previewed))
         result.site_total = getattr(scraper, "_site_total", None)
+        result.source_totals = source_total_report(scraper)
         if not dry_run and time.monotonic() - last_checkpoint >= 30:
             _write_source_checkpoint(result, path, final=False)
             last_checkpoint = time.monotonic()
@@ -404,6 +407,7 @@ def _copy_crawl_evidence(
 ) -> None:
     result.skipped_pages = int(getattr(scraper, "_skipped_pages", 0))
     result.site_total = getattr(scraper, "_site_total", None)
+    result.source_totals = source_total_report(scraper)
     result.crawl_complete = bool(getattr(scraper, "_crawl_complete", False))
     result.denominator_trusted = bool(getattr(scraper, "_site_total_trusted", False))
     result.pages_attempted = int(getattr(scraper, "_pages_attempted", 0))
