@@ -194,6 +194,19 @@ class Listing(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # NULL = details never re-fetched; rolling refresh sorts ASC (SQLite puts NULLs first).
     details_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Legacy details_refreshed_at records attempts, never proof of a successful refresh.
+    details_succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    details_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    detail_failure_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    link_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    link_succeeded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    link_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    link_status: Mapped[str | None] = mapped_column(String(32))
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    absence_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    absence_first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    absence_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    absence_last_run_id: Mapped[str | None] = mapped_column(String(64))
 
     # A4 — cross-platform dedup by pHash. NULL = not (yet) in any duplicate group. A group of
     # ≥2 same-apartment listings shares one stable dup_group_id (= min member id); exactly one
