@@ -11,11 +11,13 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
@@ -26,6 +28,10 @@ SERVICES = ("otz-monitor", "otz-site", "otz-admin", "otz-subscription-bot")
 JOBS = ("otz-nightly-refresh", "otz-weekly-full-refresh", "otz-scrape-smoke", "otz-daily-summary")
 TIMERS = tuple(f"{name}.timer" for name in JOBS)
 CHECKS = ("unit", "changed_lint", "shell", "browser")
+MAINTENANCE_PATTERN = (
+    r"(src\.cli |/otz |^otz )(nightly-refresh|weekly-refresh|scrape-smoke|scrape|"
+    r"refresh-broken|rolling-refresh|verify-links|daily-summary)( |$)"
+)
 
 
 class ReleaseError(Exception):
@@ -37,9 +43,15 @@ def require(condition, message):
         raise ReleaseError(message)
 
 
-def run(args, *, cwd=None, env=None, capture=False):
+def run(args, *, cwd=None, env=None, capture=False, timeout=None):
     return subprocess.run(
-        args, cwd=cwd, env=env, check=True, text=True, stdout=subprocess.PIPE if capture else None
+        args,
+        cwd=cwd,
+        env=env,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+        timeout=timeout,
     ).stdout
 
 
@@ -197,30 +209,98 @@ def unpack_packet(packet, destination):
 
 
 def active(unit):
-    status = subprocess.run(["systemctl", "is-active", "--quiet", unit], check=False)
+    status = subprocess.run(["systemctl", "is-active", "--quiet", unit], check=False, timeout=5)
     return status.returncode == 0
 
 
-def maintenance_idle():
+def maintenance_timeout(deadline, limit):
+    if deadline is None:
+        return limit
+    remaining = deadline - time.monotonic()
+    require(
+        remaining > 0, "maintenance did not stop cooperatively; runtime rollback has not started"
+    )
+    return min(limit, remaining)
+
+
+def maintenance_jobs(*, deadline=None):
     # Oneshot services are "activating" while ExecStart runs, not "active".
+    running = []
     for job in JOBS:
         status = run(
-            ["systemctl", "show", job, "--property=ActiveState", "--value"], capture=True
+            ["systemctl", "show", job, "--property=ActiveState", "--value"],
+            capture=True,
+            timeout=maintenance_timeout(deadline, 5),
         ).strip()
-        require(status in {"", "inactive", "failed"}, "maintenance job is running or starting")
+        if status not in {"", "inactive", "failed"}:
+            running.append(job)
+    return running
+
+
+def manual_maintenance(*, deadline=None):
     process = subprocess.run(
         [
             "pgrep",
             "-u",
             "otz",
             "-f",
-            r"src\.cli (nightly-refresh|weekly-refresh|scrape-smoke|scrape|"
-            r"refresh-broken|rolling-refresh|verify-links)( |$)",
+            MAINTENANCE_PATTERN,
         ],
-        stdout=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
         check=False,
+        timeout=maintenance_timeout(deadline, 5),
     )
-    require(process.returncode == 1, "manual maintenance process is active or cannot be checked")
+    require(process.returncode in {0, 1}, "manual maintenance cannot be checked")
+    return [int(pid) for pid in process.stdout.split()]
+
+
+def maintenance_idle(*, deadline=None):
+    require(not maintenance_jobs(deadline=deadline), "maintenance job is running or starting")
+    require(not manual_maintenance(deadline=deadline), "manual maintenance process is active")
+
+
+def pause_timers(state):
+    timers = sorted(set(state["timers"]) | {unit for unit in TIMERS if active(unit)})
+    if timers:
+        run(["systemctl", "stop", *timers], timeout=30)
+
+
+def drain_maintenance(timeout=60):
+    """Request cooperative cancellation once; never escalate to SIGKILL or swap under a job."""
+    deadline = time.monotonic() + timeout
+    jobs = maintenance_jobs(deadline=deadline)
+    manual = []
+    for pid in manual_maintenance(deadline=deadline):
+        # The same CLI also appears in pgrep when run by systemd. A second SIGINT would
+        # interrupt asyncio.Runner's cancellation cleanup, so signal each process only once.
+        try:
+            cgroup = Path(f"/proc/{pid}/cgroup").read_text()
+        except FileNotFoundError:
+            continue
+        if not any(f"/{job}.service" in cgroup for job in jobs):
+            manual.append(pid)
+    if jobs:
+        # kill only sends the requested signal; unlike systemctl stop it does not schedule
+        # systemd's later forced kill. An already exited unit is handled by the idle check.
+        subprocess.run(
+            ["systemctl", "kill", "--kill-whom=all", "--signal=SIGINT", *jobs],
+            check=False,
+            timeout=maintenance_timeout(deadline, 10),
+        )
+    for pid in manual:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGINT)
+    while True:
+        try:
+            maintenance_idle(deadline=deadline)
+            return
+        except ReleaseError:
+            require(
+                time.monotonic() < deadline,
+                "maintenance did not stop cooperatively; runtime rollback has not started",
+            )
+            time.sleep(min(0.5, max(0, deadline - time.monotonic())))
 
 
 def service_state():
@@ -240,14 +320,22 @@ def stop_units(state):
         run(["systemctl", "stop", *state["services"]])
 
 
-def restart_units(state):
+def restart_services(state):
     if state["services"]:
         run(["systemctl", "start", *state["services"]])
         require(
             all(active(name) for name in state["services"]), "application service did not start"
         )
+
+
+def restart_timers(state):
     if state["timers"]:
         run(["systemctl", "start", *state["timers"]])
+
+
+def restart_units(state):
+    restart_services(state)
+    restart_timers(state)
 
 
 def current_revisions(db):
@@ -343,6 +431,16 @@ def swap_path(source, target, previous):
 def restore_code(root, release):
     """Only application code/venv/units. New database rows and media are untouched."""
     state = read_json(release / "activation.json")
+    try:
+        pause_timers(state)
+        drain_maintenance()
+    except Exception:
+        state["result"] = "rollback_blocked_maintenance"
+        write_json(release / "activation.json", state)
+        raise
+    services = sorted(set(state["services"]) | {unit for unit in SERVICES if active(unit)})
+    if services:
+        run(["systemctl", "stop", *services], timeout=60)
     rejected = release / "rejected"
     rejected.mkdir(exist_ok=True)
     for relative in reversed(state["swapped"]):
@@ -443,6 +541,11 @@ def activate(args):
         )
         state = service_state()
         state.update(revision=manifest["revision"], result="activating", swapped=[], units=[])
+        state["previous_revision"] = (
+            read_json(root / "release.json")["revision"]
+            if (root / "release.json").exists()
+            else None
+        )
         write_json(release / "activation.json", state)
         try:
             stop_units(state)
@@ -490,7 +593,7 @@ def activate(args):
                 shutil.copy2(unit, target)
             run(["systemctl", "daemon-reload"])
             state["effective_units"] = effective_units(root / "deploy")
-            restart_units(state)
+            restart_services(state)
             # Local responses only; no notification/canary command is run by deployment.
             run(
                 [
@@ -525,11 +628,12 @@ def activate(args):
             )
             state["swapped"].append("release.json")
             write_json(release / "activation.json", state)
+            # Persistent timers may catch up immediately. Resume only after application
+            # health, content hashes and the active release marker have all been verified.
+            restart_timers(state)
             return state
         except Exception:
             # App rollback is safe with additive schema. Never downgrade/restore the live DB.
-            with contextlib.suppress(Exception):
-                run(["systemctl", "stop", *state["services"]])
             restore_code(root, release)
             raise
 
@@ -570,12 +674,21 @@ def main():
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise ReleaseError("another release operator holds the lock") from None
+                current = (
+                    read_json(root / "release.json")["revision"]
+                    if (root / "release.json").exists()
+                    else None
+                )
                 require(
-                    read_json(root / "release.json")["revision"] == args.revision,
+                    current == args.revision
+                    or (
+                        saved["result"] == "rollback_blocked_maintenance"
+                        and saved["swapped"]
+                        and "previous_revision" in saved
+                        and current == saved["previous_revision"]
+                    ),
                     "requested rollback is not the active release",
                 )
-                state = service_state()
-                stop_units(state)
                 result = restore_code(root, release)
         print(json.dumps(result, sort_keys=True))
     except (
@@ -585,6 +698,7 @@ def main():
         KeyError,
         tarfile.TarError,
         subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
         sqlite3.Error,
     ) as error:
         print(f"RELEASE FAILED: {error}", file=sys.stderr)
