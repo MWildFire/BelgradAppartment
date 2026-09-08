@@ -33,7 +33,8 @@ TIMERS = tuple(f"{name}.timer" for name in JOBS)
 CHECKS = ("unit", "changed_lint", "shell", "browser")
 MAINTENANCE_PATTERN = (
     r"(src\.cli |/otz |^otz )(nightly-refresh|weekly-refresh|scrape-smoke|scrape|"
-    r"refresh-broken|rolling-refresh|verify-links|daily-summary)( |$)"
+    r"refresh-broken|rolling-refresh|verify-links|daily-summary|refetch-details|"
+    r"check-links|heal-urls|site-liveness|mark-stale|refresh|nekretnine-shadow-audit)( |$)"
 )
 
 
