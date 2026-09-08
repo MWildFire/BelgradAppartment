@@ -89,11 +89,24 @@ Activation currently supports `/opt/otz` and its canonical systemd topology only
    under the actual `otz` account before any app service is stopped.
 
 Nightly runs Monday–Saturday at 03:00 UTC (+0–15 minutes). Sunday is handled by the
-weekly full refresh at 04:00 UTC (+0–15 minutes), which includes the same maintenance
-queues. This removes the previously scheduled Sunday daily/weekly overlap. Parser smoke
-remains every six hours at minute 30 (+0–5 minutes); per-source leases serialize overlap
-with manual, monitor or smoke work. All timers are persistent. Existing `ship-log` and
-failure notification paths remain.
+weekly full refresh at 02:00 UTC (+0–15 minutes), which includes the same maintenance
+queues. Parser smoke runs at 00:30 and 12:30 UTC (+0–5 minutes). Public-only detail refresh
+runs at 11:30, 17:30 and 23:30 UTC (+0–5 minutes), with a 40-minute work budget and a
+45-minute service timeout. Including jitter, the weekly main process ends by 11:15 and
+the adjacent public main processes end by 12:20/00:20, before smoke at 12:30/00:30.
+Per-source leases serialize unexpected overlap with manual or resumed persistent jobs.
+These are main-process scheduling bounds; failed cleanup, delayed dispatch and legacy
+post-run notification work require separate operational checks. All timers are persistent.
+The public-only unit has no message or publication path. Existing nightly/weekly/smoke
+`ship-log` and failure notification paths remain.
+
+Public originals become due after 10 hours, subject to retry backoff. The public schedule
+has at most a 12-hour gap plus 5 minutes of jitter. With a successful complete queue inside
+its 40-minute budget, selection and work therefore fit within a conservative 22h45 age
+bound even when nightly completion times change. This calculation does not establish the
+24-hour freshness target in production: verify actual timer execution, per-source success,
+queue capacity and measured public ages before claiming attainment.
+
 **Do not use these legacy scheduled units as a no-notify canary.** Use the separately
 implemented CLI evaluation/no-notify interface and prove no external sends there.
 

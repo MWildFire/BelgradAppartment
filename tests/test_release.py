@@ -195,7 +195,7 @@ def test_canonical_timers_separate_refresh_and_smoke_windows():
         ("otz-nightly-refresh", "Mon..Sat *-*-* 03:00:00 UTC", "15min"),
         ("otz-weekly-full-refresh", "Sun *-*-* 02:00:00 UTC", "15min"),
         ("otz-scrape-smoke", "*-*-* 00/12:30:00 UTC", "5min"),
-        ("otz-public-detail-refresh", "*-*-* 15:00:00 UTC", "5min"),
+        ("otz-public-detail-refresh", "*-*-* 11,17,23:30:00 UTC", "5min"),
     ]:
         text = (release.ROOT / "deploy" / f"{name}.timer").read_text()
         assert f"OnCalendar={calendar}" in text

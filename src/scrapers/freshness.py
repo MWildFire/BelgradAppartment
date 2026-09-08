@@ -48,9 +48,10 @@ def _oldest(value: datetime | None) -> datetime:
 def is_due(row: RefreshCandidate, now: datetime) -> bool:
     if row.next_retry_at and utc(row.next_retry_at) > utc(now):
         return False
-    # Enter the public queue before the 24-hour target; daily scheduler jitter
-    # must not defer a just-under-24-hour row for another whole day.
-    interval = timedelta(hours=20) if row.public else timedelta(days=7)
+    # Public runs at 11:30/17:30/23:30 UTC leave at most 12h05 between starts.
+    # Eligibility at 10h leaves room for that gap and the 40-minute work budget.
+    # Actual 24h freshness still requires enough capacity and successful source reads.
+    interval = timedelta(hours=10) if row.public else timedelta(days=7)
     return (
         row.broken
         or row.succeeded_at is None

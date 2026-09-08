@@ -131,7 +131,7 @@ class Settings(BaseSettings):
     # Per-listing hard cap includes detail fetch, required photos and embeddings; a slow page
     # can otherwise burn minutes; this bounds it regardless of the scraper's internal retries.
     refetch_per_fetch_timeout_sec: int = 90
-    # Additional public-only queue at 15 UTC; no publication or message transports.
+    # Public-only queue at 11:30/17:30/23:30 UTC; no publication or message transports.
     public_detail_refresh_limit: int = Field(default=500, ge=1)
     public_detail_refresh_budget_sec: int = Field(default=2400, ge=1)
 

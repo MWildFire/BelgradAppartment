@@ -178,7 +178,7 @@ def test_public_broken_old_success_priority_and_backoff():
     ]
     plan = select_fair(rows, limit=5, now=NOW)
     assert [row.id for row in plan.rows] == [3, 2, 1, 5]
-    assert not is_due(candidate(6, public=True, succeeded_at=NOW - timedelta(hours=12)), NOW)
+    assert not is_due(candidate(6, public=True, succeeded_at=NOW - timedelta(hours=9)), NOW)
     assert is_due(candidate(7, succeeded_at=NOW + timedelta(days=1)), NOW)
 
 

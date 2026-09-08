@@ -1,6 +1,9 @@
 """Bounded public cadence without private selection or transport notifications."""
 
+import re
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,6 +17,21 @@ from src.scrapers import orchestrator as orch
 from src.scrapers.freshness import RefreshCandidate, is_due, load_candidates
 
 NOW = datetime(2026, 9, 8, 15, tzinfo=UTC)
+DEPLOY = Path(__file__).resolve().parents[1] / "deploy"
+
+
+def public_timer_slots():
+    text = (DEPLOY / "otz-public-detail-refresh.timer").read_text()
+    match = re.search(r"^OnCalendar=\*-\*-\* ([\d,]+):(\d\d):00 UTC$", text, re.M)
+    assert match, "public cadence must expose its fixed UTC daily slots"
+    return [int(hour) * 60 + int(match[2]) for hour in match[1].split(",")]
+
+
+def unit_seconds(name, setting):
+    text = (DEPLOY / name).read_text()
+    value = re.search(rf"^{setting}=(.*)$", text, re.M)[1]
+    factors = {"h": 3600, "min": 60, "s": 1}
+    return sum(int(amount) * factors[unit] for amount, unit in re.findall(r"(\d+)(h|min|s)", value))
 
 
 def test_public_due_ahead_of_daily_jitter_but_preserves_retry_backoff():
@@ -31,16 +49,57 @@ def test_public_due_ahead_of_daily_jitter_but_preserves_retry_backoff():
             row.platform,
             row.url,
             public=True,
-            succeeded_at=NOW - timedelta(hours=19, minutes=59),
+            succeeded_at=NOW - timedelta(hours=9, minutes=59),
         ),
+        NOW,
+    )
+    assert is_due(
+        RefreshCandidate(3, row.platform, row.url, public=True,
+                         succeeded_at=NOW - timedelta(hours=10)),
         NOW,
     )
     assert not is_due(
         RefreshCandidate(
-            3, row.platform, row.url, public=True, next_retry_at=NOW + timedelta(minutes=1)
+            4, row.platform, row.url, public=True, next_retry_at=NOW + timedelta(minutes=1)
         ),
         NOW,
     )
+
+
+def test_variable_nightly_duration_cannot_skip_a_public_day():
+    # A slow nightly finished at 08:00, but the next nightly selects at 03:30.
+    # The former 20-hour gate skipped that next pass and waited until 15:00 (31h old).
+    row = RefreshCandidate(
+        1, Platform.NEKRETNINE, "https://example.test/1", public=True,
+        succeeded_at=datetime(2026, 9, 8, 8, tzinfo=UTC),
+    )
+    assert is_due(row, datetime(2026, 9, 9, 3, 30, tzinfo=UTC))
+
+
+def test_successful_public_cadence_covers_every_last_success_time_within_24h():
+    from src.config import Settings
+
+    midnight = NOW.replace(hour=0, minute=0)
+    jitter = unit_seconds("otz-public-detail-refresh.timer", "RandomizedDelaySec")
+    budget = Settings(_env_file=None).public_detail_refresh_budget_sec
+    slots = [
+        midnight + timedelta(days=day, minutes=minute)
+        for day in range(4)
+        for minute in public_timer_slots()
+    ]
+    # Exercise arbitrary success times, including manual/variable nightly completion.
+    # All public work must fit its configured cap/budget and upstream requests must succeed;
+    # this is a scheduling proof, not evidence of real source throughput or attainment.
+    for minute in range(0, 24 * 60, 5):
+        succeeded = midnight + timedelta(minutes=minute)
+        row = RefreshCandidate(
+            1, Platform.NEKRETNINE, "https://example.test/1", public=True,
+            succeeded_at=succeeded,
+        )
+        # Eligibility at the earliest possible start, completion at the latest possible
+        # start plus full budget: jitter cannot make this bound look artificially better.
+        selected = next(slot for slot in slots if slot > succeeded and is_due(row, slot))
+        assert selected + timedelta(seconds=jitter + budget) - succeeded <= timedelta(hours=24)
 
 
 async def seed(ext, platform=Platform.NEKRETNINE, public=False, **values):
@@ -157,9 +216,6 @@ def test_admin_exposes_new_public_timer(monkeypatch):
 
 
 def test_configured_budgets_fit_runner_and_scheduled_main_windows():
-    import re
-    from pathlib import Path
-
     from src.config import Settings
 
     settings = Settings(_env_file=None)
@@ -171,15 +227,8 @@ def test_configured_budgets_fit_runner_and_scheduled_main_windows():
     assert settings.scrape_run_budget_sec >= (
         4 * settings.scrape_source_budget_sec + settings.nightly_refetch_budget_sec + 900
     )
-    folder = Path(__file__).resolve().parents[1] / "deploy"
-
     def service_timeout(name):
-        text = (folder / f"{name}.service").read_text()
-        timeout = re.search(r"^TimeoutStartSec=(.*)$", text, re.M)[1]
-        factor = {"h": 3600, "min": 60, "s": 1}
-        return sum(
-            int(amount) * factor[unit] for amount, unit in re.findall(r"(\d+)(h|min|s)", timeout)
-        )
+        return unit_seconds(f"{name}.service", "TimeoutStartSec")
 
     nightly = service_timeout("otz-nightly-refresh")
     weekly = service_timeout("otz-weekly-full-refresh")
@@ -187,15 +236,28 @@ def test_configured_budgets_fit_runner_and_scheduled_main_windows():
     assert nightly >= settings.scrape_incremental_run_budget_sec + 600
     assert weekly >= settings.scrape_run_budget_sec + 600
     assert public >= settings.public_detail_refresh_budget_sec + 300
-    # Include maximum randomized delay. Main-process timeout windows leave separation
-    # from smoke12:30; smoke00:30 (30min + 5min jitter) finishes before weekly02:00.
-    assert 3 * 3600 + 15 * 60 + nightly < 12.5 * 3600
-    assert 2 * 3600 + 15 * 60 + weekly < 12.5 * 3600
-    assert 30 * 60 + 5 * 60 + service_timeout("otz-scrape-smoke") < 2 * 3600
-    text = (folder / "otz-public-detail-refresh.service").read_text()
+    # Include the full main-process hard timeout and all randomized delay. Eight days
+    # cover both Sunday weekly replacement and the last public slot crossing midnight.
+    windows = []
+    for day in range(8):
+        main = ("otz-weekly-full-refresh", [120]) if day % 7 == 6 else (
+            "otz-nightly-refresh", [180]
+        )
+        for name, slots in [
+            main, ("otz-scrape-smoke", [30, 750]),
+            ("otz-public-detail-refresh", public_timer_slots()),
+        ]:
+            jitter = unit_seconds(f"{name}.timer", "RandomizedDelaySec")
+            for slot in slots:
+                start = day * 86400 + slot * 60
+                windows.append((start, start + jitter + service_timeout(name), name))
+    ordered = sorted(windows)
+    for earlier, later in pairwise(ordered):
+        assert earlier[1] < later[0], f"scheduled main windows overlap: {earlier} / {later}"
+    text = (DEPLOY / "otz-public-detail-refresh.service").read_text()
     assert "--public-only" in text and "ship-log" not in text and "OnFailure" not in text
     for name in ("otz-weekly-full-refresh", "otz-scrape-smoke"):
-        assert "playwright install" not in (folder / f"{name}.service").read_text()
+        assert "playwright install" not in (DEPLOY / f"{name}.service").read_text()
 
 
 async def test_public_refresh_writes_verified_success_without_publication_changes(
