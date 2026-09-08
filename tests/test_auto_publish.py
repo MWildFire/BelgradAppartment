@@ -298,9 +298,14 @@ class _FakeBot:
         self.session = _FakeBotSession()
         self.sent: list[int] = []
 
-    async def send_media_group(self, *, chat_id: int, media):  # type: ignore[no-untyped-def]
+    async def send_photo(self, *, chat_id: int, photo, caption):
         self.sent.append(chat_id)
-        return [_FakeMessage(555)]
+        return _FakeMessage(555)
+
+    async def send_media_group(self, *, chat_id: int, media):  # type: ignore[no-untyped-def]
+        assert 2 <= len(media) <= 10
+        self.sent.append(chat_id)
+        return [_FakeMessage(555 + i) for i in range(len(media))]
 
 
 async def _seed_match_with_real_photo(db, tmp_path, *, raw_text="", status=MatchStatus.PENDING):

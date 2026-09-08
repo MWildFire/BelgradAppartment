@@ -50,21 +50,11 @@ rentbelgrad.com {
         file_server
         header Cache-Control "public, max-age=31536000, immutable"
     }
-    handle_path /photos/* {
-        # photos_root = куда пайплайн качает фото. public_photo_url отдаёт /photos/<relpath-под-root>,
-        # поэтому root ДОЛЖЕН совпадать с SITE_PHOTOS_ROOT. Заперт в data/inbound (НЕ /opt/otz),
-        # чтобы .env / otz.db нельзя было отдать через /photos.
-        root * /opt/otz/data/inbound
-        # photo_manifest.json живёт в РОДИТЕЛЕ photos_root (/opt/otz/data) и сюда не попадает
-        # (ревью Wave 5: манифест индексирует ВСЕ inbound-фото, включая неопубликованные).
-        # hide — belt & suspenders на случай, если он снова окажется внутри; глоб без пути
-        # прячет имя в ЛЮБОМ каталоге и ловит также .lock/.tmp-огрызки.
-        file_server {
-            hide photo_manifest.json*
-        }
-        # T4-3: far-future+immutable — оригиналы контент-стабильны (relpath уникален per-фото),
-        # webp-варианты derived от оригинала; смена контента = новый relpath, не перезапись.
-        header Cache-Control "public, max-age=31536000, immutable"
+    handle /photos/* {
+        # Publication authorization belongs to the app. Keep the /photos prefix and legacy
+        # public URLs; never serve the mixed public/private inbound tree directly.
+        reverse_proxy 127.0.0.1:8001
+        header Cache-Control "no-store"
     }
 
     # Всё остальное — в публичное FastAPI-приложение (otz-site.service).

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from email.message import EmailMessage
+from html import escape
 from typing import TYPE_CHECKING, Any
 
 import aiosmtplib
@@ -58,7 +59,7 @@ def _build_message(payload: LeadPayload, apartment: dict[str, Any] | None) -> Em
         lines += ["", f"Квартира: {price_str}, {a_district}, {url}"]
 
     text = "\n".join(lines)
-    html_rows = "".join(f"<p>{line}</p>" for line in lines if line)
+    html_rows = "".join(f"<p>{escape(line)}</p>" for line in lines if line)
 
     msg = EmailMessage()
     msg["From"] = settings.site_smtp_from
@@ -116,7 +117,7 @@ def _build_digest_message(
         f"Отписаться: {unsubscribe_url}",
     ]
     text = "\n".join(lines)
-    html_rows = "".join(f"<p>{line}</p>" for line in lines if line)
+    html_rows = "".join(f"<p>{escape(line)}</p>" for line in lines if line)
 
     msg = EmailMessage()
     msg["From"] = settings.site_smtp_from

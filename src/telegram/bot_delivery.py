@@ -71,13 +71,22 @@ async def _send_album_with_floodwait(bot: Bot, chat_id: int, media: list[InputMe
 
     from aiogram.exceptions import TelegramRetryAfter
 
-    try:
+    if not 1 <= len(media) <= MAX_ALBUM:
+        raise BotDeliveryError("photo delivery requires 1 to 10 photos")
+
+    async def send():
+        if len(media) == 1:
+            first = media[0]
+            return [await bot.send_photo(chat_id=chat_id, photo=first.media, caption=first.caption)]
         return await bot.send_media_group(chat_id=chat_id, media=media)
+
+    try:
+        return await send()
     except TelegramRetryAfter as e:
         wait = min(float(e.retry_after) + 1.0, 120.0)
         logger.warning("[bot_delivery] flood-wait %ss for chat_id=%d — retrying once", wait, chat_id)
         await asyncio.sleep(wait)
-        return await bot.send_media_group(chat_id=chat_id, media=media)
+        return await send()
 
 
 async def send_match_via_bot(
@@ -113,10 +122,11 @@ async def send_match_via_bot(
         if inbound is None or listing is None:
             raise BotDeliveryError(f"Match {match_id}: missing inbound/listing")
 
-        photo_paths = [Path(p) for p in inbound.photo_paths if p]
-        photo_paths = [p for p in photo_paths if p.exists()][:MAX_ALBUM]
+        photo_paths = [Path(p) for p in inbound.photo_paths if p][:MAX_ALBUM]
         if not photo_paths:
             raise BotDeliveryError(f"Match {match_id}: no inbound photos on disk")
+        if any(not p.is_file() for p in photo_paths):
+            raise BotDeliveryError(f"Match {match_id}: missing inbound photo files")
 
     rendered_text = (
         post_text_override

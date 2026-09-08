@@ -25,7 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
 from src.config import get_settings
-from src.site import photos
+from src.site import media, photos
 from src.site.db import dispose_engines
 from src.site.format import CORE_DISTRICTS
 from src.site.routes import router, templates
@@ -146,6 +146,7 @@ def create_app() -> FastAPI:
         # C3: cache-aware static mount (adds Cache-Control; ETag/Last-Modified come from base).
         app.mount("/static", _CachedStaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(router)
+    app.include_router(media.router)
     # Custom 404 (unknown path AND a route raising HTTPException(404), e.g. /apt/{missing}).
     app.add_exception_handler(StarletteHTTPException, _not_found_handler)
     return app
