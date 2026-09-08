@@ -103,3 +103,89 @@ verification, off-host transfer integrity, retention policy, and the scheduler's
 actual automatic run. Do not call F07 live-verified from a unit test, file listing, old
 archive or `PRAGMA integrity_check` alone. Restore new leads/messages by forward recovery;
 do not automatically replace the live database with an older backup during app rollback.
+
+## Daily off-host directory generations (no recurring 70 GB archive)
+
+`scripts/offhost_backup.py` uses the existing SSH destination and a FileVault-protected
+Mac directory. It creates complete immutable generations, not incomplete daily archives:
+SQLite online snapshot + all state + every file declared in all media roots + a complete
+manifest. Media unchanged by SHA-256 is hard-linked from the previous generation or an
+extracted seed on the same filesystem. Changed files use system rsync protocol 29 with
+`--link-dest`, `-I` and an exact NUL-separated file list; no `--inplace`, source deletion
+or remote prune occurs. Source and receiver re-hash all media; this consumes local I/O
+but unchanged image bytes are neither retransferred nor duplicated per day. New or
+changed media still requires its actual extra disk space.
+
+Preserve the first completed full archive's extraction instead of downloading it again:
+
+```bash
+.venv/bin/python scripts/recovery.py verify /private/completed.tar.gz \
+  --restore-dir /private/seed-0011 --expected-schema 0011_keep_on_site
+```
+
+Use code compatible with the recorded schema for this first smoke. The destination must
+not exist. New `_smoke` copies only the database before repathing, leaving the extracted
+generation pristine. An older drill's extraction whose DB was repathed remains usable
+as a media seed: every new generation always gets a fresh source DB/state and a new full
+validation. Seed layout is `manifest.json`, `data/otz.db`, and the manifest's media roots
+(e.g. `data/inbound`, `data/listings`). Seed and generation directory must share a filesystem.
+The original full archive stays unchanged; seed cleanup remains an explicit operator step.
+
+After the first full transfer has finished and the new helper is installed on the server:
+
+```bash
+.venv/bin/python scripts/offhost_backup.py run \
+  --ssh-target "$APP_SSH_TARGET" --ssh-key "$APP_SSH_KEY" \
+  --private-root /private/offhost-generations --seed-dir /private/seed-0011 \
+  --remote-root /opt/otz --remote-python /opt/otz/.venv/bin/python \
+  --remote-user otz --remote-published-dir /opt/otz/data/inbound
+```
+
+The optional `--remote-user otz` runs remote reads as the service account through
+noninteractive sudo, including rsync. The SSH identity must already have that existing
+permission; the tool never installs credentials or changes sudo configuration.
+A local flock and an SSH-held remote flock prevent overlapping generation jobs; future
+full archives from the updated helper use the same source lock. A legacy full stream
+already running before this change has no such lock: finish it before enabling the job.
+These are backup locks, not scraper locks. Concurrent source changes fail hash validation;
+this is a consistent SQLite snapshot plus individually verified media, not a global
+filesystem point-in-time snapshot. Do not run concurrent media deletion. No source
+maintenance process is stopped automatically.
+
+A successful run stores `generations/<id>` and a separate `receipts/<id>.json`. It retains
+only the last two **accepted** generations, pruning an older one only after the new full
+restore PASS. Pending/failed generations are never accepted or used as the latest backup;
+they remain for inspection and explicit cleanup. A 20 GiB free-space floor is checked
+before work (`--min-free-gib` can raise it); an unexpectedly large delta can still fail,
+without deleting the last good copy. Default cadence is 24 hours since the last verified
+snapshot. Every successful daily generation gets the actual isolated catalog/card/photo
+restore drill; there is no weekly-only shortcut to the 36-hour gate.
+
+The receipt declares `backup_format: directory_generation`, `manifest_sha256` and
+`generation_manifest_sha256`; it does **not** fabricate an `archive_sha256`. Consumers must
+validate the declared format. `offhost_verified` is true only after the destination's full
+verification. `protected_recovery_verified` is deliberately false: configuration and
+Telegram sessions must be freshly backed up and checked separately in protected storage.
+Never silently inherit an old protected receipt or reset its verification timestamp.
+For session SQLite files use the online backup API, not a raw copy of a live WAL database.
+Only after that separate check may the operator combine the data/protected proofs and
+publish the current recovery receipt to the app's health state.
+
+Replace `run` with `launch-agent` using the same arguments to print a macOS LaunchAgent
+plist. It does not install/load a scheduler. The plist checks every six hours and at login,
+while the runner performs work only when the daily copy is due; it writes private logs
+under `--private-root/logs` (create that directory before loading the plist, or complete
+the first manual run). Root/operator installs the reviewed plist and verifies its first
+actual scheduled run. A Mac that is asleep/offline cannot satisfy a cloud-style backup
+SLA: missed/offline/old evidence remains a real overdue condition. Existing AC power
+awake settings do not guarantee battery, lid-closed or disconnected operation.
+
+Standalone strict verification, including a fresh application/photo restore:
+
+```bash
+.venv/bin/python scripts/recovery.py verify-directory /private/offhost-generations/generations/ID
+```
+
+`launch-agent` and fake-SSH test results are configuration/local proof only. F07 automatic
+acceptance still requires the scheduled run, fresh protected recovery proof, current
+health receipt and a read-back of the accepted generation at the real off-host location.

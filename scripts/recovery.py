@@ -4,6 +4,7 @@
 Never loads application settings during backup/verification. Explicit filesystem inputs
 are intentional: production credentials and Telegram sessions must not enter this archive.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -27,9 +28,19 @@ from urllib.parse import quote
 ROOT = Path(__file__).resolve().parents[1]
 FORMAT = 1
 KEY_TABLES = (
-    "alembic_version", "source_channels", "inbound_posts", "listings", "matches",
-    "published_posts", "site_listings", "leads", "subscriptions", "subscription_matches",
-    "site_events", "site_stats_daily", "daily_metrics",
+    "alembic_version",
+    "source_channels",
+    "inbound_posts",
+    "listings",
+    "matches",
+    "published_posts",
+    "site_listings",
+    "leads",
+    "subscriptions",
+    "subscription_matches",
+    "site_events",
+    "site_stats_daily",
+    "daily_metrics",
 )
 NONEMPTY_TABLES = ("listings", "inbound_posts", "matches", "site_listings")
 
@@ -60,6 +71,7 @@ def ro_db(path: Path) -> sqlite3.Connection:
 def schema_heads() -> list[str]:
     # ScriptDirectory reads migration declarations, not env.py or the production .env.
     from alembic.script import ScriptDirectory
+
     return sorted(ScriptDirectory(str(ROOT / "alembic")).get_heads())
 
 
@@ -68,59 +80,90 @@ def expected_tables() -> tuple[str, ...]:
     module = ast.parse((ROOT / "src/db/models.py").read_text())
     names = set(KEY_TABLES)
     for node in ast.walk(module):
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "__tablename__"
-            for target in node.targets
-        ) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+        if (
+            isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "__tablename__"
+                for target in node.targets
+            )
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
             names.add(node.value.value)
     return tuple(sorted(names))
 
 
 def database_manifest(path: Path, expected: list[str] | None = None) -> dict:
     with ro_db(path) as connection:
-        require(connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)],
-                "database integrity_check failed")
-        require(not connection.execute("PRAGMA foreign_key_check").fetchall(),
-                "database foreign_key_check failed")
-        tables = {row[0] for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
+        require(
+            connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)],
+            "database integrity_check failed",
+        )
+        require(
+            not connection.execute("PRAGMA foreign_key_check").fetchall(),
+            "database foreign_key_check failed",
+        )
+        tables = {
+            row[0]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
         required = expected_tables()
-        require(set(required) <= tables,
-                f"missing key tables: {sorted(set(required) - tables)}")
-        counts = {name: connection.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]
-                  for name in required}
-        require(all(counts[name] > 0 for name in NONEMPTY_TABLES),
-                "required service tables are empty")
-        revisions = sorted(row[0] for row in connection.execute(
-            "SELECT version_num FROM alembic_version"))
+        require(set(required) <= tables, f"missing key tables: {sorted(set(required) - tables)}")
+        counts = {
+            name: connection.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]
+            for name in required
+        }
+        require(
+            all(counts[name] > 0 for name in NONEMPTY_TABLES), "required service tables are empty"
+        )
+        revisions = sorted(
+            row[0] for row in connection.execute("SELECT version_num FROM alembic_version")
+        )
         require(revisions == sorted(expected or schema_heads()), "unexpected schema revision")
-        schema = list(connection.execute(
-            "SELECT type,name,tbl_name,sql FROM sqlite_master "
-            "WHERE sql IS NOT NULL ORDER BY type,name"))
-        return {"revisions": revisions, "table_counts": counts,
-                "schema_sha256": hashlib.sha256(json.dumps(schema).encode()).hexdigest()}
+        schema = list(
+            connection.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                "WHERE sql IS NOT NULL ORDER BY type,name"
+            )
+        )
+        return {
+            "revisions": revisions,
+            "table_counts": counts,
+            "schema_sha256": hashlib.sha256(json.dumps(schema).encode()).hexdigest(),
+        }
 
 
 def safe_relative(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
-    require(bool(value) and not path.is_absolute() and ".." not in path.parts
-            and path.as_posix() == value, "unsafe archive member path")
+    require(
+        bool(value)
+        and not path.is_absolute()
+        and ".." not in path.parts
+        and path.as_posix() == value,
+        "unsafe archive member path",
+    )
     return path
 
 
 def private_dir(path: Path) -> None:
     if path.exists():
         require(path.is_dir() and not path.is_symlink(), "output must be a real directory")
-        require(stat.S_IMODE(path.stat().st_mode) & 0o077 == 0,
-                "backup output directory must have mode 0700")
+        require(
+            stat.S_IMODE(path.stat().st_mode) & 0o077 == 0,
+            "backup output directory must have mode 0700",
+        )
     else:
         path.mkdir(parents=True, mode=0o700)
 
 
 def sensitive(path: Path) -> bool:
-    return any(part == ".env" or part.startswith(".env.") or ".session" in part
-               or part.lower() in {"cookies.json", "storage_state.json"}
-               for part in path.parts)
+    return any(
+        part == ".env"
+        or part.startswith(".env.")
+        or ".session" in part
+        or part.lower() in {"cookies.json", "storage_state.json"}
+        for part in path.parts
+    )
 
 
 def files_below(root: Path) -> list[Path]:
@@ -128,8 +171,10 @@ def files_below(root: Path) -> list[Path]:
     paths = []
     for path in sorted(root.rglob("*")):
         require(not path.is_symlink(), "symlinks are not allowed in recovery inputs")
-        require(not sensitive(path.relative_to(root)),
-                "credential/session-like file in data inputs; use protected recovery storage")
+        require(
+            not sensitive(path.relative_to(root)),
+            "credential/session-like file in data inputs; use protected recovery storage",
+        )
         if path.is_file():
             paths.append(path)
         else:
@@ -160,8 +205,10 @@ def check_media_references(db: Path, manifest: dict, entries: dict) -> int:
             require(isinstance(photos, list), "invalid inbound photo_paths")
             for stored in photos:
                 require(isinstance(stored, str) and stored, "invalid inbound photo reference")
-                require(resolve_media(stored, manifest) in entries,
-                        "missing media referenced by the database")
+                require(
+                    resolve_media(stored, manifest) in entries,
+                    "missing media referenced by the database",
+                )
                 count += 1
     require(count > 0, "no database photo references in service backup")
     return count
@@ -181,18 +228,40 @@ class HashingReader:
 
 
 def create_backup(args: argparse.Namespace) -> dict:
+    # Coordinate future full archives with the off-host generation runner. The first
+    # already-running legacy stream predates this lock and must finish before scheduling.
+    import fcntl
+
+    folder = args.db.resolve().parent / "backups"
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (folder / "offhost.lock").open("a+") as lock:
+        os.chmod(lock.name, 0o600)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RecoveryError("another backup holds the source lock") from None
+        return _create_backup(args)
+
+
+def _create_backup(args: argparse.Namespace) -> dict:
     output = args.output_dir.resolve() if args.output_dir else None
     if output:
         private_dir(output)
     require(not args.stream or not sys.stdout.isatty(), "binary backup stream needs redirection")
     source_db = args.db.resolve()
     require(source_db.is_file(), "source database does not exist")
-    roots = {"state": args.state_dir.resolve(), "inbound": args.inbound_dir.resolve(),
-             "listings": args.listings_dir.resolve(), "published": args.published_dir.resolve()}
+    roots = {
+        "state": args.state_dir.resolve(),
+        "inbound": args.inbound_dir.resolve(),
+        "listings": args.listings_dir.resolve(),
+        "published": args.published_dir.resolve(),
+    }
     components, unique_roots = {}, {}
     for name, path in roots.items():
-        require(not output or not output.is_relative_to(path),
-                "backup output cannot be inside an input tree")
+        require(
+            not output or not output.is_relative_to(path),
+            "backup output cannot be inside an input tree",
+        )
         archive = unique_roots.setdefault(path, f"data/{name}")
         components[name] = {"source": str(path), "archive": archive}
     now = datetime.now(UTC)
@@ -208,12 +277,18 @@ def create_backup(args: argparse.Namespace) -> dict:
             destination.execute("PRAGMA journal_mode=DELETE")
         os.chmod(db, 0o600)
         database = database_manifest(db, args.expected_schema)
-        manifest = {"format": FORMAT, "created_at": now.isoformat(),
-                    "source_project_root": str(args.project_root.resolve()),
-                    "database": database, "components": components, "files": {},
-                    "protected_recovery": {
-                        "config_and_sessions": "external_protected_copy_required",
-                        "offhost_copy": "operator_verification_required"}}
+        manifest = {
+            "format": FORMAT,
+            "created_at": now.isoformat(),
+            "source_project_root": str(args.project_root.resolve()),
+            "database": database,
+            "components": components,
+            "files": {},
+            "protected_recovery": {
+                "config_and_sessions": "external_protected_copy_required",
+                "offhost_copy": "operator_verification_required",
+            },
+        }
         inputs = {"data/otz.db": db}
         for path, archive in unique_roots.items():
             for item in files_below(path):
@@ -226,11 +301,16 @@ def create_backup(args: argparse.Namespace) -> dict:
         manifest["photo_references"] = check_media_references(db, manifest, inputs)
         for role in ("inbound", "listings", "published"):
             archive = components[role]["archive"]
-            require(any(name.startswith(archive + "/") for name in inputs),
-                    f"required {role} media tree is empty")
+            require(
+                any(name.startswith(archive + "/") for name in inputs),
+                f"required {role} media tree is empty",
+            )
         partial = staging / name
-        tar_options = ({"fileobj": sys.stdout.buffer, "mode": "w|gz"} if args.stream
-                       else {"name": partial, "mode": "w:gz"})
+        tar_options = (
+            {"fileobj": sys.stdout.buffer, "mode": "w|gz"}
+            if args.stream
+            else {"name": partial, "mode": "w:gz"}
+        )
         with tarfile.open(**tar_options) as tar:
             for relative, path in sorted(inputs.items()):
                 before = path.stat()
@@ -240,11 +320,15 @@ def create_backup(args: argparse.Namespace) -> dict:
                     reader = HashingReader(handle)
                     tar.addfile(info, reader)
                 after = path.stat()
-                require((before.st_size, before.st_mtime_ns, before.st_ino) ==
-                        (after.st_size, after.st_mtime_ns, after.st_ino),
-                        "input changed while being archived; retry backup")
+                require(
+                    (before.st_size, before.st_mtime_ns, before.st_ino)
+                    == (after.st_size, after.st_mtime_ns, after.st_ino),
+                    "input changed while being archived; retry backup",
+                )
                 manifest["files"][relative] = {
-                    "size": after.st_size, "sha256": reader.hasher.hexdigest()}
+                    "size": after.st_size,
+                    "sha256": reader.hasher.hexdigest(),
+                }
             payload = json.dumps(manifest, indent=2, sort_keys=True).encode()
             info = tarfile.TarInfo("manifest.json")
             info.size, info.mode = len(payload), 0o600
@@ -255,16 +339,21 @@ def create_backup(args: argparse.Namespace) -> dict:
             with tempfile.TemporaryDirectory(prefix="verify-", dir=staging) as extracted:
                 extract_verify(partial, Path(extracted), args.max_age_hours, args.expected_schema)
             os.replace(partial, target)
-    return {"result": "stream_created_verify_destination" if args.stream else "backup_created",
-            "archive": "stdout" if args.stream else str(target),
-            "sha256": None if args.stream else digest(target),
-            "created_at": manifest["created_at"], "database": database,
-            "files": len(manifest["files"]), "photo_references": manifest["photo_references"],
-            "protected_recovery": manifest["protected_recovery"]}
+    return {
+        "result": "stream_created_verify_destination" if args.stream else "backup_created",
+        "archive": "stdout" if args.stream else str(target),
+        "sha256": None if args.stream else digest(target),
+        "created_at": manifest["created_at"],
+        "database": database,
+        "files": len(manifest["files"]),
+        "photo_references": manifest["photo_references"],
+        "protected_recovery": manifest["protected_recovery"],
+    }
 
 
-def extract_verify(archive: Path, destination: Path, max_age_hours: float,
-                   expected_schema: list[str] | None = None) -> dict:
+def extract_verify(
+    archive: Path, destination: Path, max_age_hours: float, expected_schema: list[str] | None = None
+) -> dict:
     require(max_age_hours > 0, "max age must be positive")
     with tarfile.open(archive, "r:gz") as tar:
         members = tar.getmembers()
@@ -282,10 +371,14 @@ def extract_verify(archive: Path, destination: Path, max_age_hours: float,
         require(created.tzinfo is not None, "backup timestamp has no timezone")
         age = (datetime.now(UTC) - created).total_seconds() / 3600
         require(-0.1 <= age <= max_age_hours, "backup is stale or dated in the future")
-        require(set(manifest["files"]) == set(names) - {"manifest.json"},
-                "archive inventory does not match manifest")
-        require(set(manifest["components"]) == {"state", "inbound", "listings", "published"},
-                "backup component declaration is incomplete")
+        require(
+            set(manifest["files"]) == set(names) - {"manifest.json"},
+            "archive inventory does not match manifest",
+        )
+        require(
+            set(manifest["components"]) == {"state", "inbound", "listings", "published"},
+            "backup component declaration is incomplete",
+        )
         for component in manifest["components"].values():
             safe_relative(component["archive"])
         # No tar extraction helpers: only regular, validated paths created privately.
@@ -297,8 +390,14 @@ def extract_verify(archive: Path, destination: Path, max_age_hours: float,
                 shutil.copyfileobj(tar.extractfile(member), handle)
             if member.name != "manifest.json":
                 info = manifest["files"][member.name]
-                require(target.stat().st_size == info["size"] and digest(target) == info["sha256"],
-                        "restored file checksum/size differs from manifest")
+                require(
+                    target.stat().st_size == info["size"] and digest(target) == info["sha256"],
+                    "restored file checksum/size differs from manifest",
+                )
+    return validate_restored(destination, manifest, expected_schema)
+
+
+def validate_restored(destination: Path, manifest: dict, expected_schema=None) -> dict:
     db = destination / "data/otz.db"
     require(db.is_file(), "backup database is missing")
     actual = database_manifest(db, expected_schema)
@@ -315,18 +414,29 @@ def extract_verify(archive: Path, destination: Path, max_age_hours: float,
         published = manifest["components"]["published"]["archive"]
         for original, variants in json.loads(photo_manifest.read_text()).items():
             safe_relative(original)
-            require(f"{published}/{original}" in manifest["files"],
-                    "photo manifest original is missing")
+            require(
+                f"{published}/{original}" in manifest["files"], "photo manifest original is missing"
+            )
             for kind in ("card", "detail"):
                 if variants.get(kind):
                     relative = variants[kind]
                     safe_relative(relative)
-                    require(f"{published}/{relative}" in manifest["files"],
-                            "photo manifest derivative is missing")
+                    require(
+                        f"{published}/{relative}" in manifest["files"],
+                        "photo manifest derivative is missing",
+                    )
     return manifest
 
 
 def application_smoke(restored: Path) -> dict:
+    # Keep a retained generation immutable, including the database during app startup.
+    with tempfile.TemporaryDirectory(prefix="otz-smoke-db-") as temporary:
+        db = Path(temporary) / "otz.db"
+        shutil.copy2(restored / "data/otz.db", db)
+        return _application_smoke(restored, db)
+
+
+def _application_smoke(restored: Path, db: Path) -> dict:
     """Executed only in a dedicated process. Imports cannot read production credentials."""
     os.environ.clear()
     import socket
@@ -340,21 +450,26 @@ def application_smoke(restored: Path) -> dict:
     import src.config as config
 
     manifest = json.loads((restored / "manifest.json").read_text())
-    db = restored / "data/otz.db"
     # Adapt absolute source media paths in the THROWAWAY database only.
     with sqlite3.connect(db) as connection:
         posts = connection.execute("SELECT id,photo_paths FROM inbound_posts").fetchall()
         for post_id, raw in posts:
             paths = [str(restored / resolve_media(p, manifest)) for p in json.loads(raw or "[]")]
-            connection.execute("UPDATE inbound_posts SET photo_paths=? WHERE id=?",
-                               (json.dumps(paths), post_id))
+            connection.execute(
+                "UPDATE inbound_posts SET photo_paths=? WHERE id=?", (json.dumps(paths), post_id)
+            )
     settings = config.Settings(
-        _env_file=None, database_url=f"sqlite+aiosqlite:///{db}", data_dir=restored / "data",
+        _env_file=None,
+        database_url=f"sqlite+aiosqlite:///{db}",
+        data_dir=restored / "data",
         inbound_photos_dir=restored / manifest["components"]["inbound"]["archive"],
         listings_photos_dir=restored / manifest["components"]["listings"]["archive"],
         site_photos_root=restored / manifest["components"]["published"]["archive"],
-        site_analytics_enabled=False, site_analytics_salt="", tg_bot_token="",
-        tg_bot_recipients="", site_subscription_telegram_bot_token="",
+        site_analytics_enabled=False,
+        site_analytics_salt="",
+        tg_bot_token="",
+        tg_bot_recipients="",
+        site_subscription_telegram_bot_token="",
     )
     config.get_settings = lambda: settings
     import asyncio
@@ -366,14 +481,19 @@ def application_smoke(restored: Path) -> dict:
     from src.site.app import app
     from src.site.db import dispose_engines
 
-    app.mount("/photos", StaticFiles(directory=str(settings.site_photos_root)),
-              name="restore-photos")
+    app.mount(
+        "/photos", StaticFiles(directory=str(settings.site_photos_root)), name="restore-photos"
+    )
 
     async def check():
         try:
-            async with app.router.lifespan_context(app), httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=app), base_url="http://restore.invalid",
-            ) as client:
+            async with (
+                app.router.lifespan_context(app),
+                httpx.AsyncClient(
+                    transport=httpx.ASGITransport(app=app),
+                    base_url="http://restore.invalid",
+                ) as client,
+            ):
                 for route in ("/healthz", "/catalog"):
                     response = await client.get(route)
                     require(response.status_code == 200, f"restored {route} failed")
@@ -387,62 +507,231 @@ def application_smoke(restored: Path) -> dict:
                 require(photo.status_code == 200 and photo.content, "restored photo cannot open")
                 with Image.open(io.BytesIO(photo.content)) as decoded:
                     decoded.verify()
-                return {"catalog": 200, "apartment": 200, "photo": 200,
-                        "photo_decoded": True, "network": "disabled"}
+                return {
+                    "catalog": 200,
+                    "apartment": 200,
+                    "photo": 200,
+                    "photo_decoded": True,
+                    "network": "disabled",
+                }
         finally:
             await dispose_engines()
 
     return asyncio.run(check())
 
 
+def verify_directory(destination: Path, max_age_hours=36, expected_schema=None) -> dict:
+    require(max_age_hours > 0, "max age must be positive")
+    require(destination.is_dir() and not destination.is_symlink(), "invalid restore directory")
+    manifest_file = destination / "manifest.json"
+    require(manifest_file.stat().st_size < 100 * 1024 * 1024, "oversized manifest")
+    manifest = json.loads(manifest_file.read_text())
+    require(manifest["format"] == FORMAT, "unsupported backup format")
+    created = datetime.fromisoformat(manifest["created_at"])
+    require(created.tzinfo is not None, "backup timestamp has no timezone")
+    age = (datetime.now(UTC) - created).total_seconds() / 3600
+    require(-0.1 <= age <= max_age_hours, "backup is stale or dated in the future")
+    require(
+        set(manifest["components"]) == {"state", "inbound", "listings", "published"},
+        "backup component declaration is incomplete",
+    )
+    for component in manifest["components"].values():
+        safe_relative(component["archive"])
+    actual = {item.relative_to(destination).as_posix() for item in files_below(destination)}
+    require(actual == set(manifest["files"]) | {"manifest.json"}, "generation inventory differs")
+    for relative, info in manifest["files"].items():
+        safe_relative(relative)
+        path = destination / relative
+        require(
+            path.stat().st_size == info["size"] and digest(path) == info["sha256"],
+            "restored file checksum/size differs from manifest",
+        )
+    return validate_restored(destination, manifest, expected_schema)
+
+
+def verify_application(restored: Path, manifest: dict) -> dict:
+    process = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), "_smoke", str(restored)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    require(
+        process.returncode == 0,
+        "isolated application/photo smoke failed; " + process.stderr[-1500:],
+    )
+    smoke = json.loads(process.stdout)
+    return {
+        "result": "data_restore_verified",
+        "created_at": manifest["created_at"],
+        "database": manifest["database"],
+        "files": len(manifest["files"]),
+        "photo_references": manifest["photo_references"],
+        "application": smoke,
+        "generation_manifest_sha256": digest(restored / "manifest.json"),
+        "protected_recovery": manifest["protected_recovery"],
+    }
+
+
 def verify_backup(args: argparse.Namespace) -> dict:
+    retained = getattr(args, "restore_dir", None)
+    if retained is not None:
+        require(not retained.exists(), "restore directory already exists")
+        private_dir(retained)
+        manifest = extract_verify(
+            args.archive.resolve(), retained, args.max_age_hours, args.expected_schema
+        )
+        return verify_application(retained, manifest)
     with tempfile.TemporaryDirectory(prefix="otz-restore-") as temp:
         restored = Path(temp)
-        manifest = extract_verify(args.archive.resolve(), restored, args.max_age_hours,
-                                  args.expected_schema)
-        process = subprocess.run([sys.executable, str(Path(__file__).resolve()),
-                                  "_smoke", str(restored)], capture_output=True, text=True,
-                                 timeout=120, check=False)
-        require(process.returncode == 0, "isolated application/photo smoke failed; "
-                + process.stderr[-1500:])
-        smoke = json.loads(process.stdout)
-    return {"result": "data_restore_verified", "created_at": manifest["created_at"],
-            "database": manifest["database"], "files": len(manifest["files"]),
-            "photo_references": manifest["photo_references"], "application": smoke,
-            "protected_recovery": manifest["protected_recovery"]}
+        manifest = extract_verify(
+            args.archive.resolve(), restored, args.max_age_hours, args.expected_schema
+        )
+        return verify_application(restored, manifest)
+
+
+def create_snapshot(args: argparse.Namespace) -> dict:
+    """Stage only online DB/state; hash all media for an exact off-host file transfer."""
+    output = args.output_dir.resolve()
+    require(not output.exists(), "snapshot staging already exists")
+    roots = {
+        "state": args.state_dir.resolve(),
+        "inbound": args.inbound_dir.resolve(),
+        "listings": args.listings_dir.resolve(),
+        "published": args.published_dir.resolve(),
+    }
+    for path in roots.values():
+        require(not output.is_relative_to(path), "snapshot output inside input tree")
+    private_dir(output)
+    (output / "data").mkdir(mode=0o700)
+    db = output / "data/otz.db"
+    with ro_db(args.db.resolve()) as source, sqlite3.connect(db) as destination:
+        source.backup(destination, pages=1024, sleep=0.1)
+        destination.execute("PRAGMA journal_mode=DELETE")
+    os.chmod(db, 0o600)
+    manifest = {
+        "format": FORMAT,
+        "created_at": datetime.now(UTC).isoformat(),
+        "source_project_root": str(args.project_root.resolve()),
+        "database": database_manifest(db, args.expected_schema),
+        "components": {},
+        "files": {},
+        "protected_recovery": {
+            "config_and_sessions": "external_protected_copy_required",
+            "offhost_copy": "operator_verification_required",
+        },
+    }
+    inputs = {"data/otz.db": db}
+    unique = {}
+    for name, root in roots.items():
+        archive = unique.setdefault(root, f"data/{name}")
+        manifest["components"][name] = {"source": str(root), "archive": archive}
+    for root, archive in unique.items():
+        for path in files_below(root):
+            inputs[f"{archive}/{path.relative_to(root).as_posix()}"] = path
+    photo_manifest = roots["published"].parent / "photo_manifest.json"
+    if photo_manifest.exists():
+        require(not photo_manifest.is_symlink(), "photo manifest symlink")
+        inputs["data/photo_manifest.json"] = photo_manifest
+    manifest["photo_references"] = check_media_references(db, manifest, inputs)
+    for role in ("inbound", "listings", "published"):
+        prefix = manifest["components"][role]["archive"] + "/"
+        require(any(name.startswith(prefix) for name in inputs), f"required {role} media empty")
+    state_prefix = manifest["components"]["state"]["archive"] + "/"
+    for relative, path in inputs.items():
+        before = path.stat()
+        if relative.startswith(state_prefix) or relative == "data/photo_manifest.json":
+            copied = output / relative
+            copied.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(path, copied)
+            os.chmod(copied, 0o600)
+            checksum = digest(copied)
+        else:
+            checksum = digest(path)
+        after = path.stat()
+        require(
+            (before.st_size, before.st_mtime_ns, before.st_ino)
+            == (after.st_size, after.st_mtime_ns, after.st_ino),
+            "input changed during snapshot",
+        )
+        manifest["files"][relative] = {"size": after.st_size, "sha256": checksum}
+    (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True))
+    os.chmod(output / "manifest.json", 0o600)
+    return {"result": "snapshot_staged_not_verified", "directory": str(output)}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     backup = commands.add_parser("backup")
-    for option in ("db", "state-dir", "inbound-dir", "listings-dir", "published-dir",
-                   "project-root"):
+    for option in (
+        "db",
+        "state-dir",
+        "inbound-dir",
+        "listings-dir",
+        "published-dir",
+        "project-root",
+    ):
         backup.add_argument(f"--{option}", type=Path, required=True)
     output = backup.add_mutually_exclusive_group(required=True)
     output.add_argument("--output-dir", type=Path)
-    output.add_argument("--stream", action="store_true",
-                        help="write private tar stream to stdout; verify at destination")
+    output.add_argument(
+        "--stream",
+        action="store_true",
+        help="write private tar stream to stdout; verify at destination",
+    )
     verify = commands.add_parser("verify")
     verify.add_argument("archive", type=Path)
-    for command in (backup, verify):
+    verify.add_argument(
+        "--restore-dir", type=Path, help="retain pristine extracted seed; must not exist"
+    )
+    directory = commands.add_parser("verify-directory")
+    directory.add_argument("directory", type=Path)
+    snapshot = commands.add_parser("snapshot")
+    for option in (
+        "db",
+        "state-dir",
+        "inbound-dir",
+        "listings-dir",
+        "published-dir",
+        "project-root",
+        "output-dir",
+    ):
+        snapshot.add_argument("--" + option, type=Path, required=True)
+    for command in (backup, verify, directory, snapshot):
         command.add_argument("--max-age-hours", type=float, default=36)
-        command.add_argument("--expected-schema", action="append",
-                             help="exact approved migration revision (default: checkout head)")
+        command.add_argument(
+            "--expected-schema",
+            action="append",
+            help="exact approved migration revision (default: checkout head)",
+        )
     smoke = commands.add_parser("_smoke", help=argparse.SUPPRESS)
     smoke.add_argument("restored", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "backup":
             result = create_backup(args)
+        elif args.command == "snapshot":
+            result = create_snapshot(args)
+        elif args.command == "verify-directory":
+            manifest = verify_directory(args.directory, args.max_age_hours, args.expected_schema)
+            result = verify_application(args.directory, manifest)
         elif args.command == "verify":
             result = verify_backup(args)
         else:
             result = application_smoke(args.restored)
         stream = sys.stderr if getattr(args, "stream", False) else sys.stdout
         print(json.dumps(result, sort_keys=True), file=stream)
-    except (RecoveryError, OSError, ValueError, KeyError, sqlite3.Error,
-            tarfile.TarError, subprocess.TimeoutExpired) as error:
+    except (
+        RecoveryError,
+        OSError,
+        ValueError,
+        KeyError,
+        sqlite3.Error,
+        tarfile.TarError,
+        subprocess.TimeoutExpired,
+    ) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         raise SystemExit(1) from None
 
