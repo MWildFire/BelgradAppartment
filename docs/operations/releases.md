@@ -87,6 +87,7 @@ Activation currently supports `/opt/otz` and its canonical systemd topology only
    It starts the prior app services and waits up to 90 seconds total for HTTP 200 from
    both local `/healthz` and database-backed `/readyz`. Each request has a maximum
    three-second budget within that deadline; errors and redirects never count as ready.
+   Curl's default configuration is disabled so `.curlrc` cannot silently enable redirects.
    It then checks exact runtime hashes,
    saves `/opt/otz/release.json`, then resumes prior timers. Chromium must launch and close
    under the actual `otz` account before any app service is stopped.

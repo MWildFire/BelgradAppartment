@@ -31,6 +31,7 @@ def test_startup_slower_than_old_six_second_window_is_actually_verified(monkeypa
 
     def request(command, **kwargs):
         attempts.append(clock.now)
+        assert command[:2] == ["curl", "--disable"]
         assert kwargs["capture"] and kwargs["timeout"] <= 3
         assert "--max-time" in command and "--connect-timeout" in command
         if clock.now < 8:
@@ -125,6 +126,41 @@ def test_readyz_shares_one_deadline_even_when_healthz_always_succeeds(monkeypatc
             "http://127.0.0.1:8001/healthz", "http://127.0.0.1:8001/readyz"
         )
     assert clock.now == 90 and any(url.endswith("/readyz") for url in urls)
+
+
+def test_ambient_curlrc_cannot_redirect_unready_database_to_healthz(tmp_path, monkeypatch):
+    (tmp_path / ".curlrc").write_text("location\n")
+    monkeypatch.setenv("CURL_HOME", str(tmp_path))
+    requested = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requested.append(self.path)
+            self.send_response(302 if self.path == "/readyz" else 200)
+            if self.path == "/readyz":
+                self.send_header("Location", "/healthz")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        with pytest.raises(release.ReleaseError, match="HTTP 200"):
+            release.wait_for_http_health(
+                f"http://127.0.0.1:{server.server_port}/healthz",
+                f"http://127.0.0.1:{server.server_port}/readyz",
+                timeout=0.3,
+                poll_interval=0.01,
+                request_timeout=0.1,
+            )
+        assert "/readyz" in requested
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=1)
 
 
 def test_old_schema_backup_cannot_unlock_retry_after_additive_migration(tmp_path, monkeypatch):

@@ -85,7 +85,7 @@ def wait_for_http_health(*urls, timeout=90, poll_interval=1, request_timeout=3):
             try:
                 status = run(
                     [
-                        "curl", "--silent", "--noproxy", "*", "--output", "/dev/null",
+                        "curl", "--disable", "--silent", "--noproxy", "*", "--output", "/dev/null",
                         "--write-out", "%{http_code}",
                         "--connect-timeout", str(min(2, max(0.001, budget))),
                         "--max-time", str(max(0.001, budget)), url,
