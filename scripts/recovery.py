@@ -7,6 +7,7 @@ are intentional: production credentials and Telegram sessions must not enter thi
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import io
 import json
@@ -62,6 +63,19 @@ def schema_heads() -> list[str]:
     return sorted(ScriptDirectory(str(ROOT / "alembic")).get_heads())
 
 
+def expected_tables() -> tuple[str, ...]:
+    """Require newly added delivery/run tables too, without importing application settings."""
+    module = ast.parse((ROOT / "src/db/models.py").read_text())
+    names = set(KEY_TABLES)
+    for node in ast.walk(module):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "__tablename__"
+            for target in node.targets
+        ) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            names.add(node.value.value)
+    return tuple(sorted(names))
+
+
 def database_manifest(path: Path, expected: list[str] | None = None) -> dict:
     with ro_db(path) as connection:
         require(connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)],
@@ -70,10 +84,11 @@ def database_manifest(path: Path, expected: list[str] | None = None) -> dict:
                 "database foreign_key_check failed")
         tables = {row[0] for row in connection.execute(
             "SELECT name FROM sqlite_master WHERE type='table'")}
-        require(set(KEY_TABLES) <= tables,
-                f"missing key tables: {sorted(set(KEY_TABLES) - tables)}")
+        required = expected_tables()
+        require(set(required) <= tables,
+                f"missing key tables: {sorted(set(required) - tables)}")
         counts = {name: connection.execute(f'SELECT count(*) FROM "{name}"').fetchone()[0]
-                  for name in KEY_TABLES}
+                  for name in required}
         require(all(counts[name] > 0 for name in NONEMPTY_TABLES),
                 "required service tables are empty")
         revisions = sorted(row[0] for row in connection.execute(

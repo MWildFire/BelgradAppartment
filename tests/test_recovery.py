@@ -218,3 +218,14 @@ def test_archive_traversal_rejected_before_any_extraction(source, tmp_path):
     with pytest.raises(recovery.RecoveryError, match="unsafe archive member"):
         extract(archive, tmp_path)
     assert not (tmp_path / "outside").exists()
+
+
+def test_restore_requires_new_schema_tables_as_models_evolve(source, tmp_path, monkeypatch):
+    revisions = recovery.schema_heads()
+    checkout = tmp_path / "new-checkout"
+    models = checkout / "src/db/models.py"
+    models.parent.mkdir(parents=True)
+    models.write_text('class NewOutbox:\n    __tablename__ = "new_delivery_outbox"\n')
+    monkeypatch.setattr(recovery, "ROOT", checkout)
+    with pytest.raises(recovery.RecoveryError, match="new_delivery_outbox"):
+        recovery.database_manifest(source.db, revisions)
