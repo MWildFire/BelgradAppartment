@@ -107,16 +107,12 @@ async def test_pagination(site_db: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rented_hidden_by_default(site_db: str) -> None:
-    # C1 decision: default catalog HIDES rented (show_rented=False is the seeded default).
-    # listing 3 is rented (is_active=False) -> excluded from the default view.
+async def test_authorized_dead_card_remains_visible_with_truthful_status(site_db: str) -> None:
     items, total = await _list(site_db)
-    ids = {v.id for v in items}
-    assert 3 not in ids  # rented, hidden by default
-    assert ids == {1, 2}
-    assert total == 2
-    # the surviving rows expose is_rented for the badge; none of them is rented.
-    assert all(v.is_rented is False for v in items)
+    assert {v.id for v in items} == {1, 2, 3}
+    assert total == 3
+    assert next(v for v in items if v.id == 3).availability == "dead"
+    assert next(v for v in items if v.id == 3).is_rented is True
 
 
 @pytest.mark.asyncio
@@ -203,9 +199,9 @@ async def test_map_points_public_with_coords_only(site_db: str) -> None:
     points = await rm.map_points(database_url=site_db)
     ids = {p["id"] for p in points}
     # listing 2 has no coords -> excluded; listing 4 private -> excluded.
-    assert ids == {1}  # rented apartments are excluded consistently with the catalog.
+    assert ids == {1, 3}  # authorized cards retained; availability is informational.
     p = next(x for x in points if x["id"] == 1)
-    assert set(p.keys()) == {"id", "lat", "lon", "price_eur", "rooms", "district", "for_vnj", "url"}
+    assert set(p.keys()) == {"id", "lat", "lon", "price_eur", "rooms", "district", "for_vnj", "url", "availability"}
     assert p["url"].endswith("/apt/1")
     assert "http" not in p["url"] or p["url"].startswith("http")  # url may be relative
 

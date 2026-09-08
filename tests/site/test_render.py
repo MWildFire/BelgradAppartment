@@ -344,21 +344,11 @@ def test_filters_partial_prominent_toggles() -> None:
 # --- C1: «показать снятые» toggle + photo fallback ---
 
 
-def test_filters_partial_has_show_rented_toggle() -> None:
-    """C1: the filter rail carries a «показать снятые» toggle bound to show_rented; unchecked
-    by default (rented hidden), checked when applied.show_rented is True (deep-link round-trip)."""
+def test_filters_do_not_offer_a_visibility_toggle_that_overrides_publication_policy() -> None:
     off = _render("partials/_filters.html", facets=_FACETS, applied=_APPLIED)
-    assert 'name="show_rented"' in off
-    assert "снятые" in off  # «показать снятые» label
-    # default applied.show_rented is False -> the checkbox is not pre-checked
-    assert "checked" not in off.split('name="show_rented"')[0].rsplit("<", 1)[-1]
-
-    applied_on = {**_APPLIED, "show_rented": True}
-    on = _render("partials/_filters.html", facets=_FACETS, applied=applied_on)
-    # round-trips the active state so a deep-link with show_rented=1 keeps the toggle on
-    assert re.search(r'name="show_rented"[^>]*\bchecked', on) or re.search(
-        r'\bchecked[^>]*name="show_rented"', on
-    )
+    on = _render("partials/_filters.html", facets=_FACETS, applied={**_APPLIED, "show_rented": True})
+    assert 'name="show_rented"' not in off
+    assert 'name="show_rented"' not in on
 
 
 def test_card_photo_fallback_is_external_not_inline() -> None:

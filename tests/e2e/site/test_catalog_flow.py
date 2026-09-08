@@ -41,7 +41,7 @@ def test_catalog_flow(page, site_server: str) -> None:
     # 2) Catalog: 2 default-visible cards (private id=4 excluded; rented id=3 hidden by C1 default).
     page.goto(f"{base}/catalog", wait_until="networkidle")
     cards = page.locator("#results .card-l")
-    assert cards.count() == 2, f"expected 2 default-visible cards, got {cards.count()}"
+    assert cards.count() == 3, f"expected 3 authorized cards, got {cards.count()}"
     _assert_no_forbidden_urls(page.content())
     page.screenshot(path=str(ARTIFACTS_DIR / "catalog.png"), full_page=True)
 
@@ -78,11 +78,11 @@ def test_catalog_flow(page, site_server: str) -> None:
 
 
 @requires_e2e
-def test_rented_hidden_by_default_visible_via_toggle(page, site_server: str) -> None:
+def test_retained_dead_card_is_annotated_and_legacy_query_is_compatible(page, site_server: str) -> None:
     """C1: «снято» is hidden by default; the 'show rented' toggle brings it back, muted (social proof)."""
     # Default catalog hides rented (id=3) — prod-confirmed C1 behavior.
     page.goto(f"{site_server}/catalog", wait_until="networkidle")
-    assert page.locator("#results .card-l.is-rented").count() == 0
+    assert page.locator("#results .card-l.is-rented").count() == 1
     # With show_rented=1 the rented card reappears: muted (.is-rented) + badged.
     page.goto(f"{site_server}/catalog?show_rented=1", wait_until="networkidle")
     assert page.locator("#results .card-l.is-rented").count() == 1

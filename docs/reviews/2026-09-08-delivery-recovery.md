@@ -11,3 +11,6 @@ Subscription discovery persists all matching items before transport and before t
 Queue delivery rechecks current public authorization and criteria. Unpublished/unavailable candidates remain unsent, do not consume the digest cap, and can become eligible again when the underlying public apartment recovers. No job performs historical mass repair.
 
 Photo GET/HEAD authorization follows raw public overlays, including permitted secondary and manually retained direct cards. Caddy must forward `/photos/...` unchanged to the app, with no-store responses. Existing immutable browser/CDN copies cannot be recalled; any prior edge cache needs separate purge/expiry accounting at rollout.
+
+
+Public visibility and availability are separate facts. Catalogue, home, map, sitemap and direct URLs retain authorized public overlays until the shared publication policy changes `is_public`. `active`, `unknown` and `dead` are displayed truthfully: unknown reads «Актуальность уточняется», and dead carries the existing снято badge. Pin/warn-only/cap cannot be bypassed by a read-model filter. The old `show_rented` query remains accepted as a no-op; its former toggle is removed. Recommendations (subscriptions and similar apartments) skip confirmed dead candidates, while retaining their unsent queue rows for possible reactivation.

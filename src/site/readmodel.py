@@ -11,7 +11,8 @@ correct and simpler than SQL on raw strings (the curated public set is small).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections import Counter
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from sqlalchemy import select
@@ -21,7 +22,7 @@ from src.db.models import InboundPost, Listing, Match, PublishedPost, SiteListin
 from src.site import db as sitedb
 from src.site.availability import (
     ApartmentKey,
-    apartment_is_retained,
+    apartment_availability,
     apartment_key,
     source_presence,
 )
@@ -47,6 +48,7 @@ class SiteListingView:
     note: str | None
     channel_url: str
     posted_at: str
+    availability: str = "active"
 
 
 @dataclass
@@ -57,7 +59,7 @@ class Filters:
     price_min: int | None = None
     price_max: int | None = None
     rooms: list[str] = field(default_factory=list)
-    show_rented: bool = False  # C1: default view HIDES rented; «показать снятые» includes them
+    show_rented: bool = False  # Legacy catalog query; recommendation predicate still excludes DEAD.
 
 
 @dataclass
@@ -102,7 +104,7 @@ def _iso(dt: datetime | None) -> str:
 
 def _build_view(
     sl: SiteListing, listing: Listing, post: InboundPost | None, published_at: datetime | None,
-    *, available: bool,
+    *, availability: str,
 ) -> SiteListingView:
     settings = get_settings()
     photos = [public_photo_url(p) for p in (post.photo_paths if post else []) if p]
@@ -119,7 +121,8 @@ def _build_view(
         lon=listing.lon,
         for_vnj=sl.is_for_vnj,
         for_white_card=sl.is_for_white_card,
-        is_rented=not available,
+        is_rented=availability == "dead",
+        availability=availability,
         photos=photos,
         note=sl.note,
         channel_url=sl.channel_post_url or settings.site_channel_url,
@@ -161,10 +164,6 @@ async def _load_rows(
         group_ids = {listing.dup_group_id for _, listing, _, _ in public
                      if listing.dup_group_id is not None}
         statuses_by_group: dict[int, list[str]] = {}
-        pinned_apartments = {
-            apartment_key(listing.id, listing.dup_group_id)
-            for sl, listing, _, _ in public if sl.keep_on_site
-        }
         if group_ids:
             members = await s.execute(
                 select(Listing.dup_group_id, Listing.is_active, Listing.link_status,
@@ -186,7 +185,7 @@ async def _load_rows(
             key = apartment_key(listing.id, listing.dup_group_id)
             view = _build_view(
                 sl, listing, post, published_at,
-                available=apartment_is_retained(statuses, pinned=key in pinned_apartments),
+                availability=apartment_availability(statuses),
             )
             rows.append(_Row(
                 view=view,
@@ -247,7 +246,10 @@ def listing_matches_filters(view: SiteListingView, rooms_raw: float | None, f: F
 
 
 def _passes(row: _Row, f: Filters) -> bool:
-    return listing_matches_filters(row.view, row.rooms_raw, f)
+    # Only W1 publication policy can remove an authorized overlay. The legacy show_rented
+    # query remains accepted, but viewing retained public cards is distinct from recommending
+    # a dead apartment to a subscriber (which still uses the stricter shared predicate).
+    return listing_matches_filters(row.view, row.rooms_raw, replace(f, show_rented=True))
 
 
 def _sort_key(sort: str):  # type: ignore[no-untyped-def]
@@ -294,8 +296,8 @@ async def get_public(
 
 
 async def featured_one(*, database_url: str | None = None) -> SiteListingView | None:
-    """Newest featured available representative; otherwise newest available representative."""
-    rows = [r for r in await _load_rows(database_url) if not r.view.is_rented]
+    """Newest featured authorized representative, with its truthful availability badge."""
+    rows = await _load_rows(database_url)
     if not rows:
         return None
     rows.sort(key=lambda r: (r.is_featured, r.posted_dt), reverse=True)
@@ -369,7 +371,7 @@ async def map_points(*, database_url: str | None = None) -> list[dict[str, objec
     points: list[dict[str, object]] = []
     for r in rows:
         v = r.view
-        if v.is_rented or v.lat is None or v.lon is None:
+        if v.lat is None or v.lon is None:
             continue
         # ФУЗЗИ/D1 (T1-1, §M2): snap to the ~100m grid BEFORE serialization — exact building
         # coords must never leave the DB through /api/map.json (Wave-0 диагностика caught them
@@ -386,14 +388,15 @@ async def map_points(*, database_url: str | None = None) -> list[dict[str, objec
                 "district": v.district,
                 "for_vnj": v.for_vnj,
                 "url": f"/apt/{v.id}",
+                "availability": v.availability,
             }
         )
     return points
 
 
 async def public_ids(*, database_url: str | None = None) -> list[int]:
-    """Available public apartment representatives for the sitemap, matching the catalog."""
-    return [r.view.id for r in await _load_rows(database_url) if not r.view.is_rented]
+    """Authorized public apartment representatives for the sitemap, matching the catalog."""
+    return [r.view.id for r in await _load_rows(database_url)]
 
 
 async def public_selection_comparison(*, database_url: str) -> dict[str, object]:
@@ -404,30 +407,44 @@ async def public_selection_comparison(*, database_url: str) -> dict[str, object]
     """
     rows = await _load_rows(database_url, representatives_only=False)
     before = [r for r in rows if r.legacy_visible]
-    after = [r for r in _representatives(rows) if not r.view.is_rented]
+    after = _representatives(rows)
     before_groups = {r.apartment for r in before}
     after_groups = {r.apartment for r in after}
+
+    def reason(row: _Row) -> str:
+        if row.view.availability == "dead":
+            return "dead_retained_by_public_policy"
+        if row.view.availability == "unknown":
+            return "unknown_retained"
+        if not row.original_active:
+            return "active_sibling"
+        return "public_secondary" if not row.legacy_primary else "source_activity"
+
+    newly_visible = [
+        {"site_listing_id": r.view.id, "reason": reason(r)}
+        for r in after if r.apartment not in before_groups
+    ]
+    secondary_active = [r for r in rows if r.original_active and not r.legacy_primary
+                        and r.apartment not in before_groups]
     return {
         "no_db_writes": True,
         "no_telegram_sends": True,
         "before": {"cards": len(before), "unique_apartments": len(before_groups)},
         "after": {"cards": len(after), "unique_apartments": len(after_groups)},
-        "newly_visible": [
-            {"site_listing_id": r.view.id,
-             "reason": (
-                 "unknown_retained" if r.source_status == "INCONCLUSIVE"
-                 else "dead_but_pinned_or_live_sibling" if not r.original_active
-                 else "public_secondary" if not r.legacy_primary else "source_activity"
-             )}
-            for r in after if r.apartment not in before_groups
-        ],
+        "newly_visible": newly_visible,
+        "newly_visible_reasons": dict(Counter(item["reason"] for item in newly_visible)),
         "no_longer_visible_apartments": len(before_groups - after_groups),
         "representative_ids": [r.view.id for r in after],
         "public_direct_ids": sorted({r.view.id for r in rows}),
+        "active_secondary_cards": len(secondary_active),
+        "active_secondary_apartments": len({r.apartment for r in secondary_active}),
         "available_via_sibling_cards": sum(
-            not r.original_active and not r.view.is_rented for r in rows
+            not r.original_active and r.view.availability == "active" for r in rows
         ),
+        "unknown_retained_cards": sum(r.view.availability == "unknown" for r in rows),
+        "dead_retained_cards": sum(r.view.availability == "dead" for r in rows),
     }
+
 
 
 async def similar(

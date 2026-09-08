@@ -51,11 +51,14 @@
   function popupHtml(p) {
     // mini-card: price (mono) + district + link to the listing.
     var vnj = p.for_vnj ? '<span class="mp-vnj">ВНЖ</span>' : "";
+    var status = p.availability === "unknown" ? "Актуальность уточняется" :
+      (p.availability === "dead" ? "снято" : "");
     return (
       '<div class="map-pop">' +
       '<div class="map-pop-price mono">' + escapeHtml(priceLabel(p.price_eur)) + "</div>" +
       '<div class="map-pop-meta"><span>' + escapeHtml(p.rooms || "") + "</span>" +
       "<span>" + escapeHtml(p.district || "") + "</span>" + vnj + "</div>" +
+      (status ? '<div class="map-pop-meta">' + escapeHtml(status) + "</div>" : "") +
       '<a class="map-pop-link" href="' + escapeHtml(p.url) + '">Открыть квартиру →</a>' +
       "</div>"
     );

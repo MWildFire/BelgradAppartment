@@ -40,3 +40,13 @@ def apartment_is_retained(member_statuses: Iterable[str], *, pinned: bool = Fals
     """
     statuses = tuple(member_statuses)
     return pinned or not statuses or any(status != "DEAD" for status in statuses)
+
+
+def apartment_availability(member_statuses: Iterable[str]) -> str:
+    """Truthful informational state; publication authorization is decided separately."""
+    statuses = tuple(member_statuses)
+    if any(status == "ACTIVE" for status in statuses):
+        return "active"
+    if not statuses or any(status != "DEAD" for status in statuses):
+        return "unknown"
+    return "dead"

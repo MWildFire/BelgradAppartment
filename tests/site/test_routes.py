@@ -194,7 +194,7 @@ def test_index_renders_index_with_featured_and_stats(client):
     # C1: the homepage featured strip uses the default view, which hides rented — so 2 of the
     # 3 public listings surface (id3 is rented). The «active» stat counts the whole public
     # set (facets ignore the rented toggle), so it stays 3.
-    assert "featured=2" in r.text
+    assert "featured=3" in r.text
     assert "active=3" in r.text
 
 
@@ -239,8 +239,8 @@ def test_catalog_renders_catalog_full_page(client):
     r = client.get("/catalog")
     assert r.status_code == 200
     assert "TPL:catalog" in r.text
-    assert "items=2" in r.text
-    assert "total=2" in r.text
+    assert "items=3" in r.text
+    assert "total=3" in r.text
 
 
 def test_catalog_show_rented_includes_rented(client):
@@ -299,7 +299,7 @@ def test_map_json_only_public_with_coords(client):
     assert "points" in body
     # Only available public listing 1 has coords; 2 has no coords; 3 is rented; 4 private.
     ids = sorted(p["id"] for p in body["points"])
-    assert ids == [1]  # rented id=3 is excluded, matching the default catalog.
+    assert ids == [1, 3]  # public authorization retains the annotated dead card.
     for p in body["points"]:
         assert p["url"] == f"/apt/{p['id']}"
 
@@ -624,7 +624,7 @@ def test_sitemap_xml_is_valid_and_lists_static_and_public(client):
     # Available public representatives appear; rented id=3 and private id=4 do not.
     assert f"{base}/apt/1" in locs
     assert f"{base}/apt/2" in locs
-    assert f"{base}/apt/3" not in locs  # rented: its direct URL still exists
+    assert f"{base}/apt/3" in locs  # retained public overlay, with a dead status
     assert f"{base}/apt/4" not in locs  # site_listing 4 is is_public=False
 
 

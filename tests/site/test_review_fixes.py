@@ -28,7 +28,7 @@ STATIC = ROOT / "src" / "site" / "static"
 async def test_public_ids_lists_available_public_representatives(site_db: str) -> None:
     """The sitemap matches available public representatives, never a private overlay."""
     ids = await rm.public_ids(database_url=site_db)
-    assert set(ids) == {1, 2}  # id=3 is rented; id=4 is private.
+    assert set(ids) == {1, 2, 3}  # authorized dead id=3 retained; id=4 private.
     assert 4 not in ids
 
 
