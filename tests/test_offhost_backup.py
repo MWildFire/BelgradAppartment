@@ -18,6 +18,7 @@ import pytest
 
 from scripts import offhost_backup as job
 from scripts import recovery
+from tests.test_protected_recovery import protected_source as protected_fixture
 from tests.test_recovery import source as recovery_source
 
 
@@ -109,6 +110,139 @@ def environment(source, tmp_path, monkeypatch):
     monkeypatch.setattr(job, "remote", remote)
     monkeypatch.setattr(job, "run", rsync)
     return args
+
+
+def protected_environment(source, tmp_path, monkeypatch):
+    args = environment(source, tmp_path, monkeypatch)
+    secret = protected_fixture.__wrapped__(tmp_path, monkeypatch)
+    args.protected_env_file = secret.env_file
+    args.protected_caddy_file = secret.caddy_file
+    args.protected_session = secret.session
+    args.protected_remote_user = "root"
+    args.publish_health_receipt = False
+    data_remote = job.remote
+
+    def remote(remote_args, command):
+        if "snapshot" in command and str(command[1]).endswith("protected_recovery.py"):
+            assert remote_args.remote_user == "root"
+            secret.output_dir = Path(command[command.index("--output-dir") + 1])
+            secret.generation_id = command[command.index("--generation-id") + 1]
+            secret.data_manifest_sha256 = command[command.index("--data-manifest-sha256") + 1]
+            job.protected.snapshot(secret)
+        else:
+            data_remote(remote_args, command)
+
+    monkeypatch.setattr(job, "remote", remote)
+    return args
+
+
+def test_each_generation_gets_fresh_protected_config_and_wal_session_snapshot(
+    source, tmp_path, monkeypatch
+):
+    args = protected_environment(source, tmp_path, monkeypatch)
+    first = job.backup(args)
+    old = args.private_root / "protected" / first["generation_id"]
+    old_hash = recovery.digest(old / "config/env")
+    args.protected_env_file.write_text("TOKEN=new-fixture-secret\n")
+    session = Path(args.protected_session[0].partition("=")[2])
+    writer = sqlite3.connect(session)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("UPDATE sessions SET dc_id=9")
+    writer.commit()
+    second = job.backup(args)
+    current = args.private_root / "protected" / second["generation_id"]
+    assert (
+        second["protected_recovery_verified"]
+        and second["protected_proof"]["sessions_verified"] == 2
+    )
+    assert (
+        first["protected_proof"]["manifest_sha256"] != second["protected_proof"]["manifest_sha256"]
+    )
+    assert (
+        old_hash == recovery.digest(old / "config/env") != recovery.digest(current / "config/env")
+    )
+    with sqlite3.connect(current / "sessions/userbot.sqlite3") as db:
+        assert db.execute("SELECT dc_id FROM sessions").fetchone()[0] == 9
+    assert not any(
+        "config/env" in entry.relative_to(args.private_root / "generations").as_posix()
+        for entry in (args.private_root / "generations").rglob("*")
+    )
+    args.interval_hours = 24
+    assert job.backup(args)["result"] == "skipped_not_due"
+    writer.close()
+
+
+def test_failed_fresh_protected_snapshot_keeps_previous_pair_and_never_inherits_success(
+    source, tmp_path, monkeypatch
+):
+    args = protected_environment(source, tmp_path, monkeypatch)
+    first = job.backup(args)
+    args.protected_caddy_file.unlink()
+    with pytest.raises(recovery.RecoveryError, match="configuration source"):
+        job.backup(args)
+    assert [entry[2]["generation_id"] for entry in job.completed(args.private_root)] == [
+        first["generation_id"]
+    ]
+    assert len(list((args.private_root / "protected").iterdir())) == 1
+    assert len(list((args.private_root / "receipts").iterdir())) == 1
+    assert len(list((args.private_root / "pending").iterdir())) == 1
+
+
+def test_protected_requirement_cannot_reuse_data_only_receipt_even_before_daily_due(
+    source, tmp_path, monkeypatch
+):
+    args = protected_environment(source, tmp_path, monkeypatch)
+    configured = (args.protected_env_file, args.protected_caddy_file, args.protected_session)
+    args.protected_env_file = args.protected_caddy_file = args.protected_session = None
+    data_only = job.backup(args)
+    args.protected_env_file, args.protected_caddy_file, args.protected_session = configured
+    args.interval_hours = 24
+    combined = job.backup(args)
+    assert not data_only["protected_recovery_verified"] and combined["protected_recovery_verified"]
+    assert data_only["generation_id"] != combined["generation_id"]
+
+
+def test_health_publication_is_explicit_after_local_acceptance_and_failure_requires_retry(
+    source, tmp_path, monkeypatch
+):
+    args = protected_environment(source, tmp_path, monkeypatch)
+    calls = []
+
+    def publish(remote_args, data_stage, protected_stage, receipt):
+        assert remote_args.remote_user == "root" and remote_args.health_service_user == "otz"
+        identifier = receipt["generation_id"]
+        assert (args.private_root / "generations" / identifier).is_dir()
+        assert (args.private_root / "protected" / identifier).is_dir()
+        assert (args.private_root / "receipts" / f"{identifier}.json").is_file()
+        job.protected.validate_receipt(
+            receipt, data_stage / "manifest.json", protected_stage / "manifest.json"
+        )
+        calls.append(identifier)
+        if len(calls) == 1:
+            raise OSError("fixture upload failure")
+
+    monkeypatch.setattr(job, "publish_health", publish)
+    job.backup(args)
+    assert calls == []
+    args.publish_health_receipt = True
+    args.interval_hours = 24
+    with pytest.raises(OSError, match="upload failure"):
+        job.backup(args)
+    assert job.completed(args.private_root)[-1][2]["health_receipt_published"] is False
+    result = job.backup(args)
+    assert result["health_receipt_published"] is True and len(calls) == 2
+    assert job.backup(args)["result"] == "skipped_not_due"
+    assert len(job.completed(args.private_root)) == 2
+    assert len(list((args.private_root / "protected").iterdir())) == 2
+
+
+def test_guarded_child_accepts_private_stdin_without_exposing_it():
+    result = job.run(
+        [sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"],
+        input_text="fixture-secret",
+    )
+    assert result.stdout.strip() == "14" and result.stderr == ""
 
 
 @pytest.mark.skipif(not Path("/usr/bin/rsync").exists(), reason="system rsync not installed")

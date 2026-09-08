@@ -8,6 +8,7 @@ backups. LaunchAgent generation prints a plist; installing it remains an operato
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import json
 import os
@@ -26,9 +27,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-try:
+if __package__:
+    from scripts import protected_recovery as protected
     from scripts import recovery
-except ModuleNotFoundError:
+else:
+    import protected_recovery as protected
     import recovery
 
 
@@ -40,10 +43,15 @@ def assert_lease():
     recovery.require(owner is None or owner.poll() is None, "source backup lease was lost")
 
 
-def run(command, *, timeout=7200):
+def run(command, *, timeout=7200, input_text=None):
     assert_lease()
     process = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+        command,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
     )
     deadline = time.monotonic() + timeout
     try:
@@ -53,10 +61,12 @@ def run(command, *, timeout=7200):
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(command, timeout)
             try:
-                stdout, stderr = process.communicate(timeout=min(1, remaining))
+                stdout, stderr = process.communicate(input=input_text, timeout=min(1, remaining))
                 break
             except subprocess.TimeoutExpired:
                 pass
+            finally:
+                input_text = None
         assert_lease()
         if process.returncode:
             raise subprocess.CalledProcessError(process.returncode, command)
@@ -278,13 +288,126 @@ def transfer(args, remote_stage, pending, seed):
     return manifest
 
 
+def protected_configuration(args):
+    files = (getattr(args, "protected_env_file", None), getattr(args, "protected_caddy_file", None))
+    sessions = getattr(args, "protected_session", None) or []
+    enabled = bool(any(files) or sessions)
+    recovery.require(
+        not enabled or (all(files) and sessions), "complete protected configuration required"
+    )
+    recovery.require(
+        not getattr(args, "publish_health_receipt", False) or enabled,
+        "health publication requires fresh protected recovery",
+    )
+    return enabled, protected.session_specs(sessions) if enabled else {}
+
+
+def protected_arguments(args):
+    result = copy.copy(args)
+    result.health_service_user = getattr(args, "remote_user", None) or "otz"
+    result.remote_user = getattr(args, "protected_remote_user", None) or getattr(
+        args, "remote_user", None
+    )
+    return result
+
+
+def protected_script(args):
+    return getattr(args, "remote_protected_recovery_script", None) or Path(
+        getattr(args, "remote_recovery_script", None) or args.remote_root / "scripts/recovery.py"
+    ).with_name("protected_recovery.py")
+
+
+def transfer_protected(args, source, destination):
+    safe_remote_path(source, args.remote_root / "data/backups")
+    assert_lease()
+    run(
+        [
+            "/usr/bin/rsync",
+            "-rpt",
+            "--rsync-path",
+            shlex.join([*prefix(args), "/usr/bin/rsync"]),
+            "-e",
+            shlex.join(ssh(args)[:-1]),
+            f"{args.ssh_target}:{source}/",
+            str(destination) + "/",
+        ]
+    )
+    assert_lease()
+
+
+def snapshot_protected(args, stage, local, identifier, receipt, expected_sessions):
+    protected.require_encrypted_storage(local)
+    command = [
+        args.remote_python,
+        str(protected_script(args)),
+        "snapshot",
+        "--output-dir",
+        str(stage),
+        "--generation-id",
+        identifier,
+        "--data-manifest-sha256",
+        receipt["generation_manifest_sha256"],
+        "--env-file",
+        str(args.protected_env_file),
+        "--caddy-file",
+        str(args.protected_caddy_file),
+    ]
+    for value in args.protected_session:
+        command += ["--session", value]
+    remote(args, command)
+    transfer_protected(args, stage, local)
+    proof = protected.verify(
+        local,
+        generation_id=identifier,
+        data_manifest_sha256=receipt["generation_manifest_sha256"],
+        data_created_at=receipt["created_at"],
+        expected_sessions=expected_sessions,
+    )
+    assert_lease()
+    return proof
+
+
+def publish_health(args, data_stage, protected_stage, receipt):
+    assert_lease()
+    command = [
+        args.remote_python,
+        str(protected_script(args)),
+        "publish",
+        "--project-root",
+        str(args.remote_root),
+        "--source-snapshot-dir",
+        str(data_stage),
+        "--protected-snapshot-dir",
+        str(protected_stage),
+        "--service-user",
+        getattr(args, "health_service_user", "otz"),
+    ]
+    result = run(
+        [*ssh(args), shlex.join([*prefix(args), *command])],
+        input_text=json.dumps(receipt, sort_keys=True),
+        timeout=120,
+    )
+    response = json.loads(result.stdout)
+    recovery.require(
+        response.get("result") == "health_receipt_published"
+        and response.get("generation_id") == receipt["generation_id"],
+        "health receipt publication not confirmed",
+    )
+    assert_lease()
+
+
 def backup(args):
     root = args.private_root.resolve()
     if getattr(args, "application_project_root", None) is not None:
         recovery.ROOT = args.application_project_root.resolve()
     recovery.private_dir(root)
+    protected_enabled, expected_sessions = protected_configuration(args)
     for name in ("generations", "pending", "receipts", "logs"):
         recovery.private_dir(root / name)
+    if protected_enabled:
+        protected.require_encrypted_storage(root)
+        for name in ("protected", "protected-pending"):
+            recovery.private_dir(root / name)
     with (root / "backup.lock").open("a+") as lock:
         os.chmod(lock.name, 0o600)
         try:
@@ -293,7 +416,30 @@ def backup(args):
             return {"result": "skipped_locked"}
         accepted = completed(root)
         now = datetime.now(UTC)
-        if accepted and 0 <= (now - accepted[-1][0]).total_seconds() < args.interval_hours * 3600:
+        last_protected_good = not protected_enabled
+        if accepted and protected_enabled:
+            last = accepted[-1][2]
+            try:
+                protected.verify(
+                    root / "protected" / accepted[-1][1].name,
+                    generation_id=last["generation_id"],
+                    data_manifest_sha256=last["generation_manifest_sha256"],
+                    data_created_at=last["created_at"],
+                    expected_sessions=expected_sessions,
+                )
+                last_protected_good = last.get("protected_recovery_verified") is True
+            except (recovery.RecoveryError, OSError, ValueError, KeyError, TypeError):
+                last_protected_good = False
+        if (
+            accepted
+            and last_protected_good
+            and (
+                not getattr(args, "publish_health_receipt", False)
+                or accepted[-1][2].get("health_receipt_published") is True
+            )
+            and accepted[-1][2].get("database", {}).get("revisions") == recovery.schema_heads()
+            and 0 <= (now - accepted[-1][0]).total_seconds() < args.interval_hours * 3600
+        ):
             return {"result": "skipped_not_due", "created_at": accepted[-1][0].isoformat()}
         seed = accepted[-1][1] if accepted else args.seed_dir
         recovery.require(
@@ -313,6 +459,11 @@ def backup(args):
         pending = root / "pending" / identifier
         pending.mkdir(mode=0o700)
         stage = args.remote_root / "data/backups" / f".offhost-{uuid4().hex}"
+        secret_stage = args.remote_root / "data/backups" / f".protected-{uuid4().hex}"
+        secret_args = protected_arguments(args)
+        secret_local = root / "protected-pending" / identifier
+        if protected_enabled:
+            secret_local.mkdir(mode=0o700)
         with remote_lease(args):
             receipt = None
             receipt_published = False
@@ -346,44 +497,70 @@ def backup(args):
                     datetime.fromisoformat(receipt["created_at"]) <= datetime.now(UTC),
                     "source snapshot time is in the future",
                 )
-                # This proof is data-only. Protected session/config recovery has its own gate.
+                if protected_enabled:
+                    receipt["protected_proof"] = snapshot_protected(
+                        secret_args,
+                        secret_stage,
+                        secret_local,
+                        identifier,
+                        receipt,
+                        expected_sessions,
+                    )
+                # A combined receipt is true only after this generation's fresh protected checks.
                 receipt.update(
                     backup_format="directory_generation",
                     manifest_sha256=receipt["generation_manifest_sha256"],
                     offhost_verified=True,
                     generation_id=identifier,
-                    protected_recovery_verified=False,
+                    protected_recovery_verified=protected_enabled,
                 )
                 destination = root / "generations" / identifier
                 assert_lease()
                 pending.rename(destination)
+                if protected_enabled:
+                    secret_local.rename(root / "protected" / identifier)
                 atomic_json(root / "receipts" / f"{identifier}.json", receipt)
                 receipt_published = True
+                if getattr(args, "publish_health_receipt", False):
+                    try:
+                        publish_health(secret_args, stage, secret_stage, receipt)
+                    except BaseException:
+                        receipt["health_receipt_published"] = False
+                        atomic_json(root / "receipts" / f"{identifier}.json", receipt)
+                        raise
+                    receipt["health_receipt_published"] = True
+                    atomic_json(root / "receipts" / f"{identifier}.json", receipt)
                 # Only accepted generations participate; failed/pending work never displaces one.
                 assert_lease()
                 prior = [entry for entry in completed(root) if entry[1] != destination]
                 for _, old, _receipt in prior[:-1]:
                     shutil.rmtree(old)
+                    if protected_enabled and (root / "protected" / old.name).exists():
+                        shutil.rmtree(root / "protected" / old.name)
                     (root / "receipts" / f"{old.name}.json").unlink()
                 return receipt
             finally:
-                # The remote path is generated here; never remove any source directory.
-                try:
-                    remote(
-                        args,
-                        [
-                            args.remote_python,
-                            "-c",
-                            "import shutil,sys; shutil.rmtree(sys.argv[1],ignore_errors=True)",
-                            str(stage),
-                        ],
-                    )
-                except (OSError, subprocess.SubprocessError, recovery.RecoveryError):
-                    if receipt_published:
-                        receipt["remote_cleanup"] = "failed_requires_review"
-                        atomic_json(root / "receipts" / f"{identifier}.json", receipt)
-                    else:
-                        print('{"remote_cleanup":"failed_requires_review"}', file=sys.stderr)
+                # Generated staging only; never delete original configuration/session/media.
+                cleanup = [(args, stage)]
+                if protected_enabled:
+                    cleanup.append((secret_args, secret_stage))
+                for cleanup_args, cleanup_stage in cleanup:
+                    try:
+                        remote(
+                            cleanup_args,
+                            [
+                                args.remote_python,
+                                "-c",
+                                "import shutil,sys; shutil.rmtree(sys.argv[1],ignore_errors=True)",
+                                str(cleanup_stage),
+                            ],
+                        )
+                    except (OSError, subprocess.SubprocessError, recovery.RecoveryError):
+                        if receipt_published:
+                            receipt["remote_cleanup"] = "failed_requires_review"
+                            atomic_json(root / "receipts" / f"{identifier}.json", receipt)
+                        else:
+                            print('{"remote_cleanup":"failed_requires_review"}', file=sys.stderr)
 
 
 def main():
@@ -406,6 +583,20 @@ def main():
         "--application-project-root",
         type=Path,
         help="local checkout compatible with the source schema",
+    )
+    parser.add_argument("--protected-env-file", type=Path)
+    parser.add_argument("--protected-caddy-file", type=Path)
+    parser.add_argument(
+        "--protected-session", action="append", help="explicit alias=/absolute/session.path"
+    )
+    parser.add_argument(
+        "--protected-remote-user", help="explicit sudo user for protected snapshots"
+    )
+    parser.add_argument("--remote-protected-recovery-script", type=Path)
+    parser.add_argument(
+        "--publish-health-receipt",
+        action="store_true",
+        help="atomically publish only a fresh combined proof",
     )
     parser.add_argument("--interval-hours", type=float, default=24)
     parser.add_argument("--min-free-gib", type=float, default=20)

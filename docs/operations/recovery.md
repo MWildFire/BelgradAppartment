@@ -164,12 +164,9 @@ restore drill; there is no weekly-only shortcut to the 36-hour gate.
 The receipt declares `backup_format: directory_generation`, `manifest_sha256` and
 `generation_manifest_sha256`; it does **not** fabricate an `archive_sha256`. Consumers must
 validate the declared format. `offhost_verified` is true only after the destination's full
-verification. `protected_recovery_verified` is deliberately false: configuration and
-Telegram sessions must be freshly backed up and checked separately in protected storage.
-Never silently inherit an old protected receipt or reset its verification timestamp.
-For session SQLite files use the online backup API, not a raw copy of a live WAL database.
-Only after that separate check may the operator combine the data/protected proofs and
-publish the current recovery receipt to the app's health state.
+verification. Without explicit protected inputs, `protected_recovery_verified` remains
+false. Enable the fresh protected-generation workflow below to create the combined proof;
+an old protected receipt is never inherited or given a new verification timestamp.
 
 Replace `run` with `launch-agent` using the same arguments to print a macOS LaunchAgent
 plist. It does not install/load a scheduler. The plist checks every six hours and at login,
@@ -203,3 +200,60 @@ never an accepted backup or recovery receipt. The runner may reuse matching medi
 from it, always obtaining a new authoritative remote manifest and fresh DB/state, then
 checking every final hash and the actual application restore. The strict directory
 verifier rejects the unverified seed itself.
+
+## Fresh protected recovery for every directory generation
+
+Stage `protected_recovery.py` beside the separately staged `recovery.py`; neither helper
+requires an application deployment. Add these explicit arguments to the same runner or
+printed LaunchAgent command, replacing session paths with the actual operator-verified
+paths (aliases are safe labels, not session contents):
+
+```bash
+--protected-env-file /opt/otz/.env \
+--protected-caddy-file /etc/caddy/Caddyfile \
+--protected-session userbot=/absolute/actual-userbot.session \
+--protected-session bot=/absolute/actual-bot.session \
+--protected-remote-user root \
+--remote-protected-recovery-script /opt/otz/tools/recovery/protected_recovery.py \
+--publish-health-receipt
+```
+
+The runner requires all configured inputs and at least one explicit session. Existing
+noninteractive sudo authorization must permit reading them; it never changes sudo or
+installs credentials. `--protected-remote-user root` applies only to protected reads and
+optional publication. The health receipt is owned by the ordinary `--remote-user` service
+account (default `otz`), so an elevated secret reader does not make it unreadable by the app.
+
+Before copying any secrets, the Mac verifies FileVault is on and the destination is inside
+the current user's home on the same filesystem. External volumes and non-Mac destinations
+are rejected by this workflow. Every generation creates fresh configuration copies and
+SQLite online session snapshots, including committed WAL changes. Protected bytes go to
+`protected-pending/<id>`, then `protected/<id>`; they never enter the data generation,
+data archive, repository or health receipt. All protected directories require mode 0700,
+all files 0600, and symlinks are rejected. Verification checks the exact component inventory,
+every size/hash, valid nonempty configuration, SQLite integrity/FKs and nonempty session
+authorization material. The protected manifest records only logical names and hashes.
+
+The proof binds the current generation ID and data manifest SHA, checks creation/verification
+dates, and records these actual checks. `protected_proof.live_authentication_checked` is
+false: offline integrity and authorization bytes do not prove a live Telegram login.
+Missing/unreadable configuration, missing sessions, unsafe storage/permissions or a failed
+check prevent acceptance and preserve the previous completed pair. A previously data-only
+copy cannot satisfy a newly enabled protected requirement, even before the daily deadline.
+At each cadence check the protected bytes are rechecked before deciding a copy is not due.
+Only two accepted paired generations remain after a new full verification succeeds;
+failed/pending data or protected work is retained for explicit inspection.
+
+`--publish-health-receipt` is optional and off by default. It performs one explicit remote
+mutation **after** both local copies and their combined receipt are complete: an atomic
+0600 write to `/opt/otz/data/state/recovery_receipt.json`. The source helper requires the
+canonical root, safe backup staging paths, exact current data/protected manifest hashes,
+fresh matched dates, successful catalog/card/photo evidence, protected verification proof
+and the still-current live schema. Only the sanitized receipt is sent on private SSH stdin;
+no secret file contents are included. Publication failure leaves the completed local copy
+valid but records `health_receipt_published: false`; the next scheduler check retries by
+making a fresh generation, so stale app health cannot be silently treated as updated.
+An accepted local receipt includes `backup_format: directory_generation`, both data manifest
+hash fields, `generation_id`, `protected_recovery_verified: true` and the fresh
+`protected_proof`. It contains no fabricated archive hash. Release consumers must validate
+the directory format explicitly.
