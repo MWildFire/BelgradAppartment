@@ -1451,6 +1451,7 @@ class HealResult:
     remaining: int
     errors: int
     skipped: int = 0
+    source_errors: dict[str, str] = field(default_factory=dict)
 
 
 _BROKEN_LISTING = (Listing.is_active.is_(True), Listing.photo_phashes == [])
@@ -1492,7 +1493,9 @@ async def heal_broken_listings(
         remaining = len(await load_candidates(session, platforms=scrapers, only_broken=True))
     logger.info("[heal] selected=%d fixed=%d remaining=%d errors=%d skipped=%d",
                 len(plan.rows), stats.verified, remaining, stats.errors, stats.skipped)
-    return HealResult(len(plan.rows), stats.verified, remaining, stats.errors, stats.skipped)
+    return HealResult(
+        len(plan.rows), stats.verified, remaining, stats.errors, stats.skipped, stats.source_errors,
+    )
 
 
 @dataclass
@@ -1502,6 +1505,7 @@ class RollingRefreshResult:
     errors: int
     price_changes: list[PriceChange]
     skipped: int = 0
+    source_errors: dict[str, str] = field(default_factory=dict)
 
 
 async def rolling_detail_refresh(
@@ -1521,6 +1525,7 @@ async def rolling_detail_refresh(
                 len(plan.rows), stats.verified, stats.errors, stats.skipped)
     return RollingRefreshResult(
         len(plan.rows), stats.verified, stats.errors, stats.price_changes, stats.skipped,
+        stats.source_errors,
     )
 
 
