@@ -1,12 +1,12 @@
 # RentBelgrad — статус реализации ревью 08.09.2026
 
-Обновлено 08.09.2026, 15:31 Asia/Dubai. **Первая активация7ff9512 автоматически откатилась по startup health gate. Старые сервисы работают, health/catalog200; база сохранена на0013.** Исправляется bounded startup wait; fresh0013backup в работе перед повторным release.
+Обновлено 08.09.2026, 15:56 Asia/Dubai. **ПОВТОРНАЯ ПАУЗА по просьбе Дмитрия; продолжать только после новой команды.** [Самодостаточный чекпоинт и команды продолжения](2026-09-08-checkpoint-1556.md). Старые сервисы работают после автоматического отката7ff9512; база сохранена на0013. Новый кандидатccafc5c НЕ допущен: CI выявил конкурентныйdeliveryfailure, isolatedcoldstart тожеFAIL.
 
 - План: [reliability remediation](../superpowers/plans/2026-09-08-reliability-remediation.md); [ревью F01–F23](2026-09-08-project-review.md); [исторический baseline](2026-09-08-evidence.json).
-- Ветка `codex/reliability-2026-09-08`, tested implementation checkpoint `7ff9512` (после возобновления). Baseline `75f870c` (code `38ad154`).
+- Ветка `codex/reliability-2026-09-08`, замороженный кандидат `ccafc5c17725b74653a5c5c9b2923b5f53c5052f`: локально1500 unit passed /1 skipped,54 browser passed; GitHub34222463666 unitFAIL/browserPASS. Baseline `75f870c` (code `38ad154`).
 - **Активный app: исходный после автоматического rollback7ff9512.** Live schema **0013_delivery_outcomes**: additive0012/0013 применены11:23UTC и сохранены при откате. `.env`, Caddy и старые timers восстановлены/сохранены; успешной repair-активации пока нет.
 - Команда Дмитрия разрешает staged deployment/restarts в рамках ремонта. Новые покупки, тестовые сообщения людям и исторический массовый replay не выполняются. Snapshot active остаётся выключенным.
-- Полная off-host generation **20260908-110709-00c120d6** прошла strict restore:1,050,621files,5149photo references,DB0011, catalog/card/photo200+decoded, fresh protected2config/2sessions, healthreceiptpublished. После actualmigration0013 для следующегоrelease требуется новый совместимыйbackup; source snapshot session18877 идёт. Исходныйpartial сохранён какисторическийseed.
+- Полная off-host generation **20260908-110709-00c120d6** прошла strict restore:1,050,621files,5149photo references,DB0011, catalog/card/photo200+decoded, fresh protected2config/2sessions, healthreceiptpublished. После actualmigration0013 требуется новый совместимыйbackup: source snapshot session18877 завершиласьexit0; передача/восстановление на Mac ещё не начаты. Исходныйpartial сохранён какисторическийseed.
 
 | F-ID | Пункт | Статус | Доказательство / остающийся gate |
 |---|---|---|---|
@@ -16,7 +16,7 @@
 | F04 | Public representative | locally_verified | Выбор внутри public; production copy: 31 cards/29 apartments →168/168, lost apartments0, новых прав публикации0 |
 | F05 | Apartment availability | locally_verified | Active/UNKNOWN/DEAD едины для каталога/карты/карточки; из168 квартир active48, UNKNOWN120; неизвестные не помечены доступными |
 | F06 | Общая политика снятия | locally_verified | all-DEAD, pin, live sibling, warn-only, общий cap; race-safe UPDATE при смене dup group |
-| F07 | Backup/recovery | in_progress | Full0011generation verified11:18UTC, application/photo/protectedPASS. New0013snapshot18877running; recurring schedule/automaticbackup pending |
+| F07 | Backup/recovery | in_progress | Full0011generation verified11:18UTC, application/photo/protectedPASS. New0013source snapshot18877 exit0, manifestpin в checkpoint; local transfer/restore и recurring/automaticbackup pending |
 | F08 | Успешная свежесть/квота | in_progress | Fair public/broken/oldest-success queue; Ubuntu isolated20/20 verified за100.08sec,38photos. Quota2400/nightly + public due10h, окна11:30/17:30/23:30UTC реализованы; steady-state target pending |
 | F09 | Attempt отдельно от success | locally_verified | Additive schema без backfill ложных successes; actual isolated20/20 successes и errors0; live production evidence pending |
 | F10 | Конкуренция процессов | locally_verified | Per-platform process leases, bounded queue; 3-entrypoint/process regression. Live overlapping run pending |
@@ -24,15 +24,15 @@
 | F12 | Честный shadow | locally_verified | Staged actual4481/4484,99.933%,49complete parity/mismatch0; source_total_changed+2legacy detail errors дают honest STOP. Snapshot readiness pending |
 | F13 | История/health/monitoring | in_progress | Durable run/source journal, readiness DB503, real deactivated_at, freshness/backup/outbox health, quiet change events; capacity integration/live pending |
 | F14 | Budgets/checkpoints | locally_verified | Incremental source600/run24000sec; full1800/run30000; maintenance20/70/10; bounded liveness600sec; actual OS SIGTERM→finally→exit143 PASS |
-| F15 | Согласованный deploy | in_progress | Exactpacket7ff1491unit/54browser/CI PASS; actualauto-rollback preservedDB0013 and restoredservices200. Startup6sec gate failed; boundedwaitfix + newbackup + retry pending |
+| F15 | Согласованный deploy | in_progress | Actual auto-rollback7ff preservedDB0013/services200. Bounded90s readywait+cURLrc fix reviewed/integrated; isolatednewvenvDBrequests hang, coldstartFAIL, retry blocked |
 | F16 | Непубличные media | locally_verified | Authorized GET/HEAD photo route + traversal/private tests PASS; live Caddy /photos bypass ещё нужно переключить после app release |
-| F17 | Доставка каждому получателю | locally_verified | Claim + pending/sending/sent/failed/unknown; immutable payload, partial retry only failed, historical records no replay; full album receipts |
+| F17 | Доставка каждому получателю | in_progress | Claims/immutablepayload/retry implemented; CI34222463666 concurrentfanout: sends once each but456 remains sending. Root cause (app vs in-memoryfixture) unresolved; no blind retry/release |
 | F18 | Нет ложного sent | locally_verified | Отсутствующий транспорт/конфигурация не sent; confirmed receipt требуется; atomic reconciliation |
 | F19 | Долговечная очередь подписок | locally_verified | 100 →30/30/30/10 после72h; DEAD не блокирует поздние строки, reactivated backlog сохраняется после100h |
 | F20 | HTML escaping | locally_verified | Ввод посетителя экранирован, читаемое plain-text письмо; regression PASS |
 | F21 | Link queue без starvation | locally_verified | Oldest eligible checks, UNKNOWN backoff6h, bounded/fair inactive public probes; 3-row progression tests |
 | F22 | 0/1/несколько фото | locally_verified | 1→sendPhoto,2–10→album;0/missing/partial receipts fail/UNKNOWN; frozen Finder caption/photo-order/recipients oracle PASS |
-| F23 | CI/env/instructions | in_progress | Frozen CI unit/browser/lint/shell; matching Chromium установлен; outdated PWA/availability fixtures исправлены по продукту. GitHub34217184273 exact2f8b31a SUCCESS; live evidence pending |
+| F23 | CI/env/instructions | in_progress | ccafc5c local1500unit/54browser/staticPASS; GitHub34222463666 unitFAIL/browserPASS. ExactnewCIgate required after diagnosis; pause checkpoint saved |
 
 **Проверки:** baseline1148 passed/1 skipped. Exact `7ff9512`: unit **1491 passed / 1 skipped / 36 warnings** (126.59s), browser **54 passed** (59.24s), changed-code lint0, shell syntax, frozen lock107packages и diff-check PASS. [GitHub Actions34219047309](https://github.com/MWildFire/BelgradAppartment/actions/runs/34219047309) — jobsunit102037573646/browser102037573868 **SUCCESS**. Packet423files SHA25624eab5705afae640ffaaabc5c40588c356559ab9aa069d42f596f163046ac053. Предыдущий2f8b31a:1440unit/54browser иCI34217184273PASS.
 
@@ -46,7 +46,7 @@
 - AWS Console требует IAM/root sign-in; безопасных AWS/B2/rclone credentials на проверенных стандартных путях сервера нет. Security Group/cloud backup пока не подтверждены. Используется реально доступная внешняя защищённая копия на Mac.
 - Ошибка worker QA: старый wrapper в изолированном worktree запустил SSH/rsync к obsolete VPS из теста; процессы немедленно остановлены на стадии соединения, transfer output не наблюдался. Это не доказательство zero remote effect. Дальнейшие проверки используют current wrapper и fake subprocess; повторное обращение не выполняется.
 
-**Следующее действие:** закончить fresh complete snapshot и transfer с повторным использованием media seed; strict all-file hash + DB/application/photo restore; fresh protected proof. После независимого review и exact checks — repair release/Caddy/capacity/no-notify canary. Snapshot readiness остаётся STOP: повторный полный обход не подменяет точечную диагностику двух ошибок. Actual automatic acceptance отдельно.
+**Следующее действие после новой команды Дмитрия:** принять готовый0013source snapshot с точнымmanifestpin и full local/protectedrestore; параллельно расследовать CIoutboxfailure и isolatedDBhang. Все команды, paths и STOPgates — в checkpoint15:56. Repairrelease/Caddy/capacity/canary ещё pending; automatic acceptance отдельно. Сейчас не возобновлять.
 
 ## Журнал реализации
 
