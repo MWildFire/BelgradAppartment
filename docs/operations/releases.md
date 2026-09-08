@@ -84,12 +84,16 @@ Activation currently supports `/opt/otz` and its canonical systemd topology only
    copies canonical service/timer files and performs `daemon-reload`.
 5. Checks effective unit command/type/user/working directory/timeout and timer calendar/
    persistence/randomization; an overriding drop-in cannot silently change those fields.
-   It restarts the previously active units, checks local health and exact runtime hashes,
-   and saves `/opt/otz/release.json` plus an activation receipt.
+   It starts the prior app services, checks local health and exact runtime hashes,
+   saves `/opt/otz/release.json`, then resumes prior timers. Chromium must launch and close
+   under the actual `otz` account before any app service is stopped.
 
-Tracked timers preserve the observed schedule: nightly 03:00 UTC (+0–15 minutes), weekly
-Sunday 04:00 UTC (+0–15 minutes), parser smoke every six hours at minute 30 (+0–5 minutes),
-all persistent. Existing services' `ship-log` and failure notification paths remain.
+Nightly runs Monday–Saturday at 03:00 UTC (+0–15 minutes). Sunday is handled by the
+weekly full refresh at 04:00 UTC (+0–15 minutes), which includes the same maintenance
+queues. This removes the previously scheduled Sunday daily/weekly overlap. Parser smoke
+remains every six hours at minute 30 (+0–5 minutes); per-source leases serialize overlap
+with manual, monitor or smoke work. All timers are persistent. Existing `ship-log` and
+failure notification paths remain.
 **Do not use these legacy scheduled units as a no-notify canary.** Use the separately
 implemented CLI evaluation/no-notify interface and prove no external sends there.
 
@@ -115,3 +119,13 @@ The operator must still check public catalog/card/map/media, admin authenticatio
 Render Finder output/recipients, effective timers' next run, a bounded safe canary, a
 full source pass and a real automatic follow-up run. Record those actual outcomes in the
 implementation status; a process restart or packet upload is not completion.
+
+## Mandatory photo ingress check
+
+The release packet does not replace the actual TLS/Caddy configuration. After the app
+route is ready, patch only the existing `/photos/*` handler in `/etc/caddy/Caddyfile`
+to reverse-proxy to `127.0.0.1:8001`, preserving the path prefix. Validate then reload Caddy.
+Check both GET and HEAD: an authorized public original/variant returns 200; a known
+unpublished fixture returns 403/404. Retaining the old static handler fails F16 even
+when the application route tests pass. Keep the protected previous Caddy configuration
+for rollback, without restoring its private-media bypass after a successful security fix.

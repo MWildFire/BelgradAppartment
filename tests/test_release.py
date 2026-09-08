@@ -192,7 +192,7 @@ def test_wrapper_has_no_implicit_production_target():
 
 def test_canonical_timers_preserve_live_schedules():
     for name, calendar, random in [
-        ("otz-nightly-refresh", "*-*-* 03:00:00 UTC", "15min"),
+        ("otz-nightly-refresh", "Mon..Sat *-*-* 03:00:00 UTC", "15min"),
         ("otz-weekly-full-refresh", "Sun *-*-* 04:00:00 UTC", "15min"),
         ("otz-scrape-smoke", "*-*-* 00/6:30:00 UTC", "5min"),
     ]:
