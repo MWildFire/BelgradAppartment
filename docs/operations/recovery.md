@@ -189,3 +189,17 @@ Standalone strict verification, including a fresh application/photo restore:
 `launch-agent` and fake-SSH test results are configuration/local proof only. F07 automatic
 acceptance still requires the scheduled run, fresh protected recovery proof, current
 health receipt and a read-back of the accepted generation at the real off-host location.
+
+Before application deployment, `--remote-recovery-script /opt/otz/tools/recovery/recovery.py`
+lets the runner use separately staged tooling while source schema/models are read from
+its explicit `--application-project-root /opt/otz`. Locally provide
+`--application-project-root /path/to/compatible-checkout` for the source's actual schema
+(e.g. 0011); schema checks and the network-disabled child app smoke use that checkout.
+Do not run a 0013 ORM against a 0011 snapshot or silently migrate the recovered data.
+
+A salvaged media tree may declare `format: unverified_media_seed` and
+`result: seed_only_unverified`, with locally measured `files` sizes/hashes. It is a cache,
+never an accepted backup or recovery receipt. The runner may reuse matching media bytes
+from it, always obtaining a new authoritative remote manifest and fresh DB/state, then
+checking every final hash and the actual application restore. The strict directory
+verifier rejects the unverified seed itself.

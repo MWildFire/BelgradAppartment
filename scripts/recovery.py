@@ -27,6 +27,7 @@ from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 FORMAT = 1
+MAX_MANIFEST_BYTES = 512 * 1024 * 1024
 KEY_TABLES = (
     "alembic_version",
     "source_channels",
@@ -329,10 +330,15 @@ def _create_backup(args: argparse.Namespace) -> dict:
                     "size": after.st_size,
                     "sha256": reader.hasher.hexdigest(),
                 }
-            payload = json.dumps(manifest, indent=2, sort_keys=True).encode()
+            manifest_path = staging / "manifest.json"
+            with manifest_path.open("w") as stream:
+                json.dump(manifest, stream, sort_keys=True, separators=(",", ":"))
+            os.chmod(manifest_path, 0o600)
+            require(manifest_path.stat().st_size < MAX_MANIFEST_BYTES, "oversized backup manifest")
             info = tarfile.TarInfo("manifest.json")
-            info.size, info.mode = len(payload), 0o600
-            tar.addfile(info, io.BytesIO(payload))
+            info.size, info.mode = manifest_path.stat().st_size, 0o600
+            with manifest_path.open("rb") as stream:
+                tar.addfile(info, stream)
         if not args.stream:
             os.chmod(partial, 0o600)
             # Verify bytes actually archived, rather than trusting a source-file checksum.
@@ -364,7 +370,7 @@ def extract_verify(
             safe_relative(member.name)
             require(member.isfile(), "archive contains a link/directory/special entry")
         manifest_member = tar.getmember("manifest.json")
-        require(manifest_member.size < 100 * 1024 * 1024, "oversized backup manifest")
+        require(manifest_member.size < MAX_MANIFEST_BYTES, "oversized backup manifest")
         manifest = json.load(tar.extractfile(manifest_member))
         require(manifest["format"] == FORMAT, "unsupported backup format")
         created = datetime.fromisoformat(manifest["created_at"])
@@ -524,7 +530,7 @@ def verify_directory(destination: Path, max_age_hours=36, expected_schema=None) 
     require(max_age_hours > 0, "max age must be positive")
     require(destination.is_dir() and not destination.is_symlink(), "invalid restore directory")
     manifest_file = destination / "manifest.json"
-    require(manifest_file.stat().st_size < 100 * 1024 * 1024, "oversized manifest")
+    require(manifest_file.stat().st_size < MAX_MANIFEST_BYTES, "oversized manifest")
     manifest = json.loads(manifest_file.read_text())
     require(manifest["format"] == FORMAT, "unsupported backup format")
     created = datetime.fromisoformat(manifest["created_at"])
@@ -551,7 +557,14 @@ def verify_directory(destination: Path, max_age_hours=36, expected_schema=None) 
 
 def verify_application(restored: Path, manifest: dict) -> dict:
     process = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), "_smoke", str(restored)],
+        [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "_smoke",
+            str(restored),
+            "--application-project-root",
+            str(ROOT),
+        ],
         capture_output=True,
         text=True,
         timeout=120,
@@ -656,12 +669,17 @@ def create_snapshot(args: argparse.Namespace) -> dict:
             "input changed during snapshot",
         )
         manifest["files"][relative] = {"size": after.st_size, "sha256": checksum}
-    (output / "manifest.json").write_text(json.dumps(manifest, sort_keys=True))
+    with (output / "manifest.json").open("w") as stream:
+        json.dump(manifest, stream, sort_keys=True, separators=(",", ":"))
+    require(
+        (output / "manifest.json").stat().st_size < MAX_MANIFEST_BYTES, "oversized backup manifest"
+    )
     os.chmod(output / "manifest.json", 0o600)
     return {"result": "snapshot_staged_not_verified", "directory": str(output)}
 
 
 def main() -> None:
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     backup = commands.add_parser("backup")
@@ -708,7 +726,15 @@ def main() -> None:
         )
     smoke = commands.add_parser("_smoke", help=argparse.SUPPRESS)
     smoke.add_argument("restored", type=Path)
+    for command in (backup, verify, directory, snapshot, smoke):
+        command.add_argument(
+            "--application-project-root",
+            type=Path,
+            help="compatible application checkout for schema and isolated smoke",
+        )
     args = parser.parse_args()
+    if args.application_project_root is not None:
+        ROOT = args.application_project_root.resolve()
     try:
         if args.command == "backup":
             result = create_backup(args)

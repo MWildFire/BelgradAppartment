@@ -210,6 +210,8 @@ def transfer(args, remote_stage, pending, seed):
 
 def backup(args):
     root = args.private_root.resolve()
+    if getattr(args, "application_project_root", None) is not None:
+        recovery.ROOT = args.application_project_root.resolve()
     recovery.private_dir(root)
     for name in ("generations", "pending", "receipts", "logs"):
         recovery.private_dir(root / name)
@@ -246,11 +248,16 @@ def backup(args):
             try:
                 command = [
                     args.remote_python,
-                    str(args.remote_root / "scripts/recovery.py"),
+                    str(
+                        getattr(args, "remote_recovery_script", None)
+                        or args.remote_root / "scripts/recovery.py"
+                    ),
                     "snapshot",
                     "--output-dir",
                     str(stage),
                     "--project-root",
+                    str(args.remote_root),
+                    "--application-project-root",
                     str(args.remote_root),
                     "--db",
                     str(args.remote_root / "data/otz.db"),
@@ -309,6 +316,16 @@ def main():
     parser.add_argument("--remote-user", help="run remote reads as this service user via sudo -n")
     parser.add_argument("--remote-published-dir", required=True, type=Path)
     parser.add_argument("--seed-dir", type=Path)
+    parser.add_argument(
+        "--remote-recovery-script",
+        type=Path,
+        help="staged recovery helper outside production runtime",
+    )
+    parser.add_argument(
+        "--application-project-root",
+        type=Path,
+        help="local checkout compatible with the source schema",
+    )
     parser.add_argument("--interval-hours", type=float, default=24)
     parser.add_argument("--min-free-gib", type=float, default=20)
     args = parser.parse_args()

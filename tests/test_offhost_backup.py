@@ -255,3 +255,48 @@ def test_full_archive_and_incremental_runner_share_source_lock(source):
         with pytest.raises(recovery.RecoveryError, match="source lock"):
             recovery.create_backup(source)
     assert not source.output_dir.exists()
+
+
+@pytest.mark.skipif(not Path("/usr/bin/rsync").exists(), reason="system rsync not installed")
+def test_unverified_media_seed_is_cache_only_and_new_generation_gets_fresh_db(
+    source, tmp_path, monkeypatch
+):
+    args = environment(source, tmp_path, monkeypatch)
+    seed_manifest = args.seed_dir / "manifest.json"
+    value = json.loads(seed_manifest.read_text())
+    value["format"] = "unverified_media_seed"
+    value["result"] = "seed_only_unverified"
+    seed_manifest.write_text(json.dumps(value))
+    (args.seed_dir / "data/otz.db").unlink()
+    args.remote_recovery_script = Path("/opt/otz/tools/recovery/recovery.py")
+    result = job.backup(args)
+    assert result["result"] == "data_restore_verified"
+    assert (args.private_root / "generations" / result["generation_id"] / "data/otz.db").is_file()
+    with pytest.raises(recovery.RecoveryError, match="format"):
+        recovery.verify_directory(args.seed_dir)
+
+
+def test_child_smoke_receives_explicit_compatible_application_root(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    application_root = tmp_path / "old-app"
+    monkeypatch.setattr(recovery, "ROOT", application_root)
+    (tmp_path / "manifest.json").write_text("{}")
+    seen = []
+
+    def child(command, **_kwargs):
+        seen.append(command)
+        return SimpleNamespace(returncode=0, stderr="", stdout='{"photo_decoded":true}')
+
+    monkeypatch.setattr(recovery.subprocess, "run", child)
+    recovery.verify_application(
+        tmp_path,
+        {
+            "created_at": "date",
+            "database": {},
+            "files": {},
+            "photo_references": 1,
+            "protected_recovery": {},
+        },
+    )
+    assert seen[0][-2:] == ["--application-project-root", str(application_root)]
