@@ -222,6 +222,7 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     active_units = {timer, service}
     events = []
     browser_commands = []
+    clock = [0.0]
     real_require = release.require
 
     def isolated_require(condition, message):
@@ -259,8 +260,8 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
             active_units.difference_update(args[2:])
         if args[:2] == ["systemctl", "start"]:
             active_units.update(args[2:])
-        if args[0] == "curl" and failure == "health":
-            raise release.ReleaseError("fixture health failed")
+        if args[0] == "curl":
+            return "503" if failure == "health" else "200"
         return ""
 
     monkeypatch.setattr(release, "require", isolated_require)
@@ -268,6 +269,8 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     monkeypatch.setattr(release, "unpack_packet", packet)
     monkeypatch.setattr(release, "current_revisions", lambda db: ["0011"])
     monkeypatch.setattr(release, "run", command)
+    monkeypatch.setattr(release.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(release.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
     monkeypatch.setattr(release, "active", active_units.__contains__)
     monkeypatch.setattr(
         release, "service_state", lambda: {"services": [service], "timers": [timer]}

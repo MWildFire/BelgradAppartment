@@ -84,7 +84,10 @@ Activation currently supports `/opt/otz` and its canonical systemd topology only
    copies canonical service/timer files and performs `daemon-reload`.
 5. Checks effective unit command/type/user/working directory/timeout and timer calendar/
    persistence/randomization; an overriding drop-in cannot silently change those fields.
-   It starts the prior app services, checks local health and exact runtime hashes,
+   It starts the prior app services and waits up to 90 seconds total for HTTP 200 from
+   both local `/healthz` and database-backed `/readyz`. Each request has a maximum
+   three-second budget within that deadline; errors and redirects never count as ready.
+   It then checks exact runtime hashes,
    saves `/opt/otz/release.json`, then resumes prior timers. Chromium must launch and close
    under the actual `otz` account before any app service is stopped.
 
@@ -115,6 +118,10 @@ then restart their prior state. It never copies an older DB over new leads/messa
 never performs a destructive downgrade and never deletes media. Operator recovery is
 still required if systemd/filesystem failure prevents automatic code rollback; inspect
 `activation.json` before retrying. There is no automatic retention/pruning of releases.
+If additive migrations completed before code rollback, the next activation still requires
+a newly verified backup matching that retained live schema. The prior schema's receipt
+cannot unlock a retry. HTTP readiness evidence records both statuses, elapsed time and
+request count; the longer wait does not bypass any backup, schema or code-hash gate.
 
 ## Explicit rollback and remaining live checks
 

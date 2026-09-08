@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import shutil
@@ -20,7 +21,7 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ("src", "alembic", "scripts", "deploy", "pyproject.toml", "uv.lock", "alembic.ini")
@@ -61,6 +62,59 @@ def run(args, *, cwd=None, env=None, capture=False, timeout=None):
 
 def hash_bytes(value):
     return hashlib.sha256(value).hexdigest()
+
+
+def wait_for_http_health(*urls, timeout=90, poll_interval=1, request_timeout=3):
+    """Require real HTTP 200 from every endpoint within one startup deadline."""
+    require(
+        urls and all(math.isfinite(value) and value > 0
+                     for value in (timeout, poll_interval, request_timeout)),
+        "positive bounded HTTP readiness parameters required",
+    )
+    started = time.monotonic()
+    deadline = started + timeout
+    attempts, last_status = 0, "unavailable"
+    while time.monotonic() < deadline:
+        statuses = {}
+        for url in urls:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            budget = min(request_timeout, remaining)
+            attempts += 1
+            try:
+                status = run(
+                    [
+                        "curl", "--silent", "--noproxy", "*", "--output", "/dev/null",
+                        "--write-out", "%{http_code}",
+                        "--connect-timeout", str(min(2, max(0.001, budget))),
+                        "--max-time", str(max(0.001, budget)), url,
+                    ],
+                    capture=True, timeout=budget,
+                ).strip()
+            except subprocess.CalledProcessError as error:
+                last_status = f"curl_exit_{error.returncode}"
+                break
+            except subprocess.TimeoutExpired:
+                last_status = "request_timeout"
+                break
+            last_status = status if re.fullmatch(r"[0-9]{3}", status) else "invalid_http_status"
+            if status != "200":
+                break
+            statuses[urlsplit(url).path] = 200
+        else:
+            if time.monotonic() <= deadline:
+                return {
+                    "statuses": statuses, "attempts": attempts,
+                    "elapsed_sec": round(time.monotonic() - started, 3),
+                }
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(poll_interval, remaining))
+    raise ReleaseError(
+        f"local readiness requires HTTP 200 within {timeout:g}s; "
+        f"attempts={attempts}, last_status={last_status}"
+    )
 
 
 def read_json(path):
@@ -629,20 +683,8 @@ def activate(args):
             state["effective_units"] = effective_units(root / "deploy")
             restart_services(state)
             # Local responses only; no notification/canary command is run by deployment.
-            run(
-                [
-                    "curl",
-                    "--fail",
-                    "--silent",
-                    "--output",
-                    "/dev/null",
-                    "--retry",
-                    "5",
-                    "--retry-connrefused",
-                    "--retry-delay",
-                    "1",
-                    "http://127.0.0.1:8001/healthz",
-                ]
+            state["http_readiness"] = wait_for_http_health(
+                "http://127.0.0.1:8001/healthz", "http://127.0.0.1:8001/readyz",
             )
             for relative, expected in manifest["files"].items():
                 if relative.split("/")[0] in RUNTIME or relative == "data/districts.yaml":
