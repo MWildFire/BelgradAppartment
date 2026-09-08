@@ -197,3 +197,25 @@ async def test_retry_reuses_original_override_caption_and_ordered_media(db, tmp_
     assert len(retry_calls) == (2 if all_fail else 1)
     assert all(call["caption"] == original_caption for call in retry_calls)
     assert all(call["photo"].path == original_path for call in retry_calls)
+
+
+@pytest.mark.asyncio
+async def test_incomplete_album_receipt_is_unknown_not_sent(db, tmp_path, bot_config, monkeypatch):
+    from src.db.models import InboundPost
+    mid = await _seed_match_with_real_photo(get_session, tmp_path)
+    second = tmp_path / "second.jpg"
+    await asyncio.to_thread(second.write_bytes, b"second-image")
+    async with get_session() as session:
+        inbound = (await session.execute(select(InboundPost))).scalar_one()
+        inbound.photo_paths = [*inbound.photo_paths, str(second)]
+    bot = StrictBot()
+    async def partial_receipt(**kwargs):
+        assert len(kwargs["media"]) == 2
+        return [SimpleNamespace(message_id=111)]
+    bot.send_media_group = partial_receipt
+    monkeypatch.setattr(bot_delivery, "_make_bot", lambda: bot)
+    with pytest.raises(bot_delivery.BotDeliveryError):
+        await bot_delivery.send_match_via_bot(mid)
+    assert await _states(mid) == {123: "unknown", 456: "unknown"}
+    async with get_session() as session:
+        assert (await session.execute(select(PublishedPost))).scalar_one_or_none() is None

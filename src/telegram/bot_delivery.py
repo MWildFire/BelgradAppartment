@@ -214,7 +214,7 @@ async def send_match_via_bot(
                 message_ids = [int(message.message_id) for message in messages]
             except (TypeError, AttributeError, ValueError):
                 message_ids = []
-            if not message_ids or any(message_id <= 0 for message_id in message_ids):
+            if len(message_ids) != len(media) or any(message_id <= 0 for message_id in message_ids):
                 await finish_recipient(match_id, chat_id, token)
                 continue
             # A DB failure after provider acceptance leaves the claim in sending, becoming

@@ -51,7 +51,8 @@ async def prepare_recipients(
                 MatchDelivery.match_id == match_id,
                 MatchDelivery.recipient_id.in_(recipients),
                 MatchDelivery.status.in_(["sent", "failed"]),
-            ).values(status="pending", claim_token=None, error_code=None, updated_at=now, payload=payload))
+            ).values(status="pending", claim_token=None, error_code=None,
+                     updated_at=now, payload=payload))
         await session.execute(update(MatchDelivery).where(
             MatchDelivery.match_id == match_id, MatchDelivery.status == "sending",
             MatchDelivery.claimed_at < now - CLAIM_TIMEOUT,

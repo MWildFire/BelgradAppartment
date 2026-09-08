@@ -213,7 +213,7 @@ async def _send_match_via_userbot(
             raise DeliveryError(f"Match {match_id}: {type(error).__name__}") from error
         messages = messages if isinstance(messages, list) else [messages]
         message_ids = [int(message.id) for message in messages if message is not None]
-        if not message_ids or any(message_id <= 0 for message_id in message_ids):
+        if len(message_ids) != len(photo_paths) or any(message_id <= 0 for message_id in message_ids):
             await finish_recipient(match_id, recipient_id, token)
             raise DeliveryError(f"Match {match_id}: provider did not confirm delivery")
         await finish_recipient(match_id, recipient_id, token, message_ids=message_ids)

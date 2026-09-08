@@ -130,3 +130,29 @@ async def test_dry_run_does_not_advance_cursor_or_queue(db_url):
     assert await _queue(db_url) == []
     async with sitedb.read_session(database_url=db_url) as session:
         assert (await session.execute(select(Subscription.notification_cursor_at))).scalar_one() is None
+
+
+@pytest.mark.asyncio
+async def test_dead_backlog_does_not_starve_later_items_and_reactivation_is_not_lost(db_url, monkeypatch):
+    sub_id = await _add_sub(db_url)
+    monkeypatch.setattr(get_settings(), "site_smtp_host", "")
+    await notify.notify_subscriptions(database_url=db_url)
+    assert len(await _queue(db_url)) == 3
+    async with sitedb.writer_session(database_url=db_url) as session:
+        await session.execute(update(Listing).where(Listing.id == 1).values(is_active=False, link_status="DEAD"))
+        await session.execute(update(SiteListing).values(created_at=datetime.now(UTC) - timedelta(hours=100)))
+    monkeypatch.setattr(notify, "SUBSCRIPTION_DIGEST_MAX", 1)
+    sent = []
+    async def confirmed(email, views, url):
+        sent.extend(view.id for view in views)
+        return True
+    monkeypatch.setattr(notify, "send_subscription_digest", confirmed)
+    await notify.notify_subscriptions(database_url=db_url)
+    await notify.notify_subscriptions(database_url=db_url)
+    assert sent == [2, 3]
+    assert (sub_id, 1) not in await _matches(db_url)
+    async with sitedb.writer_session(database_url=db_url) as session:
+        await session.execute(update(Listing).where(Listing.id == 1).values(is_active=True))
+    await notify.notify_subscriptions(database_url=db_url)
+    assert sent == [2, 3, 1]
+    assert len(await _matches(db_url)) == 3

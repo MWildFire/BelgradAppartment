@@ -81,13 +81,19 @@ async def reconcile_unknown(
     confirmed_sent records the historical fact without sending. A verified non-send releases
     unknown rows to failed for the usual queued retry; scheduled jobs never call this helper.
     """
-    token = uuid4().hex
+    now = datetime.now(UTC)
     async with sitedb.writer_session(database_url=database_url) as session:
-        count = (await session.execute(update(SubscriptionDelivery).where(
+        resolved = list((await session.execute(update(SubscriptionDelivery).where(
             SubscriptionDelivery.subscription_id == subscription_id,
             SubscriptionDelivery.site_listing_id.in_(ids),
             SubscriptionDelivery.status == "unknown",
-        ).values(status="sending", claim_token=token))).rowcount
-    await finish(database_url, subscription_id, token,
-                 status="sent" if confirmed_sent else "failed", error_code="operator_reconciled")
-    return count or 0
+        ).values(status="sent" if confirmed_sent else "failed", claim_token=None,
+                 error_code="operator_reconciled", updated_at=now,
+                 delivered_at=now if confirmed_sent else None)
+          .returning(SubscriptionDelivery.site_listing_id))).scalars())
+        if confirmed_sent and resolved:
+            await session.execute(sqlite_insert(SubscriptionMatch).values([
+                {"subscription_id": subscription_id, "site_listing_id": sl_id, "notified_at": now}
+                for sl_id in resolved
+            ]).on_conflict_do_nothing(index_elements=["subscription_id", "site_listing_id"]))
+    return len(resolved)
