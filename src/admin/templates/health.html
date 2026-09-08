@@ -36,6 +36,24 @@
 </table>
 <p>Публичные исходники с подтверждённым обновлением ≤24 часов: {{ ops.public_fresh }} / {{ ops.public }}.
   Время неудачной попытки не считается успешным обновлением.</p>
+{% if ops.public_refresh is defined %}
+{% set public_run = ops.public_refresh %}
+<h3>Последнее обновление публичных исходников</h3>
+<p><strong>{{ {'success': 'завершено', 'degraded': 'завершено с ошибками',
+  'running': 'выполняется', 'failed': 'сбой', 'cancelled': 'остановлено',
+  'missing': 'нет записи', 'unknown': 'данные не подтверждены',
+  'stalled': 'нет прогресса'}.get(public_run.status, 'данные не подтверждены') }}</strong>
+  · Последняя запись: {{ public_run.checkpoint_at or 'нет данных' }}.
+  Выбрано {{ public_run.selected }}, подтверждено {{ public_run.verified }},
+  ошибок {{ public_run.errors }}, пропущено {{ public_run.skipped }},
+  ошибок источников {{ public_run.source_error_count }}.
+  {% if not public_run.final %}Завершение не подтверждено.{% endif %}
+  {% if public_run.stop_reason == 'budget_exhausted' %}Исчерпан бюджет времени.{% endif %}
+  {% if public_run.overdue %}Нет новой записи более 13 часов.{% endif %}</p>
+{% if public_run.source_errors %}<ul>
+  {% for source, code in public_run.source_errors.items() %}<li>{{ source }}: {{ code }}</li>{% endfor %}
+</ul>{% endif %}
+{% endif %}
 {% set capacity = ops.refresh_capacity %}
 <h3>Хватает ли мощности обновлений</h3>
 <p>Сейчас {{ capacity.active }} активных объявлений и {{ ops.public_overlays }} публичных публикаций

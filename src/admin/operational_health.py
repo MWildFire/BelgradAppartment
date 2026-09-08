@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
@@ -49,6 +50,71 @@ def schedules() -> dict[str, str]:
         except (OSError, subprocess.TimeoutExpired):
             result[kind] = "unknown"
     return result
+
+
+def public_refresh_checkpoint(path: Path, *, now: datetime) -> dict:
+    """Read public-only progress separately; it cannot establish full-crawl success."""
+    unknown = {
+        "status": "unknown", "run_id": None, "checkpoint_at": None, "final": False,
+        "stop_reason": None,
+        "selected": 0, "updated": 0, "verified": 0, "errors": 0, "skipped": 0,
+        "source_errors": {}, "source_error_count": 0, "overdue": False,
+    }
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(65537)
+        if len(payload) > 65536:
+            return unknown
+        value = json.loads(payload)
+        if not isinstance(value, dict):
+            return unknown
+        run_id = value.get("run_id")
+        checked = _datetime(value.get("checkpoint_at"))
+        final = value.get("final")
+        stop = value.get("stop_reason")
+        counts = {name: value.get(name) for name in (
+            "selected", "updated", "verified", "errors", "skipped",
+        )}
+        source_errors = value.get("source_errors")
+        if (
+            not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id)
+            or checked is None or checked > now or not isinstance(final, bool)
+            or stop not in {"running", "completed", "empty", "degraded", "budget_exhausted",
+                            "cancelled", "failed"}
+            or any(not isinstance(number, int) or isinstance(number, bool) or number < 0
+                   for number in counts.values())
+            or not isinstance(source_errors, dict)
+        ):
+            return unknown
+        safe_sources = {
+            platform.value: (code if isinstance(code, str)
+                             and re.fullmatch(r"[A-Za-z0-9_]{1,80}", code) else "unknown")
+            for platform in Platform
+            if (code := source_errors.get(platform.value)) is not None
+        }
+        failures = counts["errors"] or counts["skipped"] or source_errors
+        if not final:
+            status = "stalled" if now - checked > timedelta(minutes=45) else "running"
+        elif stop in {"cancelled", "failed"}:
+            status = stop
+        elif (failures or stop in {"degraded", "budget_exhausted"}
+              or counts["verified"] != counts["selected"]):
+            status = "degraded"
+        elif stop in {"completed", "empty"}:
+            status = "success"
+        else:
+            return unknown
+        return {
+            "status": status, "run_id": run_id, "checkpoint_at": checked, "final": final,
+            "stop_reason": stop,
+            **counts, "source_errors": safe_sources, "source_error_count": len(source_errors),
+            # Longest scheduled gap is 12h05; allow the full 45-minute service window.
+            "overdue": now - checked > timedelta(hours=13),
+        }
+    except FileNotFoundError:
+        return unknown | {"status": "missing"}
+    except (OSError, ValueError, TypeError):
+        return unknown
 
 
 def refresh_capacity(inventory: list[RefreshCandidate], *, settings, now: datetime) -> dict:
@@ -174,6 +240,16 @@ async def build_operations(session, *, now: datetime | None = None) -> dict:
     runs = read_runs()
     sources = []
     reasons = []
+    public_refresh = public_refresh_checkpoint(
+        settings.data_dir / "state" / "freshness" / "public_refetch.json", now=now,
+    )
+    if public_refresh["status"] not in {"success", "running"}:
+        reasons.append(f"public detail refresh: {public_refresh['status']}")
+    elif (public_refresh["errors"] or public_refresh["skipped"]
+          or public_refresh["source_error_count"]):
+        reasons.append("public detail refresh reports errors or skipped work")
+    if public_refresh["overdue"]:
+        reasons.append("public detail refresh has no checkpoint in 13 hours")
     for platform in Platform:
         full_successes = [
             run
@@ -271,6 +347,7 @@ async def build_operations(session, *, now: datetime | None = None) -> dict:
         "reasons": reasons,
         "sources": sources,
         "latest_run": runs[0] if runs else {},
+        "public_refresh": public_refresh,
         "schedules": await asyncio.to_thread(schedules),
         "public": public,
         "public_fresh": public_fresh,

@@ -180,6 +180,35 @@ def evaluate_health(
             attention.append("refresh_progress_overdue")
         elif heartbeat > now + timedelta(minutes=5):
             attention.append("refresh_clock_evidence_invalid")
+    # Public-only checkpoints never replace the main full/incremental run identity.
+    public_completed_id = previous.get("completed_public_refresh_id")
+    public_completed_status = previous.get("completed_public_refresh_status")
+    public_refresh = health.get("public_refresh")
+    if isinstance(public_refresh, Mapping):
+        public_status = public_refresh.get("status")
+        public_at = _date(public_refresh.get("checkpoint_at"))
+        public_id = _code(public_refresh.get("run_id"))
+        if public_status not in TERMINAL_RUNS | {"running", "missing", "unknown", "stalled"}:
+            attention.append("public_refresh_unknown")
+        if (public_refresh.get("final") is True and public_status in TERMINAL_RUNS
+                and public_id != "unknown"):
+            if public_at and public_at <= now:
+                public_completed_id = public_id
+                public_completed_status = public_status
+            else:
+                attention.append("public_refresh_unknown")
+        if public_status in {"missing", "unknown", "stalled"}:
+            attention.append(f"public_refresh_{public_status}")
+        if public_status == "running" and any(_count(public_refresh.get(name)) for name in (
+            "errors", "skipped", "source_error_count",
+        )):
+            attention.append("public_refresh_errors")
+        if public_refresh.get("overdue") is True:
+            attention.append("public_refresh_overdue")
+    elif "public_refresh" in health:
+        attention.append("public_refresh_unknown")
+    if public_completed_status in {"failed", "degraded", "cancelled"}:
+        attention.append(f"public_refresh_{public_completed_status}")
     reported_status = health.get("status")
     if reported_status not in {"ok", "degraded"}:
         attention.append("operational_health_unavailable")
@@ -194,6 +223,8 @@ def evaluate_health(
         "delivery_failures": delivery_failures,
         "completed_run_id": completed_id,
         "completed_run_status": completed_status,
+        "completed_public_refresh_id": public_completed_id,
+        "completed_public_refresh_status": public_completed_status,
         "attention_codes": sorted(set(attention)),
     }
     signature = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
@@ -201,6 +232,11 @@ def evaluate_health(
     added = sorted(set(attention) - prior_attention)
     resolved = sorted(prior_attention - set(attention))
     new_completion = bool(completed_id and completed_id != previous.get("completed_run_id"))
+    new_public_completion = bool(
+        public_completed_id
+        and (public_completed_id != previous.get("completed_public_refresh_id")
+             or public_completed_status != previous.get("completed_public_refresh_status"))
+    )
     changed_deliveries = bool(previous) and delivery_failures != previous.get("delivery_failures")
     targets_changed = bool(previous) and (
         public_good != previous.get("public_freshness_target_met")
@@ -209,13 +245,14 @@ def evaluate_health(
         or ("proxy_service" in previous and proxy != previous["proxy_service"])
         or ("refresh_capacity" in previous and capacity != previous["refresh_capacity"])
     )
-    emit = bool(added or resolved or new_completion or changed_deliveries or targets_changed)
+    emit = bool(added or resolved or new_completion or new_public_completion
+                or changed_deliveries or targets_changed)
     event_kind = (
         "attention"
         if added or (any(delivery_failures.values()) and changed_deliveries)
         else (
             "run_completed"
-            if new_completion
+            if new_completion or new_public_completion
             else "recovered"
             if resolved
             else "changed"
@@ -228,8 +265,12 @@ def evaluate_health(
         "kind": event_kind,
         "attention_added": added,
         "attention_resolved": resolved,
-        "run_completed": new_completion,
+        "run_completed": new_completion or new_public_completion,
         "completed_run_status": completed_status if new_completion else None,
+        "public_refresh_completed": new_public_completion,
+        "completed_public_refresh_status": (
+            public_completed_status if new_public_completion else None
+        ),
         "delivery_failures": delivery_failures,
         "read_only": True,
         "messages_sent": 0,

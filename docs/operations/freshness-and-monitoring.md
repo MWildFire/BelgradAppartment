@@ -56,6 +56,15 @@ least 31 successful refreshes daily; at a measured 50% success rate that is 62 a
 A quota is a capacity requirement, not proof that source failures are repaired. Actual
 attainment requires new successful timestamps measured after real runs.
 
+Public-only maintenance writes `data/state/freshness/public_refetch.json`. The admin
+health report exposes its sanitized `public_refresh` status, checkpoint time, selected/
+verified/error/skipped counts and source error codes separately from `latest_run`.
+Failures are visible immediately even while older successful data still meets the age
+target. Missing/invalid/future evidence is explicit, unfinished progress becomes stalled
+after 45 minutes, and no checkpoint for 13 hours is overdue. A public-only success never
+establishes a full-source crawl success. Check systemd Result/ExecMainStatus as well:
+failure before the first checkpoint cannot provide a new application run record.
+
 ## Quiet heartbeat events
 
 `src/jobs/ops_monitor.py` consumes a private JSON snapshot of
@@ -80,3 +89,8 @@ after handling an event. An explicit `--write-state /private/state.json` is avai
 local state persistence; the parent must be mode 0700 and the state is atomically written
 mode 0600. Even with that option, the helper never sends a message. A saved monitor state
 is not proof that an external notification or automatic refresh occurred.
+
+Public-only completions have their own identity and status in the monitor state.
+Each newly completed public run or changed failure condition emits one event; unchanged
+polls and ordinary progress stay quiet. Main nightly records cannot overwrite that
+comparison state. These events still do not send any external messages themselves.
