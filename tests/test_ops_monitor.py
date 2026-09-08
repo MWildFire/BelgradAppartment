@@ -28,6 +28,23 @@ def health():
         "public": 10,
         "public_fresh": 10,
         "backup_verified": True,
+        "proxy_service": {
+            "status": "verified",
+            "verified_at": NOW.isoformat(),
+            "orders": [
+                {
+                    "order_id": "12345678",
+                    "expires_at": (NOW + timedelta(days=17)).isoformat(),
+                    "subscription_enabled": True,
+                }
+            ],
+        },
+        "refresh_capacity": {
+            "status": "estimate_only",
+            "minimum_daily_successes": 20,
+            "configured_daily_attempts": 200,
+            "estimated_daily_attempts": 40,
+        },
         "deliveries": {"finder": {"pending": 50}, "subscriptions": {"sent": 20}},
         "latest_run": {},
         "raw_secret": "never copy this private payload",
@@ -124,3 +141,106 @@ def test_explicit_saved_state_private_and_atomic(tmp_path):
     assert path.stat().st_mode & 0o777 == 0o600
     assert path.parent.stat().st_mode & 0o777 == 0o700
     assert not list(path.parent.glob("*.tmp"))
+
+
+def test_static_inadequate_quota_is_quiet_on_later_days_and_small_inventory_growth():
+    value = health()
+    value["status"] = "degraded"
+    value["backup_verified"] = False
+    value["refresh_capacity"].update(minimum_daily_successes=1948, estimated_daily_attempts=None)
+    initial = evaluate_health(value, now=NOW)
+    assert "refresh_capacity_insufficient_even_at_full_success" in initial["attention_added"]
+    value["refresh_capacity"]["minimum_daily_successes"] = 1949
+    value["proxy_service"]["verified_at"] = (NOW + timedelta(days=2)).isoformat()
+    later = evaluate_health(value, initial["next_state"], now=NOW + timedelta(days=2))
+    assert not later["emit"]
+    assert later["next_state"]["signature"] == initial["next_state"]["signature"]
+
+
+def test_capacity_thresholds_emit_even_when_other_conditions_remain_degraded():
+    value = health()
+    value["status"] = "degraded"
+    value["backup_verified"] = False
+    previous = evaluate_health(value, now=NOW)["next_state"]
+    value["refresh_capacity"].update(minimum_daily_successes=1948, estimated_daily_attempts=None)
+    insufficient = evaluate_health(value, previous, now=NOW)
+    assert insufficient["emit"]
+    value["refresh_capacity"]["configured_daily_attempts"] = 2000
+    unknown = evaluate_health(value, insufficient["next_state"], now=NOW)
+    assert unknown["emit"] and "refresh_capacity_unverified" in unknown["attention_added"]
+    value["refresh_capacity"]["estimated_daily_attempts"] = 4000
+    measured = evaluate_health(value, unknown["next_state"], now=NOW)
+    assert "refresh_capacity_insufficient_at_observed_rate" in measured["attention_added"]
+    value["refresh_capacity"]["configured_daily_attempts"] = 4000
+    recovered = evaluate_health(value, measured["next_state"], now=NOW)
+    assert recovered["emit"] and recovered["kind"] == "recovered"
+    assert (
+        "verified_backup_missing_or_stale" in recovered["next_state"]["snapshot"]["attention_codes"]
+    )
+    assert not evaluate_health(value, recovered["next_state"], now=NOW)["emit"]
+
+
+def test_capacity_zero_success_and_invalid_counts_remain_unverified():
+    value = health()
+    previous = evaluate_health(value, now=NOW)["next_state"]
+    value["refresh_capacity"].update(status="no_observed_success", estimated_daily_attempts=None)
+    failure = evaluate_health(value, previous, now=NOW)
+    assert "refresh_capacity_no_observed_success" in failure["attention_added"]
+    value["refresh_capacity"]["configured_daily_attempts"] = "private invalid value"
+    invalid = evaluate_health(value, failure["next_state"], now=NOW)
+    assert "refresh_capacity_unverified" in invalid["attention_added"]
+    assert "private" not in json.dumps(invalid)
+
+
+def test_proxy_expiry_and_renewal_changes_emit_even_with_dated_receipt_and_degraded_health():
+    value = health()
+    value["status"] = "degraded"
+    value["backup_verified"] = False
+    value["proxy_service"]["verified_at"] = (NOW - timedelta(days=2)).isoformat()
+    previous = evaluate_health(value, now=NOW)["next_state"]
+    value["proxy_service"]["orders"][0]["subscription_enabled"] = False
+    renewal = evaluate_health(value, previous, now=NOW)
+    assert "proxy_renewal_disabled" in renewal["attention_added"]
+    assert "proxy_verification_dated" in renewal["next_state"]["snapshot"]["attention_codes"]
+    value["proxy_service"]["orders"][0]["expires_at"] = (NOW + timedelta(days=2)).isoformat()
+    expiring = evaluate_health(value, renewal["next_state"], now=NOW)
+    assert "proxy_expiring" in expiring["attention_added"]
+    expired = evaluate_health(value, expiring["next_state"], now=NOW + timedelta(days=2, seconds=1))
+    assert "proxy_expired" in expired["attention_added"]
+    assert "proxy_expiring" in expired["attention_resolved"]
+    assert not evaluate_health(value, expired["next_state"], now=NOW + timedelta(days=3))["emit"]
+
+
+def test_proxy_receipt_crosses_36_hours_once_and_fresh_verification_recovers_once():
+    value = health()
+    previous = evaluate_health(value, now=NOW)["next_state"]
+    dated = evaluate_health(value, previous, now=NOW + timedelta(hours=37))
+    assert "proxy_verification_dated" in dated["attention_added"]
+    assert not evaluate_health(value, dated["next_state"], now=NOW + timedelta(hours=38))["emit"]
+    value["proxy_service"]["verified_at"] = (NOW + timedelta(hours=38)).isoformat()
+    recovered = evaluate_health(value, dated["next_state"], now=NOW + timedelta(hours=38))
+    assert recovered["emit"] and recovered["kind"] == "recovered"
+    assert "proxy_verification_dated" in recovered["attention_resolved"]
+
+
+def test_proxy_countdown_order_ids_and_regular_reverification_are_quiet_and_not_copied():
+    value = health()
+    previous = evaluate_health(value, now=NOW)["next_state"]
+    value["proxy_service"]["verified_at"] = (NOW + timedelta(hours=12)).isoformat()
+    value["proxy_service"]["orders"][0]["order_id"] = "private order identifier"
+    value["proxy_service"]["orders"][0]["credentials"] = "private credential"
+    value["proxy_service"]["endpoint"] = "private proxy endpoint"
+    same = evaluate_health(value, previous, now=NOW + timedelta(hours=12))
+    assert not same["emit"]
+    assert "private" not in json.dumps(same)
+    assert "expires_at" not in json.dumps(same)
+
+
+def test_claimed_healthy_proxy_with_future_or_missing_evidence_is_unknown():
+    value = health()
+    previous = evaluate_health(value, now=NOW)["next_state"]
+    value["proxy_service"]["verified_at"] = (NOW + timedelta(days=1)).isoformat()
+    future = evaluate_health(value, previous, now=NOW)
+    assert "proxy_verification_unknown" in future["attention_added"]
+    value["proxy_service"]["orders"] = []
+    assert not evaluate_health(value, future["next_state"], now=NOW)["emit"]

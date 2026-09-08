@@ -42,6 +42,70 @@ def _code(value: Any) -> str:
     )
 
 
+def _proxy_conditions(value: Any, now: datetime) -> tuple[dict[str, str], list[str]]:
+    """Retain threshold states only; expiry countdown and order metadata do not cause noise."""
+    unknown = {"verification": "unknown", "expiry": "unknown", "renewal": "unknown"}
+    if not isinstance(value, Mapping):
+        return unknown, ["proxy_verification_unknown"]
+    verified = _date(value.get("verified_at"))
+    orders = value.get("orders")
+    if (
+        verified is None
+        or verified > now + timedelta(minutes=5)
+        or not isinstance(orders, list)
+        or not orders
+    ):
+        return unknown, ["proxy_verification_unknown"]
+    expiries, subscriptions = [], []
+    for order in orders:
+        if not isinstance(order, Mapping):
+            return unknown, ["proxy_verification_unknown"]
+        expires, subscription = _date(order.get("expires_at")), order.get("subscription_enabled")
+        if expires is None or not isinstance(subscription, bool):
+            return unknown, ["proxy_verification_unknown"]
+        expiries.append(expires)
+        subscriptions.append(subscription)
+    nearest = min(expiries)
+    conditions = {
+        "verification": "dated" if now - verified > timedelta(hours=36) else "current",
+        "expiry": "expired"
+        if nearest <= now
+        else "expiring"
+        if nearest - now <= timedelta(days=3)
+        else "future",
+        "renewal": "enabled" if all(subscriptions) else "disabled",
+    }
+    attention = []
+    if conditions["verification"] == "dated":
+        attention.append("proxy_verification_dated")
+    if conditions["expiry"] in {"expired", "expiring"}:
+        attention.append(f"proxy_{conditions['expiry']}")
+    if conditions["renewal"] == "disabled":
+        attention.append("proxy_renewal_disabled")
+    return conditions, attention
+
+
+def _capacity_condition(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return "unverified"
+    minimum, quota = value.get("minimum_daily_successes"), value.get("configured_daily_attempts")
+    if any(
+        not isinstance(number, int) or isinstance(number, bool) or number < 0
+        for number in (minimum, quota)
+    ):
+        return "unverified"
+    # Compare actual thresholds as well as the producer's label. Never infer measured
+    # throughput from the quota or notify on ordinary count growth within one condition.
+    if quota < minimum:
+        return "insufficient_even_at_full_success"
+    if value.get("status") == "no_observed_success":
+        return "no_observed_success"
+    estimated = value.get("estimated_daily_attempts")
+    if not isinstance(estimated, int) or isinstance(estimated, bool) or estimated < minimum:
+        return "unverified"
+    return "insufficient_at_observed_rate" if quota < estimated else "estimate_only"
+
+
 def evaluate_health(
     health: Mapping[str, Any],
     previous_state: Mapping[str, Any] | None = None,
@@ -53,6 +117,8 @@ def evaluate_health(
     Ordinary progress/count movement below a target does not repeatedly notify. Crossing
     the 95% active or 100% public freshness target does. Failed delivery-count growth and
     resolution are meaningful; a merely pending queue is not called failed without age proof.
+    Proxy verification/expiry/renewal and capacity conditions are independent of overall
+    degraded status. Unchanged inadequate capacity is quiet even on a later calendar day.
     Raw reasons, summaries, URLs, recipients, source IDs and private payloads are not copied.
     """
     now = _date(now or datetime.now(UTC))
@@ -88,6 +154,11 @@ def evaluate_health(
     backup_good = health.get("backup_verified") is True
     if not backup_good:
         attention.append("verified_backup_missing_or_stale")
+    proxy, proxy_attention = _proxy_conditions(health.get("proxy_service"), now)
+    attention.extend(proxy_attention)
+    capacity = _capacity_condition(health.get("refresh_capacity"))
+    if capacity != "estimate_only":
+        attention.append(f"refresh_capacity_{capacity}")
     delivery_failures = {}
     for kind in ("finder", "subscriptions"):
         counts = health.get("deliveries", {}).get(kind, {})
@@ -118,6 +189,8 @@ def evaluate_health(
         "sources": sources,
         "public_freshness_target_met": public_good,
         "backup_verified": backup_good,
+        "proxy_service": proxy,
+        "refresh_capacity": capacity,
         "delivery_failures": delivery_failures,
         "completed_run_id": completed_id,
         "completed_run_status": completed_status,
@@ -133,6 +206,8 @@ def evaluate_health(
         public_good != previous.get("public_freshness_target_met")
         or sources != previous.get("sources")
         or backup_good != previous.get("backup_verified")
+        or ("proxy_service" in previous and proxy != previous["proxy_service"])
+        or ("refresh_capacity" in previous and capacity != previous["refresh_capacity"])
     )
     emit = bool(added or resolved or new_completion or changed_deliveries or targets_changed)
     event_kind = (
