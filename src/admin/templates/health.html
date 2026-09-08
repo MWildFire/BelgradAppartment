@@ -36,10 +36,61 @@
 </table>
 <p>Публичные исходники с подтверждённым обновлением ≤24 часов: {{ ops.public_fresh }} / {{ ops.public }}.
   Время неудачной попытки не считается успешным обновлением.</p>
+{% set capacity = ops.refresh_capacity %}
+<h3>Хватает ли мощности обновлений</h3>
+<p>Сейчас {{ capacity.active }} активных объявлений и {{ ops.public_overlays }} публичных публикаций
+  ({{ capacity.public_originals }} уникальных исходников).
+  Для целей «публичные ≤24 часов, 95% активных ≤7 дней» требуется как минимум
+  <strong>{{ capacity.minimum_daily_successes }} успешных обновлений в сутки</strong>.
+  Настроенный лимит регулярной очереди — <strong>{{ capacity.configured_daily_attempts }} попыток в сутки</strong>.</p>
+{% if capacity.status == 'insufficient_even_at_full_success' %}
+<p class="badge badge-red">Лимита недостаточно даже при 100% успехе:
+  не хватает как минимум {{ capacity.minimum_daily_shortfall }} успешных обновлений в сутки.</p>
+{% elif capacity.status == 'insufficient_at_observed_rate' %}
+<p class="badge badge-red">Лимит ниже оценки по наблюдаемой доле успеха:
+  около {{ capacity.estimated_daily_attempts }} попыток в сутки.</p>
+{% elif capacity.status == 'no_observed_success' %}
+<p class="badge badge-red">В выборке одного из источников нет успешных попыток.
+  Конечную потребность в попытках для него оценить нельзя.</p>
+{% elif capacity.status == 'unverified' %}
+<p class="badge badge-yellow">Недостаточно подтверждённых попыток для оценки рабочего лимита.</p>
+{% else %}
+<p>Лимит не ниже расчётной оценки. Достижение целей проверяется по фактической свежести выше.</p>
+{% endif %}
+<table>
+  <thead><tr><th>Источник</th><th>Активных / публичных исходников</th><th>Минимум успехов в сутки</th><th>Последние попытки за 7 дней</th><th>Оценка попыток в сутки</th></tr></thead>
+  <tbody>{% for platform, q in capacity.sources.items() %}<tr>
+    <td>{{ platform }}</td><td>{{ q.active }} / {{ q.public }}</td>
+    <td>{{ q.minimum_daily_successes }}</td>
+    <td>{% if q.measured_success_rate is not none %}{{ (q.measured_success_rate * 100) | round(1) }}%:
+      {{ q.latest_attempt_sample.succeeded }} успешно, {{ q.latest_attempt_sample.failed }} неудачно
+      {% else %}Нет подтверждённых результатов{% endif %}
+      {% if q.latest_attempt_sample.unknown %}; {{ q.latest_attempt_sample.unknown }} без доказанного результата{% endif %}</td>
+    <td>{{ q.estimated_daily_attempts if q.estimated_daily_attempts is not none else 'неизвестно' }}</td>
+  </tr>{% endfor %}</tbody>
+</table>
+<p class="muted">Доля успеха — выборка только последней попытки каждого исходника за 7 дней,
+  а не число всех попыток или производительность запуска. Старые отметки попыток без доказанного результата исключены.
+  Поля и полный комплект фотографий должны быть подтверждены вместе. Оценка — нижняя граница, а не обещание сроков.
+  Дополнительно настроено до {{ capacity.configured_heal_attempts }} попыток ремонта;
+  они не считаются гарантированным покрытием регулярной очереди.
+  Общий бюджет обслуживания деталей и проверки ссылок — {{ capacity.shared_budget_sec }} секунд за запуск;
+  ограничение времени и ошибки источников могут уменьшить фактически выполненное число.</p>
 <p>Восстановление внешней копии: {{ 'подтверждено' if ops.backup_verified else 'требует проверки' }}.
   Копия от {{ ops.backup_created or 'неизвестно' }}.</p>
 <p>Очередь Finder: {{ ops.deliveries.finder }} · Подписки: {{ ops.deliveries.subscriptions }}.</p>
-<p>Срок прокси: {{ ops.proxy_expiry }}.</p>
+{% set proxy = ops.proxy_service %}
+<p>Проверка срока прокси:
+  {{ {'verified': 'подтверждена', 'dated': 'сведения устарели', 'unknown': 'не подтверждена',
+      'expired': 'срок истёк', 'expiring': 'срок истекает в течение 3 дней',
+      'renewal_disabled': 'автопродление отключено'}.get(proxy.status, 'не подтверждена') }}.
+  {% if proxy.verified_at %}Сверено {{ proxy.verified_at }}.{% endif %}
+  {% if proxy.nearest_expiry %}Ближайшее окончание {{ proxy.nearest_expiry }}.{% endif %}
+  Сведения старше 36 часов требуют повторной сверки.</p>
+{% if proxy.orders %}<ul>{% for order in proxy.orders %}
+  <li>Заказ {{ order.order_id }}: до {{ order.expires_at }},
+    автопродление {{ 'включено' if order.subscription_enabled else 'отключено' }}.</li>
+{% endfor %}</ul>{% endif %}
 <ul>{% for kind, next_run in ops.schedules.items() %}<li>{{ kind }}: {{ next_run or 'неизвестно' }}</li>{% endfor %}</ul>
 <ul>{% for reason in ops.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
 
