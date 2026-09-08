@@ -1,0 +1,415 @@
+{
+  "max_pages": 500,
+  "compare_limit": 100,
+  "run_id": "69d82157c7994222b21af340f737c2cf",
+  "source": "nekretnine",
+  "mode": "shadow",
+  "no_db_writes": true,
+  "no_telegram_sends": true,
+  "no_stale_sweep": true,
+  "previewed": 4481,
+  "site_total": 4484,
+  "skipped_pages": 0,
+  "coverage": 0.9993309545049064,
+  "sample_compared": 100,
+  "complete_snapshots": 49,
+  "fallback_count": 51,
+  "fallback_succeeded": 49,
+  "sample_segments": [
+    "complete:band-4",
+    "complete:band-10",
+    "complete:band-11",
+    "complete:band-7",
+    "complete:band-5",
+    "complete:band-1",
+    "complete:band-9",
+    "complete:band-8",
+    "fallback:band-10",
+    "fallback:band-9",
+    "fallback:band-7",
+    "complete:band-6",
+    "fallback:band-5",
+    "fallback:band-8",
+    "fallback:band-11",
+    "complete:band-2",
+    "fallback:band-4",
+    "complete:band-3",
+    "complete:band-0",
+    "fallback:band-6",
+    "fallback:band-3",
+    "fallback:band-1",
+    "fallback:band-0",
+    "fallback:band-2",
+    "fallback:band--1"
+  ],
+  "population_segments": 25,
+  "crawl_complete": false,
+  "stop_reason": "source_total_changed",
+  "mismatched_count": 0,
+  "detail_errors": 2,
+  "browser_proxy_errors": 0,
+  "proxy_metrics": {
+    "proxy_attempts": 875,
+    "proxy_failovers": 2,
+    "proxy_challenges": 2,
+    "proxy_errors": 0,
+    "browser_proxy_errors": 0,
+    "http_attempts": 433,
+    "http_errors": 433,
+    "http_recovered_errors": 433,
+    "http_residual_errors": 0,
+    "browser_attempts": 442,
+    "browser_errors": 9,
+    "browser_recovered_errors": 9,
+    "http_attempts_primary": 195,
+    "browser_attempts_primary": 199,
+    "browser_attempts_secondary": 201,
+    "http_attempts_secondary": 197,
+    "browser_attempts_additional-1": 42,
+    "http_attempts_additional-1": 41,
+    "failed_proxy_slots": 2
+  },
+  "mismatches": [],
+  "fallback_listing_ids": [
+    "1388315",
+    "814537",
+    "1023265",
+    "1469561",
+    "1455059",
+    "1469743",
+    "1471453",
+    "1463153",
+    "1483943",
+    "1025231",
+    "1320157",
+    "1005297",
+    "1059287",
+    "1014091",
+    "97881",
+    "1440191",
+    "1413597",
+    "1440169",
+    "1434655",
+    "1359797",
+    "1334411",
+    "1241033",
+    "1469563",
+    "1215551",
+    "1473945",
+    "1467407",
+    "1362489",
+    "1344271",
+    "1420023",
+    "1428345",
+    "1222271",
+    "1459593",
+    "1483271",
+    "1467427",
+    "1151963",
+    "1078625",
+    "1407893",
+    "1345405",
+    "1354793",
+    "1421001",
+    "44557",
+    "1460017",
+    "1062717",
+    "1475311",
+    "1091891",
+    "1104265",
+    "1472119",
+    "1438191",
+    "1480095",
+    "1341401",
+    "1454333"
+  ],
+  "detail_error_listing_ids": [
+    "1059287",
+    "1014091"
+  ],
+  "thresholds": {
+    "min_coverage": 0.98,
+    "healthy_baseline_coverage": null,
+    "max_fallback_rate": null,
+    "fallback_rate": 0.51
+  },
+  "passed": false,
+  "failure_reasons": [
+    "crawl_incomplete",
+    "untrusted_denominator",
+    "legacy_detail_errors"
+  ],
+  "detail_probe": {
+    "application_db_writes": 0,
+    "application_media_writes": 0,
+    "attempted": 2,
+    "browser_start": {
+      "attempts": 1,
+      "cancelled": 0,
+      "events": [
+        {
+          "attempt": 1,
+          "elapsed_sec": 3.059,
+          "phase": "browser_start",
+          "started_at": "2026-09-08T11:19:37.206428+00:00",
+          "status": "succeeded"
+        }
+      ],
+      "events_omitted": 0,
+      "failed": 0,
+      "instrumented": true,
+      "succeeded": 1
+    },
+    "cohort_sha256": "f2519055d55700ded4e5ec1a344316c1b499f4a7e8e9025ad687fa1e2eddee26",
+    "complete": true,
+    "completed_at": "2026-09-08T11:19:47.208780+00:00",
+    "execution_context": {
+      "browser_headless": false,
+      "cwd_matches_app_root": false,
+      "display_present": true,
+      "home_is_opt_otz": true,
+      "playwright_browsers_path_set": false,
+      "playwright_fallback_enabled": true
+    },
+    "external_messages_sent": 0,
+    "items": [
+      {
+        "accepted_photo_count": 9,
+        "area_present": true,
+        "browser_start_delta": {
+          "attempts": 1,
+          "cancelled": 0,
+          "failed": 0,
+          "succeeded": 1
+        },
+        "elapsed_sec": 8.779,
+        "error_code": "missing_required_fields",
+        "http_status": 200,
+        "id_sha256": "4f54c307ad1e8328e86821718fa1d954f24147a01fb03fb085782a8f053919c8",
+        "index": 1,
+        "missing_fields": [
+          "price_eur"
+        ],
+        "parsed_identity_valid": true,
+        "payload_identity_valid": true,
+        "phase": "validate_detail",
+        "price_evidence": {
+          "parser_inputs": [
+            {
+              "container": {
+                "numeric_state": "not_numeric",
+                "present": true,
+                "type": "object"
+              },
+              "formatted_value_state": "absent",
+              "parent_flags": {},
+              "path": "realEstate.price",
+              "price_flags": {
+                "visible": {
+                  "boolean_value": true,
+                  "present": true,
+                  "type": "boolean"
+                }
+              },
+              "value": {
+                "numeric_state": "absent",
+                "present": false,
+                "type": "absent"
+              }
+            },
+            {
+              "container": {
+                "numeric_state": "not_numeric",
+                "present": true,
+                "type": "object"
+              },
+              "formatted_value_state": "absent",
+              "parent_flags": {},
+              "path": "realEstate.properties[0].price",
+              "price_flags": {
+                "visible": {
+                  "boolean_value": true,
+                  "present": true,
+                  "type": "boolean"
+                }
+              },
+              "value": {
+                "numeric_state": "absent",
+                "present": false,
+                "type": "absent"
+              }
+            }
+          ],
+          "positive_raw_value_but_parsed_missing": false
+        },
+        "price_positive": false,
+        "price_present": false,
+        "proxy_metrics_after": {
+          "browser_attempts": 2,
+          "browser_errors": 1,
+          "browser_proxy_errors": 0,
+          "browser_recovered_errors": 1,
+          "failed_proxy_slots": 0,
+          "http_attempts": 1,
+          "http_errors": 1,
+          "http_recovered_errors": 1,
+          "http_residual_errors": 0,
+          "proxy_attempts": 3,
+          "proxy_challenges": 0,
+          "proxy_errors": 0,
+          "proxy_failovers": 0
+        },
+        "proxy_metrics_delta": {
+          "browser_attempts": 2,
+          "browser_errors": 1,
+          "browser_proxy_errors": 0,
+          "browser_recovered_errors": 1,
+          "failed_proxy_slots": 0,
+          "http_attempts": 1,
+          "http_errors": 1,
+          "http_recovered_errors": 1,
+          "http_residual_errors": 0,
+          "proxy_attempts": 3,
+          "proxy_challenges": 0,
+          "proxy_errors": 0,
+          "proxy_failovers": 0
+        },
+        "source_photo_entry_count": 9,
+        "source_primary_photo_present": true,
+        "status": "unusable",
+        "title_present": true
+      },
+      {
+        "accepted_photo_count": 8,
+        "area_present": true,
+        "browser_start_delta": {
+          "attempts": 0,
+          "cancelled": 0,
+          "failed": 0,
+          "succeeded": 0
+        },
+        "elapsed_sec": 1.173,
+        "error_code": "missing_required_fields",
+        "http_status": 200,
+        "id_sha256": "519cd50c00e459ce023b583690e2a944b4717ae04072d6cd53cb9a854ede396d",
+        "index": 2,
+        "missing_fields": [
+          "price_eur"
+        ],
+        "parsed_identity_valid": true,
+        "payload_identity_valid": true,
+        "phase": "validate_detail",
+        "price_evidence": {
+          "parser_inputs": [
+            {
+              "container": {
+                "numeric_state": "not_numeric",
+                "present": true,
+                "type": "object"
+              },
+              "formatted_value_state": "absent",
+              "parent_flags": {},
+              "path": "realEstate.price",
+              "price_flags": {
+                "visible": {
+                  "boolean_value": true,
+                  "present": true,
+                  "type": "boolean"
+                }
+              },
+              "value": {
+                "numeric_state": "absent",
+                "present": false,
+                "type": "absent"
+              }
+            },
+            {
+              "container": {
+                "numeric_state": "not_numeric",
+                "present": true,
+                "type": "object"
+              },
+              "formatted_value_state": "absent",
+              "parent_flags": {},
+              "path": "realEstate.properties[0].price",
+              "price_flags": {
+                "visible": {
+                  "boolean_value": true,
+                  "present": true,
+                  "type": "boolean"
+                }
+              },
+              "value": {
+                "numeric_state": "absent",
+                "present": false,
+                "type": "absent"
+              }
+            }
+          ],
+          "positive_raw_value_but_parsed_missing": false
+        },
+        "price_positive": false,
+        "price_present": false,
+        "proxy_metrics_after": {
+          "browser_attempts": 3,
+          "browser_errors": 1,
+          "browser_proxy_errors": 0,
+          "browser_recovered_errors": 1,
+          "failed_proxy_slots": 0,
+          "http_attempts": 2,
+          "http_errors": 2,
+          "http_recovered_errors": 2,
+          "http_residual_errors": 0,
+          "proxy_attempts": 5,
+          "proxy_challenges": 0,
+          "proxy_errors": 0,
+          "proxy_failovers": 0
+        },
+        "proxy_metrics_delta": {
+          "browser_attempts": 1,
+          "browser_errors": 0,
+          "browser_proxy_errors": 0,
+          "browser_recovered_errors": 0,
+          "failed_proxy_slots": 0,
+          "http_attempts": 1,
+          "http_errors": 1,
+          "http_recovered_errors": 1,
+          "http_residual_errors": 0,
+          "proxy_attempts": 2,
+          "proxy_challenges": 0,
+          "proxy_errors": 0,
+          "proxy_failovers": 0
+        },
+        "source_photo_entry_count": 8,
+        "source_primary_photo_present": true,
+        "status": "unusable",
+        "title_present": true
+      }
+    ],
+    "proxy_metrics": {
+      "browser_attempts": 3,
+      "browser_errors": 1,
+      "browser_proxy_errors": 0,
+      "browser_recovered_errors": 1,
+      "failed_proxy_slots": 0,
+      "http_attempts": 2,
+      "http_errors": 2,
+      "http_recovered_errors": 2,
+      "http_residual_errors": 0,
+      "proxy_attempts": 5,
+      "proxy_challenges": 0,
+      "proxy_errors": 0,
+      "proxy_failovers": 0
+    },
+    "runtime_nekretnine_sha256": "9c6fb88375938f46caf098f90d33e723bfd6e18793d296600c10146f229b983f",
+    "snapshot_mode": "shadow",
+    "snapshot_readiness": "not_evaluated",
+    "source_lease_acquired": true,
+    "source_report_sha256": "7315989d307e75e53df43002699e6ec480adde1b19b35473acfcef67590edd42",
+    "started_at": "2026-09-08T11:19:36.884736+00:00",
+    "targets": 2,
+    "temporary_browser_state": true,
+    "usable": 0
+  },
+  "diagnostic_limitation": "Fresh two-ID probe confirmed both parser price inputs omit numerical value; historical total drift values were not recorded. No full-readiness PASS."
+}

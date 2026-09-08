@@ -1,0 +1,65 @@
+{
+  "application": {
+    "apartment": 200,
+    "catalog": 200,
+    "network": "disabled",
+    "photo": 200,
+    "photo_decoded": true
+  },
+  "backup_format": "directory_generation",
+  "created_at": "2026-09-08T10:35:35.107685+00:00",
+  "database": {
+    "revisions": [
+      "0011_keep_on_site"
+    ],
+    "schema_sha256": "0a17589ad9d7855193fb65170bd59583bfc3cf32a49a120102e9532719daef00",
+    "table_counts": {
+      "alembic_version": 1,
+      "daily_metrics": 337,
+      "inbound_posts": 664,
+      "leads": 12,
+      "listings": 77309,
+      "matches": 371,
+      "published_posts": 368,
+      "site_events": 7643,
+      "site_listings": 267,
+      "site_stats_daily": 1371,
+      "source_channels": 1,
+      "subscription_matches": 0,
+      "subscriptions": 0
+    }
+  },
+  "files": 1050621,
+  "generation_id": "20260908-110709-00c120d6",
+  "generation_manifest_sha256": "2fb81e5ce8be977a784f16fa2f3ea3ad36e654fb0922cd41ad6aa0748f497d95",
+  "health_receipt_published": true,
+  "manifest_sha256": "2fb81e5ce8be977a784f16fa2f3ea3ad36e654fb0922cd41ad6aa0748f497d95",
+  "offhost_verified": true,
+  "photo_references": 5149,
+  "protected_proof": {
+    "config_verified": [
+      "env",
+      "caddy"
+    ],
+    "created_at": "2026-09-08T11:18:23.306045+00:00",
+    "data_manifest_sha256": "2fb81e5ce8be977a784f16fa2f3ea3ad36e654fb0922cd41ad6aa0748f497d95",
+    "encrypted_storage_verified": true,
+    "files_hash_verified": true,
+    "generation_id": "20260908-110709-00c120d6",
+    "live_authentication_checked": false,
+    "manifest_sha256": "8b252a9b6a17122d3464ec329d23284e43f7c629444b5c299636af0743e7bdd9",
+    "permissions_verified": true,
+    "protected_recovery_verified": true,
+    "result": "protected_recovery_verified",
+    "session_authorization_material_present": true,
+    "sessions_verified": 2,
+    "verified_at": "2026-09-08T11:18:27.907340+00:00"
+  },
+  "protected_recovery": {
+    "config_and_sessions": "external_protected_copy_required",
+    "offhost_copy": "operator_verification_required"
+  },
+  "protected_recovery_verified": true,
+  "result": "data_restore_verified",
+  "verification_scope": "Full schema0011 pre-release generation; recurring automatic backup not yet verified; subsequent live migration to0013 requires another generation for release gate."
+}

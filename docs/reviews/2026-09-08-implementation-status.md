@@ -1,12 +1,12 @@
 # RentBelgrad — статус реализации ревью 08.09.2026
 
-Обновлено 08.09.2026, 14:55 Asia/Dubai. **Работа возобновлена по команде Дмитрия. Production repair пока не выпущен.** Идут независимые review, интеграция и новая полная проверка off-host копии; interrupted archive используется только как недоверенный media seed.
+Обновлено 08.09.2026, 15:31 Asia/Dubai. **Первая активация7ff9512 автоматически откатилась по startup health gate. Старые сервисы работают, health/catalog200; база сохранена на0013.** Исправляется bounded startup wait; fresh0013backup в работе перед повторным release.
 
 - План: [reliability remediation](../superpowers/plans/2026-09-08-reliability-remediation.md); [ревью F01–F23](2026-09-08-project-review.md); [исторический baseline](2026-09-08-evidence.json).
-- Ветка `codex/reliability-2026-09-08`, tested implementation checkpoint `2f8b31a` (после возобновления). Baseline `75f870c` (code `38ad154`).
-- **Deployed revision: исходная, repair не деплоили.** Live schema `0011_keep_on_site`; additive migrations `0012`/`0013` проверены на согласованной копии. Rollback приложения не откатывает DB.
+- Ветка `codex/reliability-2026-09-08`, tested implementation checkpoint `7ff9512` (после возобновления). Baseline `75f870c` (code `38ad154`).
+- **Активный app: исходный после автоматического rollback7ff9512.** Live schema **0013_delivery_outcomes**: additive0012/0013 применены11:23UTC и сохранены при откате. `.env`, Caddy и старые timers восстановлены/сохранены; успешной repair-активации пока нет.
 - Команда Дмитрия разрешает staged deployment/restarts в рамках ремонта. Новые покупки, тестовые сообщения людям и исторический массовый replay не выполняются. Snapshot active остаётся выключенным.
-- Production согласованная DB-копия получена; полная DB/state/media копия потоком на FileVault Mac прервана на паузе, `.partial` около65GiB не верифицирован. `.env`/Caddy/session snapshots отдельно восстановлены и проверены в приватном хранилище. До полного restore drill release закрыт.
+- Полная off-host generation **20260908-110709-00c120d6** прошла strict restore:1,050,621files,5149photo references,DB0011, catalog/card/photo200+decoded, fresh protected2config/2sessions, healthreceiptpublished. После actualmigration0013 для следующегоrelease требуется новый совместимыйbackup; source snapshot session18877 идёт. Исходныйpartial сохранён какисторическийseed.
 
 | F-ID | Пункт | Статус | Доказательство / остающийся gate |
 |---|---|---|---|
@@ -16,7 +16,7 @@
 | F04 | Public representative | locally_verified | Выбор внутри public; production copy: 31 cards/29 apartments →168/168, lost apartments0, новых прав публикации0 |
 | F05 | Apartment availability | locally_verified | Active/UNKNOWN/DEAD едины для каталога/карты/карточки; из168 квартир active48, UNKNOWN120; неизвестные не помечены доступными |
 | F06 | Общая политика снятия | locally_verified | all-DEAD, pin, live sibling, warn-only, общий cap; race-safe UPDATE при смене dup group |
-| F07 | Backup/recovery | in_progress | Seed1,050,621files восстановлен, accepted_backup=false; fresh remote snapshot hashing, strict full restore pending. Fresh protected recurring hook/review в работе |
+| F07 | Backup/recovery | in_progress | Full0011generation verified11:18UTC, application/photo/protectedPASS. New0013snapshot18877running; recurring schedule/automaticbackup pending |
 | F08 | Успешная свежесть/квота | in_progress | Fair public/broken/oldest-success queue; Ubuntu isolated20/20 verified за100.08sec,38photos. Quota2400/nightly + public due10h, окна11:30/17:30/23:30UTC реализованы; steady-state target pending |
 | F09 | Attempt отдельно от success | locally_verified | Additive schema без backfill ложных successes; actual isolated20/20 successes и errors0; live production evidence pending |
 | F10 | Конкуренция процессов | locally_verified | Per-platform process leases, bounded queue; 3-entrypoint/process regression. Live overlapping run pending |
@@ -24,7 +24,7 @@
 | F12 | Честный shadow | locally_verified | Staged actual4481/4484,99.933%,49complete parity/mismatch0; source_total_changed+2legacy detail errors дают honest STOP. Snapshot readiness pending |
 | F13 | История/health/monitoring | in_progress | Durable run/source journal, readiness DB503, real deactivated_at, freshness/backup/outbox health, quiet change events; capacity integration/live pending |
 | F14 | Budgets/checkpoints | locally_verified | Incremental source600/run24000sec; full1800/run30000; maintenance20/70/10; bounded liveness600sec; actual OS SIGTERM→finally→exit143 PASS |
-| F15 | Согласованный deploy | in_progress | Frozen production-compatible lock + exact packet/receipts + additive rollback; independent review fixes timer activation race; live pending |
+| F15 | Согласованный deploy | in_progress | Exactpacket7ff1491unit/54browser/CI PASS; actualauto-rollback preservedDB0013 and restoredservices200. Startup6sec gate failed; boundedwaitfix + newbackup + retry pending |
 | F16 | Непубличные media | locally_verified | Authorized GET/HEAD photo route + traversal/private tests PASS; live Caddy /photos bypass ещё нужно переключить после app release |
 | F17 | Доставка каждому получателю | locally_verified | Claim + pending/sending/sent/failed/unknown; immutable payload, partial retry only failed, historical records no replay; full album receipts |
 | F18 | Нет ложного sent | locally_verified | Отсутствующий транспорт/конфигурация не sent; confirmed receipt требуется; atomic reconciliation |
@@ -34,7 +34,7 @@
 | F22 | 0/1/несколько фото | locally_verified | 1→sendPhoto,2–10→album;0/missing/partial receipts fail/UNKNOWN; frozen Finder caption/photo-order/recipients oracle PASS |
 | F23 | CI/env/instructions | in_progress | Frozen CI unit/browser/lint/shell; matching Chromium установлен; outdated PWA/availability fixtures исправлены по продукту. GitHub34217184273 exact2f8b31a SUCCESS; live evidence pending |
 
-**Проверки:** baseline1148 passed/1 skipped. Exact `2f8b31a`: unit **1440 passed / 1 skipped / 36 warnings** (142.99s), browser **54 passed** (67.61s), changed-code lint0, shell syntax, frozen lock107packages и diff-check PASS. [GitHub Actions34217184273](https://github.com/MWildFire/BelgradAppartment/actions/runs/34217184273) — Ubuntu24.04 **SUCCESS**. Следующие protected/telemetry changes требуют нового exact gate. Исторический1f60abc: unit1372/browser54 и [CI34204460465](https://github.com/MWildFire/BelgradAppartment/actions/runs/34204460465) PASS.
+**Проверки:** baseline1148 passed/1 skipped. Exact `7ff9512`: unit **1491 passed / 1 skipped / 36 warnings** (126.59s), browser **54 passed** (59.24s), changed-code lint0, shell syntax, frozen lock107packages и diff-check PASS. [GitHub Actions34219047309](https://github.com/MWildFire/BelgradAppartment/actions/runs/34219047309) — jobsunit102037573646/browser102037573868 **SUCCESS**. Packet423files SHA25624eab5705afae640ffaaabc5c40588c356559ab9aa069d42f596f163046ac053. Предыдущий2f8b31a:1440unit/54browser иCI34217184273PASS.
 
 **Изолированные реальные проверки:** Ubuntu dry-run77details/4sources, source errors0, DBsha256 до/после совпал; liveness diagnostic ограничен, один Halo missing marker и cleanup TargetClosedError не скрываются. Отдельный write canary20records (5/source),20updated/20verified,errors0/skipped0,38photos,100.08sec, public set unchanged. Production DB/media и отправки не затронуты. Старый код0011 дважды открыл health/catalog/реальную publiccard на DB0013 (всё200), old ORM write работает, newlead/outbox rows сохранены, schema hash unchanged, FK0/integrityok; это локальная mainvenv, не прежняя productionvenv. Evidence: `2026-09-08-evaluation-ubuntu.json`, `2026-09-08-capacity-canary-ubuntu.json`, `2026-09-08-rollback-compatibility.json`.
 
@@ -78,10 +78,30 @@
 - Partialarchive оборвался наjson.dumpsmanifest после передачи файлов; безопасное seed-only извлечение и локальныеhash в процессе. Seed не даёт releasePASS, требуется freshremotecompleteinventory/schema/allhash/app/photo/protectedproof.
 
 
-### 08.09, 14:55 Asia/Dubai — общий gate и shadow
+### 08.09, 15:31 Asia/Dubai — общий gate и shadow
 
 - Public cadence/offhost safety интегрированы; exact2f8b31a прошёл1440unit/54browser и GitHubCI34217184273. W1 проверил безопасный rollback12managed env keys и narrowCaddy helper; только local fixtures, live ещё pending.
 - Из исходногоpartial безопасно извлечены1,050,621files /71,091,802,765bytes. Container error отсутствует, но manifest исходной полной копии отсутствовал: это толькоseed, неbackup. Fresh source snapshot начат10:35UTC в отдельном staging; source/media и appне изменяются.
 - Staged shadow завершён10:44:44UTC:4481/4484(99.933095%),skippedpages0,sample100,complete49/fallback51,succeeded49,mismatches0,detailerrors2. Crawl завершил доступные страницы, но source total менялся: complete=false/trusted=false, readinessSTOP. Исторические значения drift не записаны; addsanitizedtelemetry и probe2IDs в работе.
 - Proxy finalattempts875/failovers2/challenges2; HTTP433errors433/recovered433/residual0, browser442/errors9/recovered9; proxyerrors0. Нулевыеresidual не объясняют автоматически2detail errors. Snapshot остаётсяshadow, activeoff; no production writes/sends в этой оценке.
 - Ubuntu systemd-analyze подтвердил корректные календари Mon..Sat03UTC,Sun02UTC,smoke00/12:30UTC,public11/17/23:30UTC и timeout7h30min. Это проверка формата, ещё не deployed/automatic proof.
+
+
+### 08.09, 15:31 Asia/Dubai — финальный пакет, полный restore
+
+- Frozenrelease7ff9512 prepared,1491unit/54browser/GitHubCI PASS. Protectedaf1d36a+preparedcbce289 (89combinedtests) иtelemetryffadb44 (45tests) независимо reviewedPASS, integrated1022aaf/c5a5bea/6c3b2f1.
+- Source snapshot session32919 завершиласьexit0; manifest147,564,353bytes, SHA2fb81e5ce8be977a784f16fa2f3ea3ad36e654fb0922cd41ad6aa0748f497d95. Новыйsourcefullhash не повторяется. Firstoffhostgeneration started11:07UTC в `/Users/mvstrike/Backups/RentBelgrad/offhost`; ID20260908-110709-00c120d6. DB/state/media transfer завершает reuse; на15:16 полная receiverhashпроверка в процессе, acceptedbackup ещёfalse.
+- Trusted recovery/protected tooling находится отдельно в root-owned `/usr/local/lib/rentbelgrad-recovery`; productionapp/env/Caddy/schema/timers ещё не менялись.
+- Дополнительный actualoldproductionvenv drill не зачтён: v1 guard блокировалread-onlysystemSSLlookup, v2 publicruntimeassetdistricts.yaml. Обаfailclosedдоprodwrite; helpers исправляются узко, повтор только вNEWisolateddirectory. Основной oldcode0013compatibilityPASS из локальнойсреды сохраняется как отдельный факт.
+- Two-ID probe: перваяпопытка CWDневерен, PermissionErrorbeforelease; втораябезDISPLAY HTTP403/NoProxy, не доказанный ISPfailure. Xvfbповтор11:13UTC: обаHTTP200,identityvalid,9/8photoURLs,браузерstart1PASS,proxyresidual0; обаmissingprice_eur. Проверкаисходныхpricefields pending, безfullshadowrepeat/noDB/no-media/no-sends.
+
+
+### 08.09, 15:31 Asia/Dubai — release failed safely, repeated gate
+
+- Firstoffhostgeneration complete11:18UTC/exit0: receipt `/Users/mvstrike/Backups/RentBelgrad/offhost/receipts/20260908-110709-00c120d6.json`, manifestSHA2fb81e5...,1,050,621files,5149refs, schema0011/FK/integrity/allhash/app/photoPASS. Freshprotectedproof created11:18:23Z, verified11:18:27Z,2sessions/config/Caddy/FileVault/privatepermissionsPASS; sanitizedhealthreceipt uploaded.
+- Actualoldproductionvenv compatibilityv3 PASS11:19:35Z: health/catalog/publiccard200, oldORMINSERT+UPDATE committed inisolatedcopy, newlead/outbox/schema preserved,FK0/integrityok. Read-onlySSLlookup and publicdistrictsasset are explicitly constrained; noactualdata/config/sessionwrites. Earlier v1/v2harness failures preserved.
+- Source2ID diagnostic11:20: bothHTTP200, realpayloadIDvalid,9/8photos; numericalpricevalue absent inboth realEstate.price and properties[0].price, no positive raw value lost byparser. BrowserstartPASS/residualproxy0. Neitherfullshadowreadiness nor2healthyfullcards claimed.
+- **Release7ff9512 attempted11:22–11:23UTC; backup/tests gatespassed, newfrozenvenv/browserlaunchPASS, migrations0012/0013 applied.** Newsite began11:23:12; originalcurl allowedonly6seconds and failedconnection11:23:18 before newsite completedstartup. NoPythonexception innewsitejournal.
+- Automaticcode/venv/units rollback completed11:23:22; oldsite fullystarted11:23:25. Confirmedmonitor/site/admin/Caddyactive, localhealth200/externalcatalog200. Activationreceipt resultrolled_back_code_only, previousrevisionnull. **Schema0013 retained; noDBrestore/downgrade.** Caddyphotoingress/capacity/newpublictimer were never applied. Oldtimers restored, nextsmoke12:33:09UTC.
+- W1 implements bounded90s sharedhealth+readywait, actualnewvenvcoldstartprobe inpreparation. Secondfullsource snapshot started~11:27UTC, session18877, PID300379, `/opt/otz/data/backups/.manual-postmigration-20260908-1127`; applicationroot points to rejected7ff code/schema0013, notoldactive0011. Newacceptedbackupreceipt required before retry; no gatebypass.
+- Stablelocaloffhostruntime prepared at `/Users/mvstrike/Backups/RentBelgrad/offhost/runtime/7ff9512/{code,venv}`, frozenno-dev installPASS. LaunchAgent andCodexheartbeat notinstalledyet.

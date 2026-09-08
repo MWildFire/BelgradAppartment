@@ -5,9 +5,9 @@
 > **НАЧАТЬ ЗДЕСЬ — актуальная передача от 08.09.2026.**
 > **ВОЗОБНОВЛЕНО ПО КОМАНДЕ ДМИТРИЯ, 08.09 около14:25 Dubai.** Сначала прочитать
 > [документ продолжения](docs/reviews/2026-09-08-continuation-handoff.md).
-> Production repair ещё не выпущен. Exact2f8b31a:1440unit/54browser и GitHubCI SUCCESS. Media seed восстановлен;
-> fresh source snapshot и strict off-host restore в процессе, accepted_backup покаfalse.
-> Staged shadow99.933%/mismatch0 дал STOP из-за source_total_changed и2detail errors.
+> Перваяактивация7ff9512 (1491unit/54browser/CI PASS) автоматическиоткатилась11:23UTC:
+> startuphealthнеуспелза6sec. Старыеservicesactive/site200; DB0013сохранена.
+> Full0011offhostrestore/protectedproofPASS; fresh0013backup и startupwaitfix вработе.
 > Исторический документ паузы сохранён; актуальный прогресс — в статусе реализации ниже.
 > Реализовать [план исправлений F01–F23](docs/superpowers/plans/2026-09-08-reliability-remediation.md).
 > Причины и доказательства: [ревью](docs/reviews/2026-09-08-project-review.md), [production baseline](docs/reviews/2026-09-08-evidence.json).
