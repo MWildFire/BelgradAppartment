@@ -297,9 +297,9 @@ def test_map_json_only_public_with_coords(client):
     assert r.status_code == 200
     body = r.json()
     assert "points" in body
-    # listings 1 and 3 have coords + public; 2 has no coords; 4 is private.
+    # Only available public listing 1 has coords; 2 has no coords; 3 is rented; 4 private.
     ids = sorted(p["id"] for p in body["points"])
-    assert ids == [1, 3]
+    assert ids == [1]  # rented id=3 is excluded, matching the default catalog.
     for p in body["points"]:
         assert p["url"] == f"/apt/{p['id']}"
 
@@ -621,10 +621,10 @@ def test_sitemap_xml_is_valid_and_lists_static_and_public(client):
     for path in ("/", "/catalog", "/map", "/vnj", "/how"):
         assert f"{base}{path}" in locs
 
-    # all public listings appear; the private one (id=4) does NOT
+    # Available public representatives appear; rented id=3 and private id=4 do not.
     assert f"{base}/apt/1" in locs
     assert f"{base}/apt/2" in locs
-    assert f"{base}/apt/3" in locs
+    assert f"{base}/apt/3" not in locs  # rented: its direct URL still exists
     assert f"{base}/apt/4" not in locs  # site_listing 4 is is_public=False
 
 

@@ -1,8 +1,8 @@
 """Read-model for the public catalog (DATA_CONTRACT §1, §3, §5).
 
 Joins site_listings → matches → listings, and → inbound_posts (via matches.inbound_post_id)
-for LOCAL photos + rented-marker text, and → published_posts for posted_at. Returns flat,
-frozen SiteListingView / Facets — never ORM objects, never remote URLs.
+for LOCAL photos, and → published_posts for posted_at. Availability uses the full dup-group.
+Returns flat, frozen SiteListingView / Facets — never ORM objects, never remote URLs.
 
 District filtering happens in Python on the *display* (Cyrillic) value: many raw platform
 districts collapse onto one human district, so post-filtering on the normalized label is both
@@ -19,6 +19,7 @@ from sqlalchemy import select
 from src.config import get_settings
 from src.db.models import InboundPost, Listing, Match, PublishedPost, SiteListing
 from src.site import db as sitedb
+from src.site.availability import ApartmentKey, apartment_is_available, apartment_key
 from src.site.format import human_district, is_rented, public_photo_url, rooms_label
 from src.site.maps import fuzz_coords
 
@@ -70,6 +71,11 @@ class _Row:
     view: SiteListingView
     rooms_raw: float | None
     posted_dt: datetime
+    apartment: ApartmentKey
+    created_at: datetime
+    is_featured: bool
+    legacy_visible: bool
+    original_active: bool
 
 
 @dataclass(frozen=True)
@@ -88,7 +94,8 @@ def _iso(dt: datetime | None) -> str:
 
 
 def _build_view(
-    sl: SiteListing, listing: Listing, post: InboundPost | None, published_at: datetime | None
+    sl: SiteListing, listing: Listing, post: InboundPost | None, published_at: datetime | None,
+    *, available: bool,
 ) -> SiteListingView:
     settings = get_settings()
     photos = [public_photo_url(p) for p in (post.photo_paths if post else []) if p]
@@ -105,7 +112,7 @@ def _build_view(
         lon=listing.lon,
         for_vnj=sl.is_for_vnj,
         for_white_card=sl.is_for_white_card,
-        is_rented=is_rented(listing),
+        is_rented=not available,
         photos=photos,
         note=sl.note,
         channel_url=sl.channel_post_url or settings.site_channel_url,
@@ -113,8 +120,26 @@ def _build_view(
     )
 
 
-async def _load_rows(database_url: str | None) -> list[_Row]:
-    """All public rows, hydrated, with raw fields needed for in-Python filtering/sorting."""
+def _representatives(rows: list[_Row]) -> list[_Row]:
+    """Oldest authorized overlay wins; a scraper primary re-election cannot change its URL.
+
+    Select before filtering, so catalog, subscriptions and sitemap agree on one identity.
+    Secondary public overlays remain independently accessible through their existing URLs.
+    """
+    selected: dict[ApartmentKey, _Row] = {}
+    for row in sorted(rows, key=lambda r: r.view.id):
+        selected.setdefault(row.apartment, row)
+    return list(selected.values())
+
+
+async def _load_rows(
+    database_url: str | None, *, representatives_only: bool = True
+) -> list[_Row]:
+    """Hydrate authorized overlays and resolve availability from all apartment members.
+
+    Private siblings contribute only their activity bit. All display fields and media remain
+    those of the selected public overlay and its original match; global primary is irrelevant.
+    """
     stmt = (
         select(SiteListing, Listing, InboundPost, PublishedPost.published_at)
         .join(Match, Match.id == SiteListing.match_id)
@@ -122,19 +147,37 @@ async def _load_rows(database_url: str | None) -> list[_Row]:
         .join(InboundPost, InboundPost.id == Match.inbound_post_id, isouter=True)
         .join(PublishedPost, PublishedPost.match_id == Match.id, isouter=True)
         .where(SiteListing.is_public.is_(True))
-        # A4 — one card per apartment: hide non-primary members of a cross-platform dup group.
-        # Ungrouped listings (dup_group_id NULL) are always is_primary=True, so this only drops
-        # the demoted duplicates and leaves the curated public set otherwise unchanged.
-        .where(Listing.is_primary.is_(True))
     )
     rows: list[_Row] = []
     async with sitedb.read_session(database_url=database_url) as s:
-        for sl, listing, post, published_at in (await s.execute(stmt)).all():
-            view = _build_view(sl, listing, post, published_at)
-            rows.append(
-                _Row(view=view, rooms_raw=listing.rooms, posted_dt=published_at or sl.created_at)
+        public = (await s.execute(stmt)).all()
+        group_ids = {listing.dup_group_id for _, listing, _, _ in public
+                     if listing.dup_group_id is not None}
+        active_by_group: dict[int, list[bool]] = {}
+        if group_ids:
+            members = await s.execute(
+                select(Listing.dup_group_id, Listing.is_active)
+                .where(Listing.dup_group_id.in_(group_ids))
             )
-    return rows
+            for group_id, active in members.all():
+                active_by_group.setdefault(group_id, []).append(active)
+        for sl, listing, post, published_at in public:
+            member_active = active_by_group.get(listing.dup_group_id, [listing.is_active])
+            view = _build_view(
+                sl, listing, post, published_at,
+                available=apartment_is_available(member_active),
+            )
+            rows.append(_Row(
+                view=view,
+                rooms_raw=listing.rooms,
+                posted_dt=published_at or sl.created_at,
+                apartment=apartment_key(listing.id, listing.dup_group_id),
+                created_at=sl.created_at,
+                is_featured=sl.is_featured,
+                legacy_visible=listing.is_primary and not is_rented(listing),
+                original_active=listing.is_active,
+            ))
+    return _representatives(rows) if representatives_only else rows
 
 
 def _rooms_matches(rooms_raw: float | None, wanted: list[str]) -> bool:
@@ -220,7 +263,7 @@ async def list_public(
 async def get_public(
     site_listing_id: int, *, database_url: str | None = None
 ) -> SiteListingView | None:
-    rows = await _load_rows(database_url)
+    rows = await _load_rows(database_url, representatives_only=False)
     for r in rows:
         if r.view.id == site_listing_id:
             return r.view
@@ -228,26 +271,11 @@ async def get_public(
 
 
 async def featured_one(*, database_url: str | None = None) -> SiteListingView | None:
-    """The «квартира недели»: newest public+featured; else newest public; else None.
-
-    Reuses the same hydration as the catalog (_load_rows builds full SiteListingViews),
-    then picks within Python — the public set is small and we need the is_featured flag,
-    which _Row doesn't carry, so we re-derive it from the source rows here.
-    """
-    stmt = (
-        select(SiteListing.id, SiteListing.is_featured)
-        .where(SiteListing.is_public.is_(True))
-    )
-    async with sitedb.read_session(database_url=database_url) as s:
-        featured_ids = {
-            sl_id for sl_id, is_featured in (await s.execute(stmt)).all() if is_featured
-        }
-
-    rows = await _load_rows(database_url)
+    """Newest featured available representative; otherwise newest available representative."""
+    rows = [r for r in await _load_rows(database_url) if not r.view.is_rented]
     if not rows:
         return None
-    # Newest first; a featured row outranks any non-featured one regardless of recency.
-    rows.sort(key=lambda r: (r.view.id in featured_ids, r.posted_dt), reverse=True)
+    rows.sort(key=lambda r: (r.is_featured, r.posted_dt), reverse=True)
     return rows[0].view
 
 
@@ -276,23 +304,15 @@ async def public_candidates(
     """All public listings as C2 subscription candidates (view + raw rooms + created_at).
 
     Reuses _load_rows so the candidate set is EXACTLY the catalog's public set (same joins,
-    same is_public/is_primary scoping). The matcher applies listing_matches_filters per
+    same public representative selection). The matcher applies listing_matches_filters per
     subscription — the one shared predicate — so a subscription's «matches» is identical to
     what the catalog would show with the same filters.
     """
-    rows = await _load_rows(database_url)
-    # _Row.posted_dt is published_at or created_at; the SiteListing.created_at (when Дарья
-    # exposed it) is the «new listing» signal we want for since_hours. Re-read it cheaply.
-    stmt = select(SiteListing.id, SiteListing.created_at).where(SiteListing.is_public.is_(True))
-    async with sitedb.read_session(database_url=database_url) as s:
-        created_by_id = {sl_id: created for sl_id, created in (await s.execute(stmt)).all()}
-    out: list[SubscriptionCandidate] = []
-    for r in rows:
-        created = created_by_id.get(r.view.id, r.posted_dt)
-        out.append(
-            SubscriptionCandidate(view=r.view, rooms_raw=r.rooms_raw, created_at=created)
-        )
-    return out
+    return [
+        SubscriptionCandidate(view=r.view, rooms_raw=r.rooms_raw, created_at=r.created_at)
+        for r in await _load_rows(database_url)
+        if not r.view.is_rented
+    ]
 
 
 async def facets(*, database_url: str | None = None) -> Facets:
@@ -326,7 +346,7 @@ async def map_points(*, database_url: str | None = None) -> list[dict[str, objec
     points: list[dict[str, object]] = []
     for r in rows:
         v = r.view
-        if v.lat is None or v.lon is None:
+        if v.is_rented or v.lat is None or v.lon is None:
             continue
         # ФУЗЗИ/D1 (T1-1, §M2): snap to the ~100m grid BEFORE serialization — exact building
         # coords must never leave the DB through /api/map.json (Wave-0 диагностика caught them
@@ -349,21 +369,38 @@ async def map_points(*, database_url: str | None = None) -> list[dict[str, objec
 
 
 async def public_ids(*, database_url: str | None = None) -> list[int]:
-    """Ids of every public, primary listing — for the sitemap (no view hydration).
+    """Available public apartment representatives for the sitemap, matching the catalog."""
+    return [r.view.id for r in await _load_rows(database_url) if not r.view.is_rented]
 
-    The sitemap only needs ids, so this skips the full _load_rows join+hydration (price/photos/
-    район normalization) that list_public(page_size=10000) used to do per request. Same is_public
-    + is_primary scoping as the catalog, so private listings never surface.
+
+async def public_selection_comparison(*, database_url: str) -> dict[str, object]:
+    """Sanitized legacy/current comparison on an explicitly supplied database copy.
+
+    Uses the OS-enforced read-only engine. It never probes sources or sends notifications,
+    and returns public overlay IDs and counts only, without source URLs, media or personal data.
     """
-    stmt = (
-        select(SiteListing.id)
-        .join(Match, Match.id == SiteListing.match_id)
-        .join(Listing, Listing.id == Match.listing_id)
-        .where(SiteListing.is_public.is_(True))
-        .where(Listing.is_primary.is_(True))
-    )
-    async with sitedb.read_session(database_url=database_url) as s:
-        return [row_id for (row_id,) in (await s.execute(stmt)).all()]
+    rows = await _load_rows(database_url, representatives_only=False)
+    before = [r for r in rows if r.legacy_visible]
+    after = [r for r in _representatives(rows) if not r.view.is_rented]
+    before_groups = {r.apartment for r in before}
+    after_groups = {r.apartment for r in after}
+    return {
+        "no_db_writes": True,
+        "no_telegram_sends": True,
+        "before": {"cards": len(before), "unique_apartments": len(before_groups)},
+        "after": {"cards": len(after), "unique_apartments": len(after_groups)},
+        "newly_visible": [
+            {"site_listing_id": r.view.id,
+             "reason": "active_sibling" if not r.original_active else "public_secondary"}
+            for r in after if r.apartment not in before_groups
+        ],
+        "no_longer_visible_apartments": len(before_groups - after_groups),
+        "representative_ids": [r.view.id for r in after],
+        "public_direct_ids": sorted({r.view.id for r in rows}),
+        "available_via_sibling_cards": sum(
+            not r.original_active and not r.view.is_rented for r in rows
+        ),
+    }
 
 
 async def similar(
@@ -375,12 +412,15 @@ async def similar(
     «похожие» block never suggests an apartment that's already taken — matching every other public
     surface. Ordered by recency (newest posted first) instead of arbitrary DB row order.
     """
-    rows = await _load_rows(database_url)
+    all_rows = await _load_rows(database_url, representatives_only=False)
+    apartment = next((r.apartment for r in all_rows if r.view.id == view.id), None)
+    rows = _representatives(all_rows)
     candidates = [
         r
         for r in rows
         if r.view.district == view.district
         and r.view.id != view.id
+        and r.apartment != apartment
         and not r.view.is_rented
     ]
     candidates.sort(key=lambda r: r.posted_dt, reverse=True)
