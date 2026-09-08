@@ -1,0 +1,19 @@
+# Canonical production schedule command. Do not use for a no-notify canary:
+# legacy ship-log and OnFailure below are notification paths.
+[Unit]
+Description=Render Finder scrape-smoke
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=otz
+Group=otz
+WorkingDirectory=/opt/otz
+EnvironmentFile=/opt/otz/.env
+ExecStartPre=/opt/otz/.venv/bin/playwright install chromium
+ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli scrape-smoke
+ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/scrape-smoke.log --label scrape-smoke --lines 40
+TimeoutStartSec=30min
+StandardOutput=append:/var/log/otz/scrape-smoke.log
+StandardError=append:/var/log/otz/scrape-smoke.log

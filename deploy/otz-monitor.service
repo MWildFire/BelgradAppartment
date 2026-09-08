@@ -1,0 +1,24 @@
+[Unit]
+Description=Render Finder inbound monitor
+After=network-online.target
+Wants=network-online.target
+OnFailure=otz-notify-failure@%n.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=otz
+Group=otz
+WorkingDirectory=/opt/otz
+EnvironmentFile=/opt/otz/.env
+Environment=PATH=/opt/otz/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli monitor
+Restart=on-failure
+RestartSec=30
+RestartPreventExitStatus=3
+StandardOutput=append:/var/log/otz/monitor.log
+StandardError=append:/var/log/otz/monitor.log
+
+[Install]
+WantedBy=multi-user.target

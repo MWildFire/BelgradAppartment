@@ -1,0 +1,19 @@
+# Canonical production schedule command. Do not use for a no-notify canary:
+# legacy ship-log and OnFailure below are notification paths.
+[Unit]
+Description=Render Finder nightly-refresh
+After=network-online.target
+Wants=network-online.target
+OnFailure=otz-notify-failure@%n.service
+
+[Service]
+Type=oneshot
+User=otz
+Group=otz
+WorkingDirectory=/opt/otz
+EnvironmentFile=/opt/otz/.env
+ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli nightly-refresh --incremental --max-pages=5
+ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/nightly-refresh.log --label nightly-refresh
+TimeoutStartSec=2h
+StandardOutput=append:/var/log/otz/nightly-refresh.log
+StandardError=append:/var/log/otz/nightly-refresh.log

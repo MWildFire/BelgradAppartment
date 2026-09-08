@@ -1,0 +1,11 @@
+[Unit]
+Description=Render Finder scrape-smoke schedule
+
+[Timer]
+OnCalendar=*-*-* 00/6:30:00 UTC
+RandomizedDelaySec=5min
+Persistent=true
+Unit=otz-scrape-smoke.service
+
+[Install]
+WantedBy=timers.target
