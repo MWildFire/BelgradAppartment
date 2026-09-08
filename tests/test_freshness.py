@@ -263,3 +263,23 @@ def test_quota_estimate_exposes_shortfall_without_guessing_success_rate():
         ]["estimated_daily_attempts"]
         is None
     )
+
+
+async def test_replayed_attempt_does_not_double_failure_count(db):
+    async with get_session() as session:
+        session.add(Listing(id=1, platform=PLATFORMS[0], external_id="fixture", url="https://x/1"))
+    async with get_session() as session:
+        first = await record_attempt(
+            session, 1, RefreshEvidence.failed("TimeoutError"), attempted_at=NOW, completed_at=NOW
+        )
+        assert first.applied
+    async with get_session() as session:
+        replay = await record_attempt(
+            session,
+            1,
+            RefreshEvidence.failed("TimeoutError"),
+            attempted_at=NOW,
+            completed_at=NOW + timedelta(seconds=2),
+        )
+        assert not replay.applied
+        assert (await session.get(Listing, 1)).detail_failure_count == 1

@@ -266,7 +266,7 @@ async def record_attempt(
     """Record attempted vs verified success separately; never backfill legacy successes.
 
     Call inside the same transaction as successful content/photo changes. On exceptions
-    call in a fresh transaction with failed evidence. An older concurrent attempt cannot
+    call in a fresh transaction with failed evidence. An older or repeated concurrent attempt cannot
     overwrite newer metadata. Caller commits; this helper never commits or publishes.
     """
     attempted_at = utc(attempted_at)
@@ -290,7 +290,7 @@ async def record_attempt(
         max_backoff.total_seconds(), base_backoff.total_seconds() * 2 ** min(failed - 1, 16)
     )
     retry_at = None if evidence.succeeded else completed_at + timedelta(seconds=delay)
-    if current[0] and utc(current[0]) > attempted_at:
+    if current[0] and utc(current[0]) >= attempted_at:
         return AttemptRecord(False, evidence.succeeded, current[1] or 0, None)
     if dry_run:
         return AttemptRecord(False, evidence.succeeded, failed, retry_at)
@@ -310,7 +310,7 @@ async def record_attempt(
         .where(
             Listing.id == listing_id,
             or_(
-                Listing.details_refreshed_at.is_(None), Listing.details_refreshed_at <= attempted_at
+                Listing.details_refreshed_at.is_(None), Listing.details_refreshed_at < attempted_at
             ),
         )
         .values(**values)
@@ -378,6 +378,12 @@ async def run_fair_refresh(
     grouped: dict[Platform, list[RefreshCandidate]] = defaultdict(list)
     for row in plan.rows:
         grouped[row.platform].append(row)
+    if (
+        len(set(plan.source_order)) != len(plan.source_order)
+        or set(plan.source_order) != set(grouped)
+        or len({row.id for row in plan.rows}) != len(plan.rows)
+    ):
+        raise ValueError("invalid or duplicate rows/source order in refresh plan")
     items = []
     source_errors = {}
     for index, platform in enumerate(plan.source_order):
@@ -398,8 +404,10 @@ async def run_fair_refresh(
                         try:
                             async with asyncio.timeout(item_timeout_sec):
                                 result = await callback(row, context)
-                            if not isinstance(result, CallbackResult):
-                                raise TypeError("callback must return CallbackResult")
+                            if not isinstance(result, CallbackResult) or not isinstance(
+                                result.evidence, RefreshEvidence
+                            ):
+                                raise TypeError("callback must return CallbackResult with evidence")
                             evidence, payload = result.evidence, result.payload
                         except Exception as error:
                             evidence, payload = RefreshEvidence.failed(type(error).__name__), None
