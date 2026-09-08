@@ -88,7 +88,9 @@ def environment(source, tmp_path, monkeypatch):
         else:
             shutil.rmtree(command[-1], ignore_errors=True)
 
-    def rsync(command):
+    def rsync(command, **kwargs):
+        if command[0] == sys.executable:
+            return subprocess.run(command, capture_output=True, text=True, check=True, **kwargs)
         assert command[0] == "/usr/bin/rsync", "a test attempted a non-rsync subprocess"
         assert "--inplace" not in command and not any(arg.startswith("--delete") for arg in command)
         local = []
@@ -300,3 +302,152 @@ def test_child_smoke_receives_explicit_compatible_application_root(monkeypatch, 
         },
     )
     assert seen[0][-2:] == ["--application-project-root", str(application_root)]
+
+
+def test_remote_lease_owner_exit_aborts_inflight_work(monkeypatch):
+    import time
+
+    args = argparse.Namespace(
+        remote_root=Path("/opt/otz"), remote_python=sys.executable, remote_user=None
+    )
+    monkeypatch.setattr(
+        job,
+        "ssh",
+        lambda _args: [
+            sys.executable,
+            "-c",
+            "import time; print('ready',flush=True); time.sleep(.2)",
+        ],
+    )
+    started = time.monotonic()
+    with pytest.raises(recovery.RecoveryError, match="lease was lost"), job.remote_lease(args):
+        job.run([sys.executable, "-c", "import time; time.sleep(15)"])
+    assert time.monotonic() - started < 3
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/opt/otz/data/space name",
+        "/opt/otz/data/x;echo AUDIT",
+        "/opt/otz/data/../../outside",
+        "/opt/otz/data/$(anything)",
+        "/other/data/inbound",
+    ],
+)
+def test_protocol29_remote_sources_reject_shell_and_traversal_paths(path):
+    with pytest.raises(recovery.RecoveryError, match="unsafe remote"):
+        job.safe_remote_path(path, Path("/opt/otz/data"))
+
+
+def test_completed_ignores_future_and_mismatched_receipt_dates_without_deleting(tmp_path):
+    root = tmp_path
+    (root / "generations").mkdir()
+    (root / "receipts").mkdir()
+    now = datetime.now(UTC)
+    for name, recorded, claimed in (
+        ("valid", now - timedelta(hours=1), now - timedelta(hours=1)),
+        ("future1", now + timedelta(days=1), now + timedelta(days=1)),
+        ("future2", now + timedelta(days=2), now + timedelta(days=2)),
+        ("mismatch", now - timedelta(days=2), now - timedelta(hours=1)),
+    ):
+        generation = root / "generations" / name
+        generation.mkdir()
+        manifest = generation / "manifest.json"
+        manifest.write_text(json.dumps({"created_at": recorded.isoformat()}))
+        (root / "receipts" / f"{name}.json").write_text(
+            json.dumps(
+                {
+                    "result": "data_restore_verified",
+                    "created_at": claimed.isoformat(),
+                    "generation_manifest_sha256": recovery.digest(manifest),
+                }
+            )
+        )
+    assert [entry[1].name for entry in job.completed(root)] == ["valid"]
+    assert len(list((root / "generations").iterdir())) == 4
+
+
+@pytest.mark.skipif(not Path("/usr/bin/rsync").exists(), reason="system rsync not installed")
+def test_future_old_receipts_cannot_prune_current_accepted_generation(
+    source, tmp_path, monkeypatch
+):
+    args = environment(source, tmp_path, monkeypatch)
+    job.backup(args)
+    for number in (1, 2):
+        generation = args.private_root / "generations" / f"invalid-future-{number}"
+        generation.mkdir()
+        stamp = (datetime.now(UTC) + timedelta(days=number)).isoformat()
+        manifest = generation / "manifest.json"
+        manifest.write_text(json.dumps({"created_at": stamp}))
+        job.atomic_json(
+            args.private_root / "receipts" / f"{generation.name}.json",
+            {
+                "result": "data_restore_verified",
+                "created_at": stamp,
+                "generation_manifest_sha256": recovery.digest(manifest),
+            },
+        )
+    receipt = job.backup(args)
+    destination = args.private_root / "generations" / receipt["generation_id"]
+    assert destination.is_dir()
+    assert len(job.completed(args.private_root)) == 2
+    assert len(list((args.private_root / "generations").iterdir())) == 4
+
+
+@pytest.mark.skipif(not Path("/usr/bin/rsync").exists(), reason="system rsync not installed")
+def test_lease_loss_during_validation_never_promotes_or_prunes(source, tmp_path, monkeypatch):
+    args = environment(source, tmp_path, monkeypatch)
+    job.backup(args)
+    prior = job.completed(args.private_root)[0][1]
+    actual = recovery.verify_directory
+
+    def lose_lease(*arguments, **kwargs):
+        def lost():
+            raise recovery.RecoveryError("source backup lease was lost")
+
+        return actual(*arguments, **{**kwargs, "progress_check": lost})
+
+    monkeypatch.setattr(recovery, "verify_directory", lose_lease)
+    with pytest.raises(recovery.RecoveryError, match="lease was lost"):
+        job.backup(args)
+    assert prior.exists() and len(job.completed(args.private_root)) == 1
+
+
+@pytest.mark.parametrize("failed_step", ["promotion", "receipt"])
+@pytest.mark.skipif(not Path("/usr/bin/rsync").exists(), reason="system rsync not installed")
+def test_cleanup_failure_cannot_publish_receipt_after_failed_acceptance(
+    source, tmp_path, monkeypatch, failed_step
+):
+    args = environment(source, tmp_path, monkeypatch)
+    remote = job.remote
+
+    def cleanup_fails(parameters, command):
+        if "-c" in command:
+            raise OSError("fixture cleanup failure")
+        return remote(parameters, command)
+
+    monkeypatch.setattr(job, "remote", cleanup_fails)
+    attempts = []
+    if failed_step == "promotion":
+        rename = Path.rename
+
+        def failed_rename(path, target):
+            if path.parent.name == "pending":
+                raise OSError("fixture promotion failure")
+            return rename(path, target)
+
+        monkeypatch.setattr(Path, "rename", failed_rename)
+    else:
+
+        def failed_receipt(*_arguments):
+            attempts.append(True)
+            raise OSError("fixture receipt failure")
+
+        monkeypatch.setattr(job, "atomic_json", failed_receipt)
+    with pytest.raises(OSError, match=f"fixture {failed_step} failure"):
+        job.backup(args)
+    assert not list((args.private_root / "receipts").iterdir())
+    assert not job.completed(args.private_root)
+    if failed_step == "receipt":
+        assert len(attempts) == 1

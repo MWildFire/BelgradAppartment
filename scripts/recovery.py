@@ -526,7 +526,9 @@ def _application_smoke(restored: Path, db: Path) -> dict:
     return asyncio.run(check())
 
 
-def verify_directory(destination: Path, max_age_hours=36, expected_schema=None) -> dict:
+def verify_directory(
+    destination: Path, max_age_hours=36, expected_schema=None, *, progress_check=None
+) -> dict:
     require(max_age_hours > 0, "max age must be positive")
     require(destination.is_dir() and not destination.is_symlink(), "invalid restore directory")
     manifest_file = destination / "manifest.json"
@@ -546,6 +548,8 @@ def verify_directory(destination: Path, max_age_hours=36, expected_schema=None) 
     actual = {item.relative_to(destination).as_posix() for item in files_below(destination)}
     require(actual == set(manifest["files"]) | {"manifest.json"}, "generation inventory differs")
     for relative, info in manifest["files"].items():
+        if progress_check is not None:
+            progress_check()
         safe_relative(relative)
         path = destination / relative
         require(
@@ -555,8 +559,8 @@ def verify_directory(destination: Path, max_age_hours=36, expected_schema=None) 
     return validate_restored(destination, manifest, expected_schema)
 
 
-def verify_application(restored: Path, manifest: dict) -> dict:
-    process = subprocess.run(
+def verify_application(restored: Path, manifest: dict, *, run_child=None) -> dict:
+    process = (run_child or subprocess.run)(
         [
             sys.executable,
             str(Path(__file__).resolve()),

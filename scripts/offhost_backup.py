@@ -16,9 +16,12 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -29,8 +32,60 @@ except ModuleNotFoundError:
     import recovery
 
 
-def run(command):
-    return subprocess.run(command, check=True, capture_output=True, text=True, timeout=7200)
+_LEASE = ContextVar("offhost_source_lease", default=None)
+
+
+def assert_lease():
+    owner = _LEASE.get()
+    recovery.require(owner is None or owner.poll() is None, "source backup lease was lost")
+
+
+def run(command, *, timeout=7200):
+    assert_lease()
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+    )
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            assert_lease()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                stdout, stderr = process.communicate(timeout=min(1, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+        assert_lease()
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    except BaseException:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.communicate(timeout=5)
+        raise
+
+
+def guarded_child(command, *, timeout, **_kwargs):
+    return run(command, timeout=timeout)
+
+
+def safe_remote_path(path, root):
+    value = str(path)
+    recovery.require(
+        Path(value).is_absolute()
+        and ".." not in Path(value).parts
+        and re.fullmatch(r"/[A-Za-z0-9_./-]+", value)
+        and Path(value).is_relative_to(root),
+        "unsafe remote source path",
+    )
+    return value
 
 
 def ssh(args):
@@ -89,7 +144,13 @@ def remote_lease(args):
             ready and process.stdout.readline().strip() == b"ready",
             "remote backup lock unavailable",
         )
-        yield
+        token = _LEASE.set(process)
+        try:
+            assert_lease()
+            yield
+            assert_lease()
+        finally:
+            _LEASE.reset(token)
     finally:
         if process.stdin:
             process.stdin.close()
@@ -109,26 +170,34 @@ def atomic_json(path, value):
 
 def completed(root):
     accepted = []
+    now = datetime.now(UTC)
     for path in (root / "generations").glob("*"):
         receipt_path = root / "receipts" / f"{path.name}.json"
         try:
             receipt = json.loads(receipt_path.read_text())
-            manifest = path / "manifest.json"
+            manifest_path = path / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            stamp = datetime.fromisoformat(receipt["created_at"])
+            recorded = datetime.fromisoformat(manifest["created_at"])
             if (
                 path.is_dir()
                 and not path.is_symlink()
                 and receipt.get("result") == "data_restore_verified"
-                and receipt.get("generation_manifest_sha256") == recovery.digest(manifest)
+                and receipt.get("generation_manifest_sha256") == recovery.digest(manifest_path)
+                and stamp.tzinfo is not None
+                and recorded.tzinfo is not None
+                and stamp == recorded
+                and stamp <= now
             ):
-                stamp = datetime.fromisoformat(receipt["created_at"])
-                if stamp.tzinfo is not None:
-                    accepted.append((stamp, path, receipt))
-        except (OSError, ValueError, KeyError):
+                accepted.append((stamp, path, receipt))
+        except (OSError, ValueError, KeyError, TypeError):
             continue
     return sorted(accepted, key=lambda entry: entry[0])
 
 
 def transfer(args, remote_stage, pending, seed):
+    assert_lease()
+    safe_remote_path(remote_stage, args.remote_root / "data/backups")
     transport = shlex.join(ssh(args)[:-1])
     remote_target = args.ssh_target
     remote_rsync = ["--rsync-path", shlex.join([*prefix(args), "/usr/bin/rsync"])]
@@ -149,7 +218,7 @@ def transfer(args, remote_stage, pending, seed):
     transferred = set()
     for role, component in manifest["components"].items():
         archive = str(recovery.safe_relative(component["archive"]))
-        source = Path(component["source"])
+        source = Path(safe_remote_path(component["source"], args.remote_root / "data"))
         recovery.require(
             source.is_relative_to(args.remote_root / "data"), "media outside remote data"
         )
@@ -163,6 +232,7 @@ def transfer(args, remote_stage, pending, seed):
         destination.mkdir(parents=True, exist_ok=True, mode=0o700)
         changed = []
         for name in files:
+            assert_lease()
             recovery.safe_relative(name)
             relative = f"{archive}/{name}"
             original, target = seed / relative, pending / relative
@@ -245,6 +315,7 @@ def backup(args):
         stage = args.remote_root / "data/backups" / f".offhost-{uuid4().hex}"
         with remote_lease(args):
             receipt = None
+            receipt_published = False
             try:
                 command = [
                     args.remote_python,
@@ -267,8 +338,14 @@ def backup(args):
                 command += ["--published-dir", str(args.remote_published_dir)]
                 remote(args, command)
                 transfer(args, stage, pending, seed.resolve())
-                manifest = recovery.verify_directory(pending)
-                receipt = recovery.verify_application(pending, manifest)
+                assert_lease()
+                manifest = recovery.verify_directory(pending, progress_check=assert_lease)
+                receipt = recovery.verify_application(pending, manifest, run_child=guarded_child)
+                assert_lease()
+                recovery.require(
+                    datetime.fromisoformat(receipt["created_at"]) <= datetime.now(UTC),
+                    "source snapshot time is in the future",
+                )
                 # This proof is data-only. Protected session/config recovery has its own gate.
                 receipt.update(
                     backup_format="directory_generation",
@@ -278,10 +355,14 @@ def backup(args):
                     protected_recovery_verified=False,
                 )
                 destination = root / "generations" / identifier
+                assert_lease()
                 pending.rename(destination)
                 atomic_json(root / "receipts" / f"{identifier}.json", receipt)
+                receipt_published = True
                 # Only accepted generations participate; failed/pending work never displaces one.
-                for _, old, _receipt in completed(root)[:-2]:
+                assert_lease()
+                prior = [entry for entry in completed(root) if entry[1] != destination]
+                for _, old, _receipt in prior[:-1]:
                     shutil.rmtree(old)
                     (root / "receipts" / f"{old.name}.json").unlink()
                 return receipt
@@ -297,8 +378,8 @@ def backup(args):
                             str(stage),
                         ],
                     )
-                except (OSError, subprocess.SubprocessError):
-                    if receipt is not None:
+                except (OSError, subprocess.SubprocessError, recovery.RecoveryError):
+                    if receipt_published:
                         receipt["remote_cleanup"] = "failed_requires_review"
                         atomic_json(root / "receipts" / f"{identifier}.json", receipt)
                     else:
@@ -330,13 +411,10 @@ def main():
     parser.add_argument("--min-free-gib", type=float, default=20)
     args = parser.parse_args()
     recovery.require(
-        args.remote_root.is_absolute() and args.private_root.is_absolute(),
-        "absolute roots required",
+        args.remote_root == Path("/opt/otz") and args.private_root.is_absolute(),
+        "canonical /opt/otz remote root and absolute private root required",
     )
-    recovery.require(
-        args.remote_published_dir.is_relative_to(args.remote_root / "data"),
-        "published root outside data",
-    )
+    safe_remote_path(args.remote_published_dir, args.remote_root / "data")
     recovery.require(
         0 < args.interval_hours <= 24 and args.min_free_gib > 0,
         "invalid cadence/free-space threshold",
