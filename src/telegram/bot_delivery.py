@@ -45,10 +45,38 @@ logger = logging.getLogger(__name__)
 
 MAX_ALBUM = 10
 TELEGRAM_CAPTION_LIMIT = 1024
+BOT_PHOTO_LIMIT_BYTES = 10 * 1024 * 1024
 
 
 class BotDeliveryError(RuntimeError):
     """Raised when a match cannot be delivered through the Bot API."""
+
+
+class BotPhotoTooLargeError(BotDeliveryError):
+    """Known local rejection: this photo cannot be uploaded through the Bot API."""
+
+
+def _preflight_photo_sizes(photo_paths: list[Path]) -> None:
+    """Validate the selected originals without resizing/reordering or reading their bytes.
+
+    Bot API sendPhoto limits each uploaded photo to 10 MB, also for InputMediaPhoto albums:
+    https://core.telegram.org/bots/api#sendphoto. This limit does not apply to Telethon.
+    """
+    oversized = []
+    for index, path in enumerate(photo_paths, start=1):
+        try:
+            size = path.stat().st_size
+        except OSError as error:
+            raise BotDeliveryError(
+                f"Bot API preflight cannot inspect photo {index}; no upload attempted"
+            ) from error
+        if size > BOT_PHOTO_LIMIT_BYTES:
+            oversized.append(f"photo {index} ({size} bytes)")
+    if oversized:
+        raise BotPhotoTooLargeError(
+            f"Bot API preflight: {', '.join(oversized)} exceeds the per-photo "
+            f"10 MB limit ({BOT_PHOTO_LIMIT_BYTES} bytes); no upload attempted"
+        )
 
 
 def _recipients() -> list[int]:
@@ -92,7 +120,9 @@ async def _send_album_with_floodwait(bot: Bot, chat_id: int, media: list[InputMe
         return await send()
     except TelegramRetryAfter as e:
         wait = min(float(e.retry_after) + 1.0, 120.0)
-        logger.warning("[bot_delivery] flood-wait %ss for chat_id=%d — retrying once", wait, chat_id)
+        logger.warning(
+            "[bot_delivery] flood-wait %ss for chat_id=%d — retrying once", wait, chat_id
+        )
         await asyncio.sleep(wait)
         return await send()
 
@@ -169,7 +199,8 @@ async def send_match_via_bot(
     if source_link:
         header_lines.append(f"📥 источник: {source_link}")
     header_lines.append(
-        f"🎯 совпало фото: {match.matched_photo_count} (conf {match.confidence:.2f}, {match.method})"
+        f"🎯 совпало фото: {match.matched_photo_count} "
+        f"(conf {match.confidence:.2f}, {match.method})"
     )
     header_lines.append("")
     header_lines.append("─── готовый текст ↓ ───")
@@ -185,6 +216,7 @@ async def send_match_via_bot(
     bot = _make_bot()
     first_msg_id = 0
     delivered_to = 0
+    preflight_error: BotDeliveryError | None = None
     try:
         await prepare_recipients(match_id, recipients, force=force_resend, payload={
             "caption": full_caption, "photo_paths": [str(p) for p in photo_paths],
@@ -199,6 +231,18 @@ async def send_match_via_bot(
             if any(not p.is_file() for p in photo_paths):
                 await finish_recipient(match_id, chat_id, token,
                                        error=ValueError("missing frozen photo files"))
+                continue
+            try:
+                _preflight_photo_sizes(photo_paths)
+            except BotDeliveryError as error:
+                # Claim first so the durable outcome belongs to this worker and the exact
+                # frozen payload; a local rejection is FAILED, never an ambiguous send.
+                await finish_recipient(match_id, chat_id, token, error=error)
+                preflight_error = error
+                logger.warning(
+                    "[bot_delivery] match=%d recipient=%d known_failure=%s: %s",
+                    match_id, chat_id, type(error).__name__, error,
+                )
                 continue
             media: list[InputMediaPhoto] = []
             for j, p in enumerate(photo_paths):
@@ -239,6 +283,8 @@ async def send_match_via_bot(
     if confirmed:
         first_msg_id = confirmed[0].message_ids[0]
     if not confirmed:
+        if preflight_error is not None:
+            raise preflight_error
         # NOT delivered anywhere — leave the match un-PUBLISHED so deliver-all / the next
         # pipeline run retries it. Marking it PUBLISHED here would silently lose the match.
         raise BotDeliveryError(
@@ -274,7 +320,9 @@ async def send_match_via_bot(
             try:
                 await auto_publish_site_listing(s, match_id)
             except Exception:
-                logger.exception("[auto-publish] match=%d: auto-publish failed (delivery kept)", match_id)
+                logger.exception(
+                    "[auto-publish] match=%d: auto-publish failed (delivery kept)", match_id
+                )
         await s.flush()
         await s.refresh(published)
         return published
