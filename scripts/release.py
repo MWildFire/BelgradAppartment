@@ -539,6 +539,22 @@ def activate(args):
             ],
             env=browser_env,
         )
+        # A downloaded executable is insufficient: prove Linux shared-library/cache access
+        # under the same account and HOME before touching the currently running release.
+        browser_smoke = (
+            "import asyncio\n"
+            "from playwright.async_api import async_playwright\n"
+            "async def check():\n"
+            "    async with async_playwright() as playwright:\n"
+            "        browser = await playwright.chromium.launch(headless=True, timeout=30000)\n"
+            "        await browser.close()\n"
+            "asyncio.run(check())\n"
+        )
+        run(
+            ["runuser", "-u", "otz", "--", str(new_python), "-c", browser_smoke],
+            env=browser_env,
+            timeout=45,
+        )
         state = service_state()
         state.update(revision=manifest["revision"], result="activating", swapped=[], units=[])
         state["previous_revision"] = (

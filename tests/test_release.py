@@ -201,7 +201,7 @@ def test_canonical_timers_preserve_live_schedules():
         assert f"RandomizedDelaySec={random}" in text and "Persistent=true" in text
 
 
-@pytest.mark.parametrize("failure", [None, "health", "hash"])
+@pytest.mark.parametrize("failure", [None, "browser", "health", "hash"])
 def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     tmp_path, monkeypatch, backup_receipt, failure
 ):
@@ -220,6 +220,7 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     service = "otz-site"
     active_units = {timer, service}
     events = []
+    browser_commands = []
     real_require = release.require
 
     def isolated_require(condition, message):
@@ -247,6 +248,10 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     def command(args, **kwargs):
         version = (root / "src/app.py").read_text()
         events.append((args, version))
+        if args[0] == "runuser":
+            browser_commands.append((args, kwargs))
+            if "-c" in args and failure == "browser":
+                raise release.ReleaseError("fixture Chromium launch failed")
         if args[0] == str(uv):
             Path(kwargs["env"]["UV_PROJECT_ENVIRONMENT"]).mkdir()
         if args[:2] == ["systemctl", "stop"]:
@@ -278,6 +283,34 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
             release.activate(args)
     else:
         assert release.activate(args)["result"] == "activated_manual_verification_pending"
+    assert len(browser_commands) == 2
+    install, launch = browser_commands
+    assert install[0][-2:] == ["install", "chromium"]
+    assert launch[0][:5] == [
+        "runuser",
+        "-u",
+        "otz",
+        "--",
+        str(root / ".releases" / revision / "venv/bin/python"),
+    ]
+    assert "await playwright.chromium.launch(" in launch[0][-1]
+    assert "await browser.close()" in launch[0][-1]
+    assert install[1]["env"] == launch[1]["env"]
+    assert launch[1]["env"]["HOME"] == str(tmp_path)
+    assert "PLAYWRIGHT_BROWSERS_PATH" not in launch[1]["env"]
+    assert launch[1]["timeout"] == 45
+    if failure == "browser":
+        assert not any(args[0] == "systemctl" for args, _ in events)
+        assert (root / "src/app.py").read_text() == "old"
+        assert active_units == {timer, service}
+        return
+    launch_index = next(
+        index for index, (args, _) in enumerate(events) if args[0] == "runuser" and "-c" in args
+    )
+    stop_index = next(
+        index for index, (args, _) in enumerate(events) if args[:2] == ["systemctl", "stop"]
+    )
+    assert launch_index < stop_index
     timer_starts = [
         (index, version)
         for index, (args, version) in enumerate(events)
