@@ -3,11 +3,12 @@
 Цель этого документа — дать новому агенту или человеку проверяемый контекст для продолжения работы над проектом.
 
 > **НАЧАТЬ ЗДЕСЬ — актуальная передача от 08.09.2026.**
-> **ПАУЗА ПО ПРОСЬБЕ ДМИТРИЯ, 08.09 около13:05 Dubai.** Сначала прочитать
+> **ВОЗОБНОВЛЕНО ПО КОМАНДЕ ДМИТРИЯ, 08.09 около14:25 Dubai.** Сначала прочитать
 > [документ продолжения](docs/reviews/2026-09-08-continuation-handoff.md).
-> Production repair ещё не выпущен; процессы работы остановлены, автоматическое возобновление не назначено.
-> Продолжать только после новой команды Дмитрия. Два готовых worker-коммита ожидают интеграции,
-> полный backup stream прерван и пока не принят как проверенная резервная копия.
+> Production repair ещё не выпущен. Exact2f8b31a:1440unit/54browser и GitHubCI SUCCESS. Media seed восстановлен;
+> fresh source snapshot и strict off-host restore в процессе, accepted_backup покаfalse.
+> Staged shadow99.933%/mismatch0 дал STOP из-за source_total_changed и2detail errors.
+> Исторический документ паузы сохранён; актуальный прогресс — в статусе реализации ниже.
 > Реализовать [план исправлений F01–F23](docs/superpowers/plans/2026-09-08-reliability-remediation.md).
 > Причины и доказательства: [ревью](docs/reviews/2026-09-08-project-review.md), [production baseline](docs/reviews/2026-09-08-evidence.json).
 > Прогресс вести в [статусе реализации](docs/reviews/2026-09-08-implementation-status.md).
