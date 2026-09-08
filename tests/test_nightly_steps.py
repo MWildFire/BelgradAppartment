@@ -510,7 +510,7 @@ async def test_run_nightly_steps_assembles_summary_lines(monkeypatch):
     monkeypatch.setattr(settings, "nightly_metrics", True)
     calls = _canned_step_stubs(monkeypatch)
 
-    lines, price_changes, alerts = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
 
     assert calls == ["heal:500", "rolling:200", "metrics", "prune"]
     assert "heal: исправлено 5 / осталось 2" in lines
@@ -553,7 +553,7 @@ async def test_run_nightly_steps_surfaces_site_sync_lines(monkeypatch):
     monkeypatch.setattr(orchestrator, "verify_active_links", verify_with_hidden)
     monkeypatch.setattr(orchestrator, "auto_publish_new_listings", backfill_exposes_three)
 
-    lines, _price_changes, _alerts = await _run_nightly_steps()
+    lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
 
     assert any("скрыто карточек с сайта: 2" in ln for ln in lines), lines
     assert any("авто-публикация на сайт: 3" in ln for ln in lines), lines
@@ -570,7 +570,7 @@ async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
     monkeypatch.setattr(settings, "nightly_metrics", True)
     calls = _canned_step_stubs(monkeypatch, heal_raises=True)
 
-    lines, price_changes, alerts = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
 
     assert "🚨 heal-шаг упал — см. логи" in lines
     # The remaining steps still ran after the failure.
@@ -622,7 +622,7 @@ async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):
     monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
 
-    lines, _price_changes, _alerts = await _run_nightly_steps()
+    lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
 
     assert "heal: исправлено 2 / осталось 3, пропущено по бюджету: 3" in lines
     assert "деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6" in lines
@@ -642,7 +642,7 @@ async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
     monkeypatch.setattr(settings, "nightly_notify_subscriptions", False)  # C2
     calls = _canned_step_stubs(monkeypatch)
 
-    lines, price_changes, alerts = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
 
     assert calls == []
     assert lines == []

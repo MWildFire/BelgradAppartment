@@ -597,6 +597,7 @@ class HealthReport:
     platforms: list[dict] = field(default_factory=list)
     monitor: dict = field(default_factory=dict)
     fingerprint: dict = field(default_factory=dict)
+    operations: dict = field(default_factory=dict)
     now: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -683,8 +684,8 @@ async def build_health(s) -> HealthReport:
                 .where(
                     Listing.platform == plat,
                     Listing.is_active.is_(False),
-                    Listing.details_refreshed_at.is_not(None),
-                    Listing.details_refreshed_at >= cutoff_window,
+                    Listing.deactivated_at.is_not(None),
+                    Listing.deactivated_at >= cutoff_window,
                 )
             )
         ).scalar_one() or 0
@@ -724,10 +725,14 @@ async def build_health(s) -> HealthReport:
             "status": "ok" if age_hours <= INBOUND_STALE_WARN_HOURS else "warn",
         }
 
+    from src.admin.operational_health import build_operations
+
+    operations = await build_operations(s, now=now)
     return HealthReport(
         platforms=platforms,
         monitor=monitor,
         fingerprint=_read_fingerprint_state(),
+        operations=operations,
         now=now,
     )
 

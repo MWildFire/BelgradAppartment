@@ -1,8 +1,9 @@
 """Pure fail-closed decisions for source quality and weekly source absence."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 
 @dataclass(frozen=True)
@@ -41,16 +42,21 @@ def evaluate_source(result) -> SourceEvaluation:
     if result.stop_reason == "item_limit":
         reasons.append("item_limit")
     if not result.previewed and not (
-        result.full_crawl and result.crawl_complete and result.denominator_trusted
-        and result.site_total == 0 and result.pages_attempted > 0
+        result.full_crawl
+        and result.crawl_complete
+        and result.denominator_trusted
+        and result.site_total == 0
+        and result.pages_attempted > 0
     ):
         reasons.append("no_observations")
     reasons.extend(result.quality_reasons)
     reasons = list(dict.fromkeys(reasons))
     outcome = "degraded" if reasons else "ok"
-    if result.stop_reason in {"source_exception", "list_exception"} or (result.errors and not result.fetched):
-        outcome = "failed"
-    elif "no_observations" in reasons:
+    if (
+        result.stop_reason in {"source_exception", "list_exception"}
+        or (result.errors and not result.fetched)
+        or "no_observations" in reasons
+    ):
         outcome = "failed"
     return SourceEvaluation(outcome, result.full_crawl and not reasons, tuple(reasons))
 
@@ -68,13 +74,21 @@ class AbsenceDecision:
 def _utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def evaluate_absence(*, observed: bool, streak: int, first_seen_at: datetime | None,
-                     last_seen_at: datetime | None, last_run_id: str | None,
-                     run_id: str, now: datetime, interval_days: int = 7,
-                     confirmations: int = 2) -> AbsenceDecision:
+def evaluate_absence(
+    *,
+    observed: bool,
+    streak: int,
+    first_seen_at: datetime | None,
+    last_seen_at: datetime | None,
+    last_run_id: str | None,
+    run_id: str,
+    now: datetime,
+    interval_days: int = 7,
+    confirmations: int = 2,
+) -> AbsenceDecision:
     """Count distinct, weekly-spaced successful full checks, never elapsed row age alone.
 
     A long gap resets confirmation: missed/failed weeks cannot be silently counted as a
@@ -93,5 +107,11 @@ def evaluate_absence(*, observed: bool, streak: int, first_seen_at: datetime | N
     if last is None or now - last > timedelta(days=max(7, interval_days) + 2):
         return AbsenceDecision(1, now, now, run_id, False, "first_weekly_absence")
     next_streak = streak + 1
-    return AbsenceDecision(next_streak, first or now, now, run_id,
-                           next_streak >= max(2, confirmations), "confirmed_weekly_absence")
+    return AbsenceDecision(
+        next_streak,
+        first or now,
+        now,
+        run_id,
+        next_streak >= max(2, confirmations),
+        "confirmed_weekly_absence",
+    )

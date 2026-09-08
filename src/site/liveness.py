@@ -37,8 +37,8 @@ from src.scrapers.orchestrator import (
     _DEAD_LINK_STATUSES,
     _make_side_client,
 )
-from src.telegram.bot_delivery import send_text_via_bot
 from src.site.publication_policy import apply_publication_policy, evaluate_publication
+from src.telegram.bot_delivery import send_text_via_bot
 
 logger = logging.getLogger(__name__)
 
@@ -242,8 +242,10 @@ async def site_liveness_sweep(
             for lid, is_active, url, _platform in members
         }
         decision = evaluate_publication(
-            member_status.values(), pinned=r.keep_on_site,
-            auto_hide=settings.site_liveness_auto_hide, remaining_hides=hide_limit-len(report.hidden),
+            member_status.values(),
+            pinned=r.keep_on_site,
+            auto_hide=settings.site_liveness_auto_hide,
+            remaining_hides=hide_limit - len(report.hidden),
         )
         if decision.reason == "pinned":
             report.kept_pinned += 1

@@ -1,0 +1,28 @@
+name: checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+      - run: uv sync --frozen --group dev
+      - run: uv run --frozen pytest -q --ignore=tests/e2e
+      - run: for script in scripts/*.sh; do bash -n "$script"; done
+      - run: uv run --frozen python scripts/check_changed_lint.py
+  browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.22"
+      - run: uv sync --frozen --group dev
+      - run: uv run --frozen playwright install --with-deps chromium
+      - run: RUN_E2E=1 uv run --frozen pytest -q tests/e2e

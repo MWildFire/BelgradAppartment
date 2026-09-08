@@ -1,5 +1,6 @@
 """Regression evidence for September 2026 source outcomes and fail-closed sweep."""
-from datetime import datetime, timedelta, timezone
+
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import event, select
@@ -24,12 +25,23 @@ class FakeScraper:
         self.fail = fail
 
     async def list_recent(self, **kwargs):
-        return [ListingPreview(platform=self.platform, external_id=str(i), url=f"https://example.test/{i}") for i in range(100)]
+        return [
+            ListingPreview(
+                platform=self.platform, external_id=str(i), url=f"https://example.test/{i}"
+            )
+            for i in range(100)
+        ]
 
     async def fetch_detail(self, url):
         if self.fail:
             raise RuntimeError("fake item failure")
-        return ListingDetail(platform=self.platform, external_id=url.rsplit("/", 1)[-1], url=url, title="Flat", price_eur=500)
+        return ListingDetail(
+            platform=self.platform,
+            external_id=url.rsplit("/", 1)[-1],
+            url=url,
+            title="Flat",
+            price_eur=500,
+        )
 
 
 @pytest.mark.asyncio
@@ -46,7 +58,16 @@ async def test_all_item_failures_are_failed_and_cannot_sweep(db):
 @pytest.mark.asyncio
 async def test_old_rows_without_verified_crawl_are_preserved(db):
     async with get_session() as session:
-        session.add(Listing(platform=Platform.NEKRETNINE, external_id="old", url="https://example.test/old", photo_urls=[], photo_phashes=[], last_seen_at=datetime.now(timezone.utc)-timedelta(days=30)))
+        session.add(
+            Listing(
+                platform=Platform.NEKRETNINE,
+                external_id="old",
+                url="https://example.test/old",
+                photo_urls=[],
+                photo_phashes=[],
+                last_seen_at=datetime.now(UTC) - timedelta(days=30),
+            )
+        )
     report = await mark_stale_inactive(inactive_after_days=3, platform=Platform.NEKRETNINE)
     assert report.marked_inactive == 0
     assert report.blocked_reasons
@@ -57,11 +78,17 @@ async def test_old_rows_without_verified_crawl_are_preserved(db):
 @pytest.mark.asyncio
 async def test_scrape_evaluation_has_no_db_mutations_or_photo_downloads(db, monkeypatch):
     import src.scrapers.orchestrator as orch
+
     def prohibit_write(conn, cursor, statement, parameters, context, executemany):
-        assert not statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE")), statement
+        assert (
+            not statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE"))
+        ), statement
+
     event.listen(db.sync_engine, "before_cursor_execute", prohibit_write)
+
     async def forbidden(*args, **kwargs):
         pytest.fail("dry-run attempted photo/persistence work")
+
     monkeypatch.setattr(orch, "_process_one", forbidden)
     monkeypatch.setattr(orch, "_download_photos", forbidden)
     result = await scrape_platform(FakeScraper(), incremental=False, dry_run=True)
@@ -71,25 +98,36 @@ async def test_scrape_evaluation_has_no_db_mutations_or_photo_downloads(db, monk
 
 
 def complete_result(**overrides):
-    values = dict(platform=Platform.NEKRETNINE, full_crawl=True, crawl_complete=True,
-                  stop_reason="exhausted", pages_attempted=4, site_total=100,
-                  denominator_trusted=True, previewed=100, fetched=100,
-                  observed_ids={str(i) for i in range(100)})
+    values = dict(
+        platform=Platform.NEKRETNINE,
+        full_crawl=True,
+        crawl_complete=True,
+        stop_reason="exhausted",
+        pages_attempted=4,
+        site_total=100,
+        denominator_trusted=True,
+        previewed=100,
+        fetched=100,
+        observed_ids={str(i) for i in range(100)},
+    )
     values.update(overrides)
     return ScrapeResult(**values)
 
 
-@pytest.mark.parametrize("changes,reason", [
-    ({"previewed": 60, "fetched": 60}, "coverage_mismatch"),
-    ({"skipped_pages": 1}, "skipped_pages"),
-    ({"pages_failed": 1}, "failed_pages"),
-    ({"crawl_complete": False, "stop_reason": "challenge"}, "crawl_incomplete"),
-    ({"crawl_complete": False, "stop_reason": "pagination_mismatch"}, "crawl_incomplete"),
-    ({"site_total": None}, "untrusted_denominator"),
-    ({"denominator_trusted": False}, "untrusted_denominator"),
-    ({"fetched": 99}, "items_unprocessed"),
-    ({"observed_ids": set()}, "missing_presence_evidence"),
-])
+@pytest.mark.parametrize(
+    "changes,reason",
+    [
+        ({"previewed": 60, "fetched": 60}, "coverage_mismatch"),
+        ({"skipped_pages": 1}, "skipped_pages"),
+        ({"pages_failed": 1}, "failed_pages"),
+        ({"crawl_complete": False, "stop_reason": "challenge"}, "crawl_incomplete"),
+        ({"crawl_complete": False, "stop_reason": "pagination_mismatch"}, "crawl_incomplete"),
+        ({"site_total": None}, "untrusted_denominator"),
+        ({"denominator_trusted": False}, "untrusted_denominator"),
+        ({"fetched": 99}, "items_unprocessed"),
+        ({"observed_ids": set()}, "missing_presence_evidence"),
+    ],
+)
 def test_partial_or_untrusted_source_never_permits_sweep(changes, reason):
     result = complete_result(**changes)
     assert result.outcome == "degraded"
@@ -102,6 +140,7 @@ async def test_failed_list_returns_explicit_source_result(db):
     class Broken(FakeScraper):
         async def list_recent(self, **kwargs):
             raise RuntimeError("test failure")
+
     result = await scrape_platform(Broken(), incremental=False)
     assert result.platform == Platform.NEKRETNINE
     assert result.outcome == "failed"
@@ -112,17 +151,34 @@ async def test_failed_list_returns_explicit_source_result(db):
 
 @pytest.mark.asyncio
 async def test_weekly_absence_requires_two_distinct_successful_checks(db):
-    t0 = datetime(2026, 9, 8, tzinfo=timezone.utc)
+    t0 = datetime(2026, 9, 8, tzinfo=UTC)
     async with get_session() as session:
-        session.add(Listing(platform=Platform.NEKRETNINE, external_id="missing", url="https://example.test/missing", photo_urls=[], photo_phashes=[], last_seen_at=t0-timedelta(days=30)))
+        session.add(
+            Listing(
+                platform=Platform.NEKRETNINE,
+                external_id="missing",
+                url="https://example.test/missing",
+                photo_urls=[],
+                photo_phashes=[],
+                last_seen_at=t0 - timedelta(days=30),
+            )
+        )
     first = complete_result(run_id="week1")
     report = await mark_stale_inactive(source_result=first, now=t0)
     assert report.marked_inactive == 0
     assert report.absence_recorded == 1
     # Replaying the exact same run is not a second confirmation, even a week later.
-    assert (await mark_stale_inactive(source_result=first, now=t0+timedelta(days=7))).marked_inactive == 0
-    assert (await mark_stale_inactive(source_result=complete_result(run_id="too-soon"), now=t0+timedelta(days=1))).marked_inactive == 0
-    second = await mark_stale_inactive(source_result=complete_result(run_id="week2"), now=t0+timedelta(days=7))
+    assert (
+        await mark_stale_inactive(source_result=first, now=t0 + timedelta(days=7))
+    ).marked_inactive == 0
+    assert (
+        await mark_stale_inactive(
+            source_result=complete_result(run_id="too-soon"), now=t0 + timedelta(days=1)
+        )
+    ).marked_inactive == 0
+    second = await mark_stale_inactive(
+        source_result=complete_result(run_id="week2"), now=t0 + timedelta(days=7)
+    )
     assert second.marked_inactive == 1
     async with get_session() as session:
         row = (await session.execute(select(Listing))).scalar_one()
@@ -132,9 +188,21 @@ async def test_weekly_absence_requires_two_distinct_successful_checks(db):
 @pytest.mark.asyncio
 async def test_sweep_evaluation_cannot_mutate_absence_evidence(db):
     async with get_session() as session:
-        session.add(Listing(platform=Platform.NEKRETNINE, external_id="missing", url="https://example.test/missing", photo_urls=[], photo_phashes=[]))
+        session.add(
+            Listing(
+                platform=Platform.NEKRETNINE,
+                external_id="missing",
+                url="https://example.test/missing",
+                photo_urls=[],
+                photo_phashes=[],
+            )
+        )
+
     def prohibit_write(conn, cursor, statement, parameters, context, executemany):
-        assert not statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE")), statement
+        assert (
+            not statement.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "REPLACE"))
+        ), statement
+
     event.listen(db.sync_engine, "before_cursor_execute", prohibit_write)
     report = await mark_stale_inactive(source_result=complete_result(dry_run=True), dry_run=True)
     assert report.absence_recorded == 1 and report.marked_inactive == 0
@@ -144,8 +212,16 @@ async def test_sweep_evaluation_cannot_mutate_absence_evidence(db):
 
 def test_observation_and_missed_week_reset_absence():
     from src.scrapers.run_safety import evaluate_absence
-    t0 = datetime(2026, 9, 8, tzinfo=timezone.utc)
-    args = dict(streak=1, first_seen_at=t0, last_seen_at=t0, last_run_id="week1", run_id="later", now=t0+timedelta(days=14))
+
+    t0 = datetime(2026, 9, 8, tzinfo=UTC)
+    args = dict(
+        streak=1,
+        first_seen_at=t0,
+        last_seen_at=t0,
+        last_run_id="week1",
+        run_id="later",
+        now=t0 + timedelta(days=14),
+    )
     gap = evaluate_absence(observed=False, **args)
     assert gap.streak == 1 and not gap.deactivate
     seen = evaluate_absence(observed=True, **args)
@@ -154,15 +230,27 @@ def test_observation_and_missed_week_reset_absence():
 
 @pytest.mark.asyncio
 async def test_source_deactivation_cap_blocks_entire_mutation(db):
-    t0 = datetime(2026, 9, 8, tzinfo=timezone.utc)
+    t0 = datetime(2026, 9, 8, tzinfo=UTC)
     async with get_session() as session:
         for idx in range(2):
-            session.add(Listing(platform=Platform.NEKRETNINE, external_id=f"missing-{idx}",
-                url=f"https://example.test/missing-{idx}", photo_urls=[], photo_phashes=[],
-                absence_streak=1, absence_first_seen_at=t0, absence_last_seen_at=t0,
-                absence_last_run_id="week1"))
-    report = await mark_stale_inactive(source_result=complete_result(run_id="week2"),
-                                       now=t0+timedelta(days=7), max_deactivations=1)
+            session.add(
+                Listing(
+                    platform=Platform.NEKRETNINE,
+                    external_id=f"missing-{idx}",
+                    url=f"https://example.test/missing-{idx}",
+                    photo_urls=[],
+                    photo_phashes=[],
+                    absence_streak=1,
+                    absence_first_seen_at=t0,
+                    absence_last_seen_at=t0,
+                    absence_last_run_id="week1",
+                )
+            )
+    report = await mark_stale_inactive(
+        source_result=complete_result(run_id="week2"),
+        now=t0 + timedelta(days=7),
+        max_deactivations=1,
+    )
     assert report.would_mark_inactive == 2 and report.marked_inactive == 0
     assert report.blocked_reasons == ("deactivation_cap_exceeded",)
     async with get_session() as session:
@@ -172,7 +260,15 @@ async def test_source_deactivation_cap_blocks_entire_mutation(db):
 
 def test_weekly_completion_jitter_still_confirms_absence():
     from src.scrapers.run_safety import evaluate_absence
-    t0 = datetime(2026, 9, 6, 6, 58, tzinfo=timezone.utc)
-    result = evaluate_absence(observed=False, streak=1, first_seen_at=t0,
-        last_seen_at=t0, last_run_id="week1", run_id="week2", now=t0+timedelta(days=7, minutes=-8))
+
+    t0 = datetime(2026, 9, 6, 6, 58, tzinfo=UTC)
+    result = evaluate_absence(
+        observed=False,
+        streak=1,
+        first_seen_at=t0,
+        last_seen_at=t0,
+        last_run_id="week1",
+        run_id="week2",
+        now=t0 + timedelta(days=7, minutes=-8),
+    )
     assert result.deactivate and result.streak == 2

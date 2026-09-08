@@ -1,7 +1,7 @@
 """E2E (S5-1): mobile bottom-nav visibility + the PWA register script.
 
 At a mobile viewport (≤620px) the .bottom-nav is VISIBLE with four real links
-(Каталог/Карта/Калькулятор/Telegram), the Telegram one being a https://t.me/ link in a new tab;
+(Каталог/Карта/Подобрать/Telegram), the Telegram one being a https://t.me/ link in a new tab;
 at desktop width it's HIDDEN (display:none). Also asserts the SW-register script is present
 (SW install itself is impractical to drive in the seeded harness — the route + manifest unit
 tests in tests/site/test_pwa.py cover the worker contract).
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from tests.e2e.conftest import requires_e2e
 
-_DESTINATIONS = ["/catalog", "/map", "/calculator"]
+_DESTINATIONS = ["/catalog", "/map", "/#lead"]
 
 
 @requires_e2e

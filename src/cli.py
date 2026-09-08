@@ -106,28 +106,37 @@ async def _run_all(
     download_photos: bool,
     *,
     incremental: bool = True,
+    dry_run: bool = False,
 ) -> list[ScrapeResult]:
+    from src.jobs.run_history import progress
+
     results: list[ScrapeResult] = []
     for plat in platforms:
+        if not dry_run:
+            progress(f"scrape:{plat.value}")
         scraper_cls = SCRAPERS[plat]
         # `async with` stays INSIDE the try: an __aenter__ failure (e.g. halooglasi's Playwright
         # browser refusing to launch) must skip that one platform, not crash the whole run.
         try:
-            async with scraper_cls() as scraper:
-                result = await scrape_platform(
-                    scraper,
-                    max_pages=max_pages,
-                    max_new=max_new,
-                    download_photos=download_photos,
-                    incremental=incremental,
-                )
-        except NotImplementedError as e:
-            click.echo(f"[{plat.value}] skipped: {e}", err=True)
-            continue
-        except Exception:
-            logging.getLogger(__name__).exception("[%s] scrape failed", plat.value)
-            continue
+            async with asyncio.timeout(get_settings().scrape_source_budget_sec):
+                async with scraper_cls() as scraper:
+                    options = {"dry_run": True} if dry_run else {}
+                    result = await scrape_platform(
+                        scraper,
+                        max_pages=max_pages,
+                        max_new=max_new,
+                        download_photos=download_photos,
+                        incremental=incremental,
+                        **options,
+                    )
+        except Exception as exc:
+            logging.getLogger(__name__).error("[%s] scrape failed (%s)",
+                                              plat.value, type(exc).__name__)
+            result = ScrapeResult.failed(plat, reason=type(exc).__name__,
+                                         full_crawl=not incremental)
         results.append(result)
+        if not dry_run:
+            progress(f"scraped:{plat.value}", result)
     return results
 
 
@@ -978,7 +987,7 @@ async def _dupes_report_nightly_line() -> str:
         return "🚨 dupes-report шаг упал — см. логи"
 
 
-async def _liveness_nightly_line() -> str:
+async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None = None) -> str:
     """T3-4 nightly step — liveness sweep + notice, fault-isolated (сбой → 🚨-строка, nightly жив).
     Kill switch SITE_LIVENESS_ENABLED=0 глушит шаг целиком (сводка получает строку «выкл»)."""
     if not get_settings().site_liveness_enabled:
@@ -986,8 +995,8 @@ async def _liveness_nightly_line() -> str:
     try:
         from src.site.liveness import send_liveness_notice, site_liveness_sweep
 
-        report = await site_liveness_sweep()
-        sent = await send_liveness_notice(report)
+        report = await site_liveness_sweep(max_hides=max_hides)
+        sent = await send_liveness_notice(report) if notify else False
         note = " — нотис отправлен" if sent else ""
         return (
             f"liveness: снято {len(report.hidden)}, подтв. {len(report.candidates_confirmed)}, "
@@ -1415,6 +1424,8 @@ def admin(host: str | None, port: int | None, reload: bool) -> None:
 )
 @click.option("--skip-sweep", is_flag=True, help="Run the full scrape but skip the stale-sweep.")
 @click.option("--skip-scrape", is_flag=True, help="Skip the scrape, only do the stale-sweep.")
+@click.option("--dry-run", is_flag=True, help="Evaluate without database/media writes or messages.")
+@click.option("--no-notify", is_flag=True, help="Run maintenance without external messages.")
 @click.option(
     "--incremental",
     is_flag=True,
@@ -1426,6 +1437,8 @@ def nightly_refresh(
     skip_sweep: bool,
     skip_scrape: bool,
     incremental: bool,
+    dry_run: bool,
+    no_notify: bool,
 ) -> None:
     """Nightly maintenance: incremental daily scrape or full weekly refresh.
 
@@ -1433,7 +1446,8 @@ def nightly_refresh(
     weekly full unit omits it and performs the coverage/stale sweep.
     """
     asyncio.run(
-        _nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental)
+        _nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental,
+                         dry_run=dry_run, no_notify=no_notify)
     )
 
 
@@ -1509,11 +1523,36 @@ def _parse_rate_degraded(
 
 
 async def _nightly_refresh(
+    max_pages: int, inactive_after_days: int, skip_sweep: bool, skip_scrape: bool,
+    incremental: bool = False, *, dry_run: bool = False, no_notify: bool = False,
+) -> None:
+    from src.jobs.run_history import finish_refresh, start_refresh
+
+    token = None if dry_run else start_refresh(incremental=incremental)
+    error = None
+    try:
+        async with asyncio.timeout(get_settings().scrape_run_budget_sec):
+            await _nightly_refresh_impl(
+                max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental,
+                dry_run=dry_run, no_notify=no_notify,
+            )
+    except BaseException as exc:
+        error = type(exc).__name__
+        raise
+    finally:
+        if token is not None:
+            finish_refresh(token, error=error)
+
+
+async def _nightly_refresh_impl(
     max_pages: int,
     inactive_after_days: int,
     skip_sweep: bool,
     skip_scrape: bool,
     incremental: bool = False,
+    *,
+    dry_run: bool = False,
+    no_notify: bool = False,
 ) -> None:
     import time as _time
 
@@ -1535,58 +1574,49 @@ async def _nightly_refresh(
             max_new=None,
             download_photos=True,
             incremental=incremental,
+            **({"dry_run": True} if dry_run else {}),
         )
         _print_summary(results)
 
-    # Sweep ONLY platforms whose scrape actually worked. Sweeping after a failed/segment-starved
-    # walk is how 3 bad nights wipe a platform's whole active set: nothing refreshed last_seen_at,
-    # so everything "ages out" even though the apartments are still live on the site.
     sweep_skipped_platforms: list[str] = []
     if not skip_sweep and not incremental:
-        click.echo(f"\n→ Marking listings inactive (not seen in last {inactive_after_days} days)…")
-        healthy: list[Platform] = []
-        if skip_scrape:
-            # No scrape this run — operator explicitly asked for sweep-only; sweep everything.
-            healthy = list(SCRAPERS.keys())
-        else:
-            by_platform = {r.platform: r for r in results}
-            for plat in SCRAPERS:
-                r = by_platform.get(plat)
-                # site_total is REQUIRED: a full walk that couldn't even read the site's own
-                # result count can't prove coverage, and sweeping after an unproven walk is how
-                # a silently-truncated scrape mass-deactivates a platform.
-                ok = (
-                    r is not None
-                    and r.previewed > 0
-                    and bool(r.site_total)
-                    and r.previewed >= 0.5 * r.site_total
-                )
-                if ok:
-                    healthy.append(plat)
-                else:
-                    sweep_skipped_platforms.append(plat.value)
-        total_marked = 0
-        for plat in healthy:
-            res = await mark_stale_inactive(
-                inactive_after_days=inactive_after_days, platform=plat
-            )
-            total_marked += res.marked_inactive
         from src.scrapers.orchestrator import StaleSweepResult
-        sweep_result = StaleSweepResult(platform=None, marked_inactive=total_marked)
-        click.echo(f"  marked {total_marked} listings inactive")
-        if sweep_skipped_platforms:
-            click.echo(
-                f"  ⚠️ sweep skipped for unhealthy platforms: {', '.join(sweep_skipped_platforms)}"
-            )
-    elif incremental:
-        click.echo("  ℹ️ stale sweep deferred to weekly full refresh")
 
+        total_marked = 0
+        by_platform = {r.platform: r for r in results}
+        for plat in SCRAPERS:
+            evidence = by_platform.get(plat)
+            if evidence is None or not evidence.sweep_allowed:
+                sweep_skipped_platforms.append(plat.value)
+                continue
+            res = await mark_stale_inactive(
+                inactive_after_days=inactive_after_days, platform=plat,
+                source_result=evidence, dry_run=dry_run,
+            )
+            total_marked += res.would_mark_inactive if dry_run else res.marked_inactive
+        sweep_result = StaleSweepResult(platform=None, marked_inactive=total_marked)
+        click.echo(f"  {'would mark' if dry_run else 'marked'} {total_marked} listings inactive")
+        if sweep_skipped_platforms:
+            skipped = ", ".join(sweep_skipped_platforms)
+            click.echo(f"  sweep blocked without verified full crawl: {skipped}")
+    elif incremental:
+        click.echo("  stale sweep deferred to verified weekly full refresh")
+
+    if dry_run:
+        from src.site.liveness import site_liveness_sweep
+
+        report = await site_liveness_sweep(dry_run=True)
+        count = len(report.candidates_confirmed)
+        click.echo(f"DRY RUN: no writes/messages; confirmed public candidates={count}")
+        if any(r.errors or r.outcome in {"failed", "degraded"} for r in results):
+            raise SystemExit(1)
+        return
     if skip_scrape:
         return
 
     # Post-sweep maintenance steps (heal / rolling refresh / metrics / prune). Each one is
     # env-disableable (=0) and fault-isolated — see _run_nightly_steps.
-    steps = await _run_nightly_steps()
+    steps = await _run_nightly_steps(**({"notify": False} if no_notify else {}))
 
     # W3-G3: price-drop alerts off the W2-C2 `steps.price_changes` contract. Fault-isolated
     # like the other nightly extras — a failure becomes a 🚨 summary line, never kills nightly.
@@ -1602,7 +1632,10 @@ async def _nightly_refresh(
     # when its apartment is confirmed gone from EVERY platform (its dup-group), never merely by age.
     # Fault-isolated inside the helper; kill switch SITE_LIVENESS_ENABLED=0.
     click.echo("→ Site-listing liveness sweep…")
-    liveness_line = await _liveness_nightly_line()
+    liveness_line = await _liveness_nightly_line(
+        notify=not no_notify,
+        max_hides=max(0, get_settings().site_liveness_max_hides - steps.site_listings_hidden),
+    )
     click.echo(f"  {liveness_line}")
 
     # T2-4: site-аналитика — догон несагрегированных дней + сегодня → retention raw
@@ -1701,27 +1734,33 @@ async def _nightly_refresh(
         lines.append(f"⚠️ Sweep пропущен (нездоровый скрейп): {', '.join(sweep_skipped_platforms)}")
     if incremental:
         lines.append("ℹ️ Daily incremental run: stale sweep deferred to weekly full refresh")
-    client = await _open_userbot_if_needed()
-    try:
-        # bot mode → fans out to all chat_ids; userbot mode → Saved Messages.
-        try:
-            await send_text_to_recipients(client, "\n".join(lines))
-        except Exception:
-            logging.getLogger(__name__).exception("nightly refresh summary delivery failed")
-        # Active-drop + price-drop alerts go out as standalone messages too — they must not
-        # drown in the summary wall of text.
-        for alert in [*steps.alerts, *price_alerts, *parse_degraded]:
-            try:
-                await send_text_to_recipients(client, alert)
-            except Exception:
-                logging.getLogger(__name__).exception("nightly drop alert delivery failed")
-    finally:
-        if client is not None:
-            await client.disconnect()
+    unhealthy = bool(dead or low_coverage or degraded or parse_degraded or total_errors
+                     or any(r.outcome in {"failed", "degraded"} for r in results))
+    from src.jobs.run_history import record_refresh_result
 
-    # Exit non-zero on dead platforms so systemd marks the unit failed (it exits 0 today even
-    # when every scraper is down, which keeps monitoring blind). Summary is already sent above.
-    if dead:
+    record_refresh_result(results, incremental=incremental,
+                          status="degraded" if unhealthy else "success", summary=lines)
+    click.echo("\n".join(lines))
+    if not no_notify:
+        client = await _open_userbot_if_needed()
+        try:
+            # bot mode → fans out to all chat_ids; userbot mode → Saved Messages.
+            try:
+                await send_text_to_recipients(client, "\n".join(lines))
+            except Exception:
+                logging.getLogger(__name__).exception("nightly refresh summary delivery failed")
+            # Active-drop + price-drop alerts go out as standalone messages too — they must not
+            # drown in the summary wall of text.
+            for alert in [*steps.alerts, *price_alerts, *parse_degraded]:
+                try:
+                    await send_text_to_recipients(client, alert)
+                except Exception:
+                    logging.getLogger(__name__).exception("nightly drop alert delivery failed")
+        finally:
+            if client is not None:
+                await client.disconnect()
+
+    if unhealthy:
         raise SystemExit(1)
 
 
@@ -1732,9 +1771,10 @@ class NightlyStepsResult(NamedTuple):
     summary_lines: list[str]  # ready-made lines for the nightly telegram summary
     price_changes: list[PriceChange]  # W2-C2 contract for the Wave-3 price-drop alert
     alerts: list[str]  # standalone 🚨 messages (must not drown in the summary)
+    site_listings_hidden: int = 0
 
 
-async def _run_nightly_steps() -> NightlyStepsResult:
+async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     """Run the post-sweep nightly maintenance steps (W2-C1/C2/C5/C3).
 
     Every step is optional (its env knob =0 → skipped entirely) and fault-isolated: a step
@@ -1759,6 +1799,7 @@ async def _run_nightly_steps() -> NightlyStepsResult:
     lines: list[str] = []
     alerts: list[str] = []
     price_changes: list[PriceChange] = []
+    site_listings_hidden = 0
 
     # ONE wall-clock deadline shared by heal+rolling: jointly they cannot overrun the budget
     # (the 2026-06-16 SIGTERM was slow Cloudflare-challenged refetches running unbounded).
@@ -1814,6 +1855,7 @@ async def _run_nightly_steps() -> NightlyStepsResult:
                 f"ссылки: проверено {vl.checked}, "
                 f"деактивировано {vl.deactivated}, ошибок {vl.errors}"
             )
+            site_listings_hidden = vl.site_listings_hidden
             if vl.site_listings_hidden:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
             if vl.skipped:
@@ -1842,7 +1884,7 @@ async def _run_nightly_steps() -> NightlyStepsResult:
     # C2 saved-search subscriptions: new public listings × active subscriptions → digests
     # (idempotent via subscription_matches). In-function import is the test seam (tests
     # monkeypatch notify_subscriptions on its module). Fault-isolated like every other step.
-    if settings.nightly_notify_subscriptions:
+    if notify and settings.nightly_notify_subscriptions:
         click.echo("→ Notify saved-search subscriptions…")
         try:
             from src.jobs import notify_subscriptions as _notify_subs_mod
@@ -1890,7 +1932,8 @@ async def _run_nightly_steps() -> NightlyStepsResult:
     else:
         click.echo("→ Embeddings prune disabled (NIGHTLY_PRUNE_EMBEDDINGS=0)")
 
-    return NightlyStepsResult(summary_lines=lines, price_changes=price_changes, alerts=alerts)
+    return NightlyStepsResult(summary_lines=lines, price_changes=price_changes, alerts=alerts,
+                             site_listings_hidden=site_listings_hidden)
 
 
 # --------------------------------------------------------------------------- W3-G3 price drops

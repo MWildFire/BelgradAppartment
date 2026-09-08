@@ -699,7 +699,7 @@ async def test_first_404_honors_shared_publication_protection(factory, monkeypat
 @pytest.mark.asyncio
 async def test_verify_global_cap_and_inactive_unknown_sibling(factory, monkeypatch):
     from src.config import get_settings
-    from sqlalchemy import update
+
     monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     monkeypatch.setattr(get_settings(), "site_liveness_max_hides", 1)
     for i in range(3):

@@ -16,8 +16,6 @@ from src.db.models import (
     InboundPost,
     InboundStatus,
     Listing,
-    Match,
-    MatchStatus,
     Platform,
     SourceChannel,
 )
@@ -84,7 +82,7 @@ async def test_scrape_throttle_runs_after_window(db, tmp_path):
 @pytest.mark.asyncio
 async def test_mark_stale_inactive_flips_old_listings(db):
     """Only repeated successful full crawls confirm absence; observed listings stay active."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import UTC, datetime, timedelta, timezone
 
     from src.scrapers.orchestrator import mark_stale_inactive
 
@@ -112,7 +110,7 @@ async def test_mark_stale_inactive_flips_old_listings(db):
         await s.commit()
 
     from src.scrapers.orchestrator import ScrapeResult
-    t0 = datetime.now(timezone.utc)
+    t0 = datetime.now(UTC)
     total_marked = 0
     for platform, observed in [(Platform.NEKRETNINE, {"fresh1"}), (Platform.CETIRI_ZIDA, set())]:
         for week in range(2):
@@ -136,7 +134,7 @@ async def test_mark_stale_inactive_flips_old_listings(db):
 @pytest.mark.asyncio
 async def test_mark_stale_platform_scoped(db):
     """Platform filter only affects that platform."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import UTC, datetime, timedelta, timezone
 
     from src.scrapers.orchestrator import mark_stale_inactive
 
@@ -154,7 +152,7 @@ async def test_mark_stale_platform_scoped(db):
         await s.commit()
 
     from src.scrapers.orchestrator import ScrapeResult
-    t0 = datetime.now(timezone.utc)
+    t0 = datetime.now(UTC)
     for week in range(2):
         evidence = ScrapeResult(platform=Platform.NEKRETNINE, run_id=f"week-{week}", full_crawl=True,
             crawl_complete=True, stop_reason="exhausted", pages_attempted=1,

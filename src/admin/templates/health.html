@@ -20,6 +20,29 @@
   Данные read-only — агрегируются из уже существующих таблиц и состояния.
 </p>
 
+<h2>Качество автоматических обновлений</h2>
+{% set ops = report.operations %}
+<p><strong>{{ ops.status }}</strong> · Последний запуск:
+  {{ ops.latest_run.get('status', 'нет проверенной истории') }}
+  {{ ops.latest_run.get('finished_at') or ops.latest_run.get('started_at', '') }}</p>
+<table>
+  <thead><tr><th>Источник</th><th>Полный подтверждённый успех</th><th>Свежие данные ≤7 дней</th><th>Последний обход</th><th>Причины запрета снятия</th></tr></thead>
+  <tbody>{% for p in ops.sources %}<tr>
+    <td>{{ p.platform }}</td><td>{{ p.last_full_success or 'не подтверждён' }}</td>
+    <td>{{ p.fresh_7d }} / {{ p.active }} ({{ p.fresh_pct }}%)</td>
+    <td>{{ p.outcome }}; {{ p.observed }} / {{ p.total }}; ошибок {{ p.errors }}</td>
+    <td>{{ p.blocked | join(', ') }}</td>
+  </tr>{% endfor %}</tbody>
+</table>
+<p>Публичные исходники с подтверждённым обновлением ≤24 часов: {{ ops.public_fresh }} / {{ ops.public }}.
+  Время неудачной попытки не считается успешным обновлением.</p>
+<p>Восстановление внешней копии: {{ 'подтверждено' if ops.backup_verified else 'требует проверки' }}.
+  Копия от {{ ops.backup_created or 'неизвестно' }}.</p>
+<p>Очередь Finder: {{ ops.deliveries.finder }} · Подписки: {{ ops.deliveries.subscriptions }}.</p>
+<p>Срок прокси: {{ ops.proxy_expiry }}.</p>
+<ul>{% for kind, next_run in ops.schedules.items() %}<li>{{ kind }}: {{ next_run or 'неизвестно' }}</li>{% endfor %}</ul>
+<ul>{% for reason in ops.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+
 <h2 style="font-size:15px; margin:0 0 10px;">Скрейперы по площадкам</h2>
 <table>
   <thead>
@@ -60,8 +83,7 @@
 <p class="muted" style="font-size:12px; margin:8px 0 24px;">
   «Последний scrape» = максимум <code>last_seen_at</code> по площадке. «Тренд» — активные объявления
   из <code>daily_metrics</code> (ночной снапшот), старое→новое. ⚠️ если последний scrape старше
-  {{ scrape_warn_days if scrape_warn_days is defined else 2 }} дн. Parse-success-rate считается
-  пер-прогон в памяти и не персистится — здесь не показывается.
+  {{ scrape_warn_days if scrape_warn_days is defined else 2 }} дн. Подтверждённое качество и свежесть показаны отдельно выше; одно свежее объявление не доказывает здоровье источника.
 </p>
 
 <h2 style="font-size:15px; margin:0 0 10px;">Монитор входящих</h2>
@@ -88,7 +110,7 @@
   </tbody>
 </table>
 <p class="muted" style="font-size:12px; margin:8px 0 24px;">
-  ⚠️ если новых входящих нет более суток — монитор, вероятно, отвалился (сессия/Telethon).
+  ⚠️ если новых входящих нет более суток — это сигнал для сверки с источником, а не доказательство отказа монитора.
 </p>
 
 <h2 style="font-size:15px; margin:0 0 10px;">Базовый отпечаток разметки</h2>

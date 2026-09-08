@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import urlparse
@@ -131,7 +131,9 @@ class ScrapeResult:
     proxy_metrics: dict[str, int] = field(default_factory=dict)
 
     @classmethod
-    def failed(cls, platform: Platform, *, reason: str = "source_exception", full_crawl: bool = True):
+    def failed(
+        cls, platform: Platform, *, reason: str = "source_exception", full_crawl: bool = True
+    ):
         return cls(platform=platform, full_crawl=full_crawl, stop_reason="source_exception",
                    errors=1, quality_reasons=[reason])
 
@@ -151,9 +153,15 @@ class ScrapeResult:
     def to_report(self) -> dict[str, Any]:
         report = asdict(self)
         report.pop("observed_ids")  # Aggregate reporting never emits listing IDs or URLs.
-        report.update(platform=self.platform.value, outcome=self.outcome,
-                      observed=self.previewed, processed=self.fetched, pages_skipped=self.skipped_pages,
-                      sweep_allowed=self.sweep_allowed, sweep_blocked_reasons=list(self.sweep_blocked_reasons))
+        report.update(
+            platform=self.platform.value,
+            outcome=self.outcome,
+            observed=self.previewed,
+            processed=self.fetched,
+            pages_skipped=self.skipped_pages,
+            sweep_allowed=self.sweep_allowed,
+            sweep_blocked_reasons=list(self.sweep_blocked_reasons),
+        )
         return report
 
     @property
@@ -260,7 +268,9 @@ async def scrape_platform(
         except _DetailFetchError:
             result.details_attempted += 1
             result.errors += 1
-            logger.warning("[%s] detail fetch failed external_id=%s", scraper.platform.value, prev.external_id)
+            logger.warning(
+                "[%s] detail fetch failed external_id=%s", scraper.platform.value, prev.external_id
+            )
             continue
         except _EmptyShellError:
             # The all-None-shell guard fired: a detail WAS fetched but the parser couldn't read it
@@ -294,7 +304,9 @@ async def scrape_platform(
     return result
 
 
-def _copy_crawl_evidence(result: ScrapeResult, scraper: Scraper, *, preserve_stop: bool = False) -> None:
+def _copy_crawl_evidence(
+    result: ScrapeResult, scraper: Scraper, *, preserve_stop: bool = False
+) -> None:
     result.skipped_pages = int(getattr(scraper, "_skipped_pages", 0))
     result.site_total = getattr(scraper, "_site_total", None)
     result.crawl_complete = bool(getattr(scraper, "_crawl_complete", False))
@@ -678,13 +690,22 @@ async def mark_stale_inactive(
     if source_result.dry_run and not dry_run:
         report.blocked_reasons = ("evaluation_result_cannot_mutate",)
         return report
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     async with get_session() as session:
         # Scalar projection avoids loading the photo embedding blobs for a full platform.
-        rows = (await session.execute(select(
-            Listing.id, Listing.external_id, Listing.is_active, Listing.absence_streak,
-            Listing.absence_first_seen_at, Listing.absence_last_seen_at, Listing.absence_last_run_id,
-        ).where(Listing.platform == platform, Listing.is_active.is_(True)))).all()
+        rows = (
+            await session.execute(
+                select(
+                    Listing.id,
+                    Listing.external_id,
+                    Listing.is_active,
+                    Listing.absence_streak,
+                    Listing.absence_first_seen_at,
+                    Listing.absence_last_seen_at,
+                    Listing.absence_last_run_id,
+                ).where(Listing.platform == platform, Listing.is_active.is_(True))
+            )
+        ).all()
         decisions = []
         for row in rows:
             decision = evaluate_absence(
@@ -704,12 +725,20 @@ async def mark_stale_inactive(
         if dry_run:
             return report
         for row, decision in decisions:
-            if decision.reason == "observed" and not row.absence_streak and row.absence_last_run_id is None:
+            if (
+                decision.reason == "observed"
+                and not row.absence_streak
+                and row.absence_last_run_id is None
+            ):
                 continue
             if decision.reason in {"already_evaluated", "confirmation_too_soon"}:
                 continue
-            values = dict(absence_streak=decision.streak, absence_first_seen_at=decision.first_seen_at,
-                          absence_last_seen_at=decision.last_seen_at, absence_last_run_id=decision.last_run_id)
+            values = dict(
+                absence_streak=decision.streak,
+                absence_first_seen_at=decision.first_seen_at,
+                absence_last_seen_at=decision.last_seen_at,
+                absence_last_run_id=decision.last_run_id,
+            )
             if decision.deactivate and row.is_active:
                 values["is_active"] = False
                 values["deactivated_at"] = now
@@ -753,9 +782,18 @@ async def hide_site_listings_for_listing(session: Any, listing_id: int, *,
     from src.site.publication_policy import apply_publication_policy
 
     maximum = get_settings().site_liveness_max_hides if remaining_hides is None else remaining_hides
-    ids = (await session.execute(select(SiteListing.id).join(Match, Match.id == SiteListing.match_id)
-                                 .where(Match.listing_id == listing_id, SiteListing.is_public.is_(True))
-                                 .order_by(SiteListing.id))).scalars().all()
+    ids = (
+        (
+            await session.execute(
+                select(SiteListing.id)
+                .join(Match, Match.id == SiteListing.match_id)
+                .where(Match.listing_id == listing_id, SiteListing.is_public.is_(True))
+                .order_by(SiteListing.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     hidden = 0
     for card_id in ids:
         _decision, count = await apply_publication_policy(
@@ -792,7 +830,7 @@ async def verify_active_links(
     `client` is injectable for tests (pass a MockTransport-backed AsyncClient); in production it
     defaults to a fresh client built with the scraper User-Agent.
     """
-    checked_at = datetime.now(timezone.utc)
+    checked_at = datetime.now(UTC)
     async with get_session() as s:
         stmt = (
             select(Listing.id, Listing.platform, Listing.url)
@@ -805,7 +843,9 @@ async def verify_active_links(
                 )
                 .exists(),
             )
-            .where((Listing.link_next_retry_at.is_(None)) | (Listing.link_next_retry_at <= checked_at))
+            .where(
+                (Listing.link_next_retry_at.is_(None)) | (Listing.link_next_retry_at <= checked_at)
+            )
             .order_by(Listing.link_checked_at.asc().nullsfirst(), Listing.id)
         )
         if platform is not None:
@@ -841,8 +881,13 @@ async def verify_active_links(
         observed_status[row.id] = status
         if dry_run:
             return
-        values = dict(link_checked_at=checked_at, link_status=status,
-                      link_next_retry_at=checked_at + timedelta(hours=6) if status == "INCONCLUSIVE" else None)
+        values = dict(
+            link_checked_at=checked_at,
+            link_status=status,
+            link_next_retry_at=checked_at + timedelta(hours=6)
+            if status == "INCONCLUSIVE"
+            else None,
+        )
         if definitive_alive:
             values["link_succeeded_at"] = checked_at
         if status == "DEAD":

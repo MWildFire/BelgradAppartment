@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     # --- Scrapers ---
     scrape_list_interval_min: int = 30
     scrape_recheck_interval_hours: int = 6
+    scrape_source_budget_sec: int = 1800
+    scrape_item_budget_sec: int = 90
+    scrape_run_budget_sec: int = 21600
+    scrape_lock_wait_sec: int = 60
     scraper_user_agent: str = ""
     # Legacy proxy surface retained for all existing scrapers. Keep credentials out of repr/logs.
     scraper_proxy_url: str = Field(default="", repr=False)
@@ -63,6 +67,7 @@ class Settings(BaseSettings):
     # behavior; the Nekretnine scraper must fail closed when a required pool is selected.
     nekretnine_list_snapshot_mode: Literal["legacy", "shadow", "active"] = "legacy"
     nekretnine_proxy_mode: Literal["legacy_rotating", "static_isp"] = "legacy_rotating"
+    nekretnine_proxy_allow_legacy_fallback: bool = False
     nekretnine_proxy_primary_url: str = Field(default="", repr=False)
     nekretnine_proxy_secondary_url: str = Field(default="", repr=False)
     # Comma/newline-separated extra static ISP candidates, kept out of repr/logs.
