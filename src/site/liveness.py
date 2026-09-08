@@ -36,9 +36,9 @@ from src.db.models import Platform, SiteListing
 from src.scrapers.orchestrator import (
     _DEAD_LINK_STATUSES,
     _make_side_client,
-    hide_site_listings_for_listing,
 )
 from src.telegram.bot_delivery import send_text_via_bot
+from src.site.publication_policy import apply_publication_policy, evaluate_publication
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,7 @@ async def site_liveness_sweep(
     now: datetime | None = None,  # reserved for signature parity; liveness has no age component
     client: httpx.AsyncClient | None = None,
     dry_run: bool = False,
+    max_hides: int | None = None,
 ) -> LivenessReport:
     """Sweep every public card and decide KEEP / candidate / HIDE per the C0 matrix.
 
@@ -120,6 +121,7 @@ async def site_liveness_sweep(
     """
     settings = get_settings()
     report = LivenessReport()
+    hide_limit = settings.site_liveness_max_hides if max_hides is None else max(0, max_hides)
 
     async with get_session() as s:
         card_rows = (
@@ -213,7 +215,6 @@ async def site_liveness_sweep(
 
     for r in card_rows:
         members = card_members[r.sl_id]
-        any_active = any(is_active for (_lid, is_active, _url, _platform) in members)
         dead = sum(
             1
             for (_lid, is_active, url, _platform) in members
@@ -236,20 +237,38 @@ async def site_liveness_sweep(
             url=r.url,
         )
 
-        if r.keep_on_site:
+        member_status = {
+            lid: _ACTIVE if is_active else url_status.get(url, _INCONCLUSIVE)
+            for lid, is_active, url, _platform in members
+        }
+        decision = evaluate_publication(
+            member_status.values(), pinned=r.keep_on_site,
+            auto_hide=settings.site_liveness_auto_hide, remaining_hides=hide_limit-len(report.hidden),
+        )
+        if decision.reason == "pinned":
             report.kept_pinned += 1
-        elif any_active:
+        elif decision.reason == "active_sibling":
             report.kept_active += 1
-        elif inconclusive:
+        elif decision.reason == "unconfirmed":
             report.candidates_unconfirmed.append(candidate)
-        elif settings.site_liveness_auto_hide and len(report.hidden) < settings.site_liveness_max_hides:
-            # All members DEAD, auto-hide on and under the nightly cap → hide (unless dry-run).
-            report.hidden.append(candidate)
-            if not dry_run:
+        elif decision.should_hide:
+            if dry_run:
+                report.hidden.append(candidate)
+            else:
                 async with get_session() as s2:
-                    await hide_site_listings_for_listing(s2, r.listing_id)
+                    current, count = await apply_publication_policy(
+                        s2, r.sl_id, member_status_by_id=member_status,
+                        remaining_hides=hide_limit-len(report.hidden),
+                    )
+                if count:
+                    report.hidden.append(candidate)
+                elif current.reason == "pinned":
+                    report.kept_pinned += 1
+                elif current.reason == "active_sibling":
+                    report.kept_active += 1
+                else:
+                    report.candidates_unconfirmed.append(candidate)
         else:
-            # All DEAD but auto-hide off (warn-first) or cap reached → confirmed candidate.
             report.candidates_confirmed.append(candidate)
 
     logger.info(

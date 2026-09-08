@@ -414,3 +414,26 @@ async def test_liveness_nightly_line_fault_isolated(monkeypatch):
     line = await cli_mod._liveness_nightly_line()
     assert line.startswith("🚨")
     assert "liveness" in line
+
+
+@pytest.mark.asyncio
+async def test_liveness_one_listing_with_pinned_and_unpinned_cards_hides_only_eligible(db, monkeypatch):
+    """A listing-level UPDATE used to remove a pinned second card as a side effect."""
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lid = await _listing(is_active=False, url="https://example.test/gone/")
+    removable = await _card(lid)
+    pinned = await _card(lid, keep_on_site=True)
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})))
+    assert len(report.hidden) == 1
+    assert not await _is_public(removable)
+    assert await _is_public(pinned)
+
+
+@pytest.mark.asyncio
+async def test_liveness_respects_remaining_combined_nightly_cap(db, monkeypatch):
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lid = await _listing(is_active=False, url="https://example.test/gone/")
+    sl = await _card(lid)
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})), max_hides=0)
+    assert not report.hidden and len(report.candidates_confirmed) == 1
+    assert await _is_public(sl)

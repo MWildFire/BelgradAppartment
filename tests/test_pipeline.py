@@ -83,7 +83,7 @@ async def test_scrape_throttle_runs_after_window(db, tmp_path):
 
 @pytest.mark.asyncio
 async def test_mark_stale_inactive_flips_old_listings(db):
-    """Listings whose last_seen_at is older than the cutoff become inactive."""
+    """Only repeated successful full crawls confirm absence; observed listings stay active."""
     from datetime import datetime, timedelta, timezone
 
     from src.scrapers.orchestrator import mark_stale_inactive
@@ -111,8 +111,18 @@ async def test_mark_stale_inactive_flips_old_listings(db):
         ])
         await s.commit()
 
-    result = await mark_stale_inactive(inactive_after_days=10)
-    assert result.marked_inactive == 2
+    from src.scrapers.orchestrator import ScrapeResult
+    t0 = datetime.now(timezone.utc)
+    total_marked = 0
+    for platform, observed in [(Platform.NEKRETNINE, {"fresh1"}), (Platform.CETIRI_ZIDA, set())]:
+        for week in range(2):
+            evidence = ScrapeResult(platform=platform, run_id=f"{platform.value}-{week}", full_crawl=True,
+                crawl_complete=True, stop_reason="exhausted", pages_attempted=1,
+                denominator_trusted=True, site_total=len(observed), previewed=len(observed),
+                fetched=len(observed), observed_ids=observed)
+            result = await mark_stale_inactive(source_result=evidence, now=t0+timedelta(days=7*week))
+            total_marked += result.marked_inactive
+    assert total_marked == 2
 
     async with factory() as s:
         from sqlalchemy import select
@@ -143,7 +153,14 @@ async def test_mark_stale_platform_scoped(db):
         ])
         await s.commit()
 
-    result = await mark_stale_inactive(inactive_after_days=10, platform=Platform.NEKRETNINE)
+    from src.scrapers.orchestrator import ScrapeResult
+    t0 = datetime.now(timezone.utc)
+    for week in range(2):
+        evidence = ScrapeResult(platform=Platform.NEKRETNINE, run_id=f"week-{week}", full_crawl=True,
+            crawl_complete=True, stop_reason="exhausted", pages_attempted=1,
+            denominator_trusted=True, site_total=0)
+        result = await mark_stale_inactive(source_result=evidence, platform=Platform.NEKRETNINE,
+                                          now=t0+timedelta(days=7*week))
     assert result.marked_inactive == 1
 
     async with factory() as s:

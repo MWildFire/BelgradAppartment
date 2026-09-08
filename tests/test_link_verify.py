@@ -382,32 +382,36 @@ async def test_published_match_is_selected(factory):
 
 
 @pytest.mark.asyncio
-async def test_hide_helper_hides_public_card(factory):
-    """The pure hide helper flips is_public/is_featured False for a listing's public cards."""
+async def test_hide_helper_hides_public_card(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    """The shared helper hides an unpinned card only with explicit DEAD evidence and auto-hide enabled."""
     import src.db.session as db_session
 
     lid = await _seed_listing(
-        factory, url="https://nekretnine.rs/x/", site_listing=True,
+        factory, url="https://nekretnine.rs/x/", site_listing=True, is_active=False,
         site_public=True, site_featured=True,
     )
     async with db_session.get_session() as s:
-        n = await hide_site_listings_for_listing(s, lid)
+        n = await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert n == 1
     assert await _site_state(factory, lid) == (False, False)
 
 
 @pytest.mark.asyncio
-async def test_hide_helper_invalidates_cache_when_it_hides(factory):
+async def test_hide_helper_invalidates_cache_when_it_hides(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     """Hiding a card must bust the in-process read-model cache so it disappears at once."""
     import src.db.session as db_session
     from src.site import cache
 
     lid = await _seed_listing(
-        factory, url="https://nekretnine.rs/x/", site_listing=True, site_public=True,
+        factory, url="https://nekretnine.rs/x/", site_listing=True, is_active=False, site_public=True,
     )
     cache.catalog_cache.set(("k",), "v")
     async with db_session.get_session() as s:
-        await hide_site_listings_for_listing(s, lid)
+        await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert cache.catalog_cache.get(("k",)) is cache.MISS
 
 
@@ -440,7 +444,9 @@ async def test_hide_helper_idempotent_on_already_hidden(factory):
 
 
 @pytest.mark.asyncio
-async def test_404_hides_public_card(factory):
+async def test_404_hides_public_card(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
     )
@@ -457,7 +463,9 @@ async def test_404_hides_public_card(factory):
 
 
 @pytest.mark.asyncio
-async def test_410_hides_public_card(factory):
+async def test_410_hides_public_card(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
     )
@@ -529,7 +537,9 @@ async def test_404_already_hidden_card_hidden_count_zero(factory):
 
 
 @pytest.mark.asyncio
-async def test_404_clears_featured_flag(factory):
+async def test_404_clears_featured_flag(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     """A hidden card must never remain the hero — is_featured is cleared too."""
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True,
@@ -663,3 +673,71 @@ async def test_404_kill_switch_off_leaves_card_public(factory, monkeypatch):
     assert stats.site_listings_hidden == 0
     assert await _is_active(factory, lid) is False
     assert await _site_state(factory, lid) == (True, False)  # card untouched
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protection", ["pinned", "sibling", "warn_only", "cap"])
+async def test_first_404_honors_shared_publication_protection(factory, monkeypatch, protection):
+    from src.config import get_settings
+    from sqlalchemy import update
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", protection != "warn_only")
+    monkeypatch.setattr(get_settings(), "site_liveness_max_hides", 0 if protection == "cap" else 10)
+    monkeypatch.setattr(get_settings(), "nightly_auto_hide_site_listings", True)
+    lid = await _seed_listing(factory, url="https://example.test/gone", site_listing=True)
+    async with factory() as session:
+        if protection == "pinned":
+            await session.execute(update(SiteListing).values(keep_on_site=True))
+        elif protection == "sibling":
+            await session.execute(update(Listing).where(Listing.id == lid).values(dup_group_id=lid))
+            session.add(Listing(platform=Platform.CETIRI_ZIDA, external_id="sibling", url="https://example.test/live", is_active=True, dup_group_id=lid, photo_urls=[], photo_phashes=[]))
+        await session.commit()
+    stats = await verify_active_links(client=_client(lambda request: httpx.Response(404)))
+    assert stats.deactivated == 1 and stats.site_listings_hidden == 0
+    assert await _site_state(factory, lid) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_verify_global_cap_and_inactive_unknown_sibling(factory, monkeypatch):
+    from src.config import get_settings
+    from sqlalchemy import update
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    monkeypatch.setattr(get_settings(), "site_liveness_max_hides", 1)
+    for i in range(3):
+        await _seed_listing(factory, url=f"https://example.test/{i}", external_id=str(i), site_listing=True)
+    stats = await verify_active_links(client=_client(lambda request: httpx.Response(404)))
+    assert stats.site_listings_hidden == 1
+    async with factory() as session:
+        assert sum((await session.execute(select(SiteListing.is_public))).scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_bounded_link_queue_does_not_starve_later_ids(factory):
+    for i in range(5):
+        await _seed_listing(factory, url=f"https://example.test/{i}", external_id=str(i))
+    paths = []
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(403)
+    async with _client(handler) as client:
+        first = await verify_active_links(client=client, limit=2)
+        second = await verify_active_links(client=client, limit=2)
+    assert first.checked == second.checked == 2
+    assert len(set(paths)) == 4
+    async with factory() as session:
+        rows = (await session.execute(select(Listing))).scalars().all()
+        assert sum(row.link_checked_at is not None for row in rows) == 4
+        assert all(row.link_status == "INCONCLUSIVE" and row.link_next_retry_at for row in rows if row.link_checked_at)
+
+
+@pytest.mark.asyncio
+async def test_verify_dry_run_leaves_links_and_publications_unchanged(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lid = await _seed_listing(factory, url="https://example.test/gone", site_listing=True)
+    stats = await verify_active_links(client=_client(lambda request: httpx.Response(404)), dry_run=True)
+    assert stats.deactivated == 1 and stats.site_listings_hidden == 0
+    assert await _is_active(factory, lid)
+    assert await _site_state(factory, lid) == (True, False)
+    async with factory() as session:
+        row = (await session.execute(select(Listing))).scalar_one()
+        assert row.link_checked_at is None and row.link_status is None

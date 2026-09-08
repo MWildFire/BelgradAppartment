@@ -1,0 +1,97 @@
+"""Pure fail-closed decisions for source quality and weekly source absence."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+
+
+@dataclass(frozen=True)
+class SourceEvaluation:
+    outcome: str
+    sweep_allowed: bool
+    reasons: tuple[str, ...]
+
+
+def evaluate_source(result) -> SourceEvaluation:
+    """A bounded useful refresh may succeed; removal needs a proven complete full crawl."""
+    reasons = []
+    if result.errors:
+        reasons.append("item_errors")
+    if result.skipped_pages:
+        reasons.append("skipped_pages")
+    if result.pages_failed:
+        reasons.append("failed_pages")
+    if result.stop_reason in {"source_exception", "list_exception"}:
+        reasons.append(result.stop_reason)
+    if result.full_crawl:
+        if not result.crawl_complete:
+            reasons.append("crawl_incomplete")
+        if not result.denominator_trusted or result.site_total is None or result.site_total < 0:
+            reasons.append("untrusted_denominator")
+        elif result.previewed != result.site_total:
+            # Even apparent over-coverage makes the denominator questionable. No arbitrary
+            # 50%/70% threshold can establish that missing listings really disappeared.
+            reasons.append("coverage_mismatch")
+        if len(result.observed_ids) != result.previewed:
+            reasons.append("missing_presence_evidence")
+        if result.fetched + result.errors != result.previewed:
+            reasons.append("items_unprocessed")
+        if result.pages_attempted <= 0:
+            reasons.append("missing_page_evidence")
+    if result.stop_reason == "item_limit":
+        reasons.append("item_limit")
+    if not result.previewed and not (
+        result.full_crawl and result.crawl_complete and result.denominator_trusted
+        and result.site_total == 0 and result.pages_attempted > 0
+    ):
+        reasons.append("no_observations")
+    reasons.extend(result.quality_reasons)
+    reasons = list(dict.fromkeys(reasons))
+    outcome = "degraded" if reasons else "ok"
+    if result.stop_reason in {"source_exception", "list_exception"} or (result.errors and not result.fetched):
+        outcome = "failed"
+    elif "no_observations" in reasons:
+        outcome = "failed"
+    return SourceEvaluation(outcome, result.full_crawl and not reasons, tuple(reasons))
+
+
+@dataclass(frozen=True)
+class AbsenceDecision:
+    streak: int
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
+    last_run_id: str | None
+    deactivate: bool
+    reason: str
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+def evaluate_absence(*, observed: bool, streak: int, first_seen_at: datetime | None,
+                     last_seen_at: datetime | None, last_run_id: str | None,
+                     run_id: str, now: datetime, interval_days: int = 7,
+                     confirmations: int = 2) -> AbsenceDecision:
+    """Count distinct, weekly-spaced successful full checks, never elapsed row age alone.
+
+    A long gap resets confirmation: missed/failed weeks cannot be silently counted as a
+    consecutive successful weekly absence. Replaying the same run is idempotent.
+    """
+    if observed:
+        return AbsenceDecision(0, None, None, None, False, "observed")
+    first, last, now = _utc(first_seen_at), _utc(last_seen_at), _utc(now)
+    if last_run_id == run_id:
+        return AbsenceDecision(streak, first, last, last_run_id, False, "already_evaluated")
+    # Weekly jobs finish at different times. A one-day tolerance prevents a run finishing
+    # eight minutes earlier than last week from starving confirmations forever.
+    minimum = timedelta(days=max(6, interval_days - 1))
+    if last is not None and now - last < minimum:
+        return AbsenceDecision(streak, first, last, last_run_id, False, "confirmation_too_soon")
+    if last is None or now - last > timedelta(days=max(7, interval_days) + 2):
+        return AbsenceDecision(1, now, now, run_id, False, "first_weekly_absence")
+    next_streak = streak + 1
+    return AbsenceDecision(next_streak, first or now, now, run_id,
+                           next_streak >= max(2, confirmations), "confirmed_weekly_absence")

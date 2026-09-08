@@ -17,11 +17,12 @@ import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 from urllib.parse import urlparse
+from uuid import uuid4
 
 import httpx
 from sqlalchemy import func, select, update
@@ -32,6 +33,7 @@ from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedP
 from src.matching.phash import download_and_hash
 from src.scrapers.base import ListingDetail, ListingPreview, Scraper
 from src.scrapers.snapshot_parity import mismatch_fields
+from src.scrapers.run_safety import evaluate_absence, evaluate_source
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +85,8 @@ async def scrape_all_with_throttle(
                     "[scrape %s] previewed=%d new=%d refreshed=%d errors=%d",
                     plat.value, r.previewed, r.inserted, r.updated, r.errors,
                 )
-        except NotImplementedError as e:
-            logger.info("[scrape %s] skipped: %s", plat.value, e)
-        except Exception:
+        except Exception as exc:
+            results.append(ScrapeResult.failed(plat, reason=type(exc).__name__))
             logger.exception("[scrape %s] failed", plat.value)
     return True, results
 
@@ -93,6 +94,16 @@ async def scrape_all_with_throttle(
 @dataclass
 class ScrapeResult:
     platform: Platform
+    run_id: str = field(default_factory=lambda: uuid4().hex)
+    full_crawl: bool = False
+    crawl_complete: bool = False
+    stop_reason: str = "unverified"
+    pages_attempted: int = 0
+    pages_failed: int = 0
+    denominator_trusted: bool = False
+    quality_reasons: list[str] = field(default_factory=list)
+    observed_ids: set[str] = field(default_factory=set, repr=False)
+    dry_run: bool = False
     previewed: int = 0
     fetched: int = 0
     inserted: int = 0
@@ -118,6 +129,32 @@ class ScrapeResult:
     snapshot_active_uses: int = 0
     snapshot_shadow_mismatches: int = 0
     proxy_metrics: dict[str, int] = field(default_factory=dict)
+
+    @classmethod
+    def failed(cls, platform: Platform, *, reason: str = "source_exception", full_crawl: bool = True):
+        return cls(platform=platform, full_crawl=full_crawl, stop_reason="source_exception",
+                   errors=1, quality_reasons=[reason])
+
+    @property
+    def outcome(self) -> str:
+        return evaluate_source(self).outcome
+
+    @property
+    def sweep_allowed(self) -> bool:
+        return evaluate_source(self).sweep_allowed
+
+    @property
+    def sweep_blocked_reasons(self) -> tuple[str, ...]:
+        evaluation = evaluate_source(self)
+        return evaluation.reasons if self.full_crawl else ("not_full_crawl", *evaluation.reasons)
+
+    def to_report(self) -> dict[str, Any]:
+        report = asdict(self)
+        report.pop("observed_ids")  # Aggregate reporting never emits listing IDs or URLs.
+        report.update(platform=self.platform.value, outcome=self.outcome,
+                      observed=self.previewed, processed=self.fetched, pages_skipped=self.skipped_pages,
+                      sweep_allowed=self.sweep_allowed, sweep_blocked_reasons=list(self.sweep_blocked_reasons))
+        return report
 
     @property
     def parse_rate(self) -> float:
@@ -152,6 +189,8 @@ async def scrape_platform(
     max_new: int | None = None,
     download_photos: bool = True,
     incremental: bool = True,
+    dry_run: bool = False,
+    run_id: str | None = None,
 ) -> ScrapeResult:
     """Run one scraping pass for a single platform.
 
@@ -161,6 +200,9 @@ async def scrape_platform(
     """
     result = ScrapeResult(
         platform=scraper.platform,
+        run_id=run_id or uuid4().hex,
+        full_crawl=not incremental and max_new is None,
+        dry_run=dry_run,
         snapshot_mode=_snapshot_mode(scraper),
         proxy_metrics=_proxy_metrics_for(scraper),
     )
@@ -180,10 +222,20 @@ async def scrape_platform(
             scraper.platform.value, len(known_ids),
         )
 
-    previews = await scraper.list_recent(max_pages=max_pages, known_ids=known_ids)
+    try:
+        previews = await scraper.list_recent(max_pages=max_pages, known_ids=known_ids)
+    except Exception as exc:
+        result.errors += 1
+        result.stop_reason = "list_exception"
+        result.quality_reasons.append(type(exc).__name__)
+        _copy_crawl_evidence(result, scraper, preserve_stop=True)
+        logger.exception("[%s] list crawl failed", scraper.platform.value)
+        return result
     result.previewed = len(previews)
-    result.skipped_pages = getattr(scraper, "_skipped_pages", 0)
-    result.site_total = getattr(scraper, "_site_total", None)
+    result.observed_ids = {p.external_id for p in previews}
+    _copy_crawl_evidence(result, scraper)
+    if len(result.observed_ids) != result.previewed:
+        result.quality_reasons.append("duplicate_observations")
     logger.info(
         "[%s] list_recent → %d previews (skipped_pages=%d, site_total=%s)",
         scraper.platform.value, len(previews), result.skipped_pages, result.site_total,
@@ -192,16 +244,24 @@ async def scrape_platform(
     new_count = 0
     for prev in previews:
         if max_new is not None and new_count >= max_new:
+            result.stop_reason = "item_limit"
+            result.crawl_complete = False
             break
         _record_snapshot_telemetry(result, scraper, prev)
         try:
-            inserted, photos, fetched_detail = await _process_one(
+            processor = _evaluate_one if dry_run else _process_one
+            inserted, photos, fetched_detail = await processor(
                 scraper,
                 prev.url,
                 prev.external_id,
                 download_photos=download_photos,
                 preview=prev,
             )
+        except _DetailFetchError:
+            result.details_attempted += 1
+            result.errors += 1
+            logger.warning("[%s] detail fetch failed external_id=%s", scraper.platform.value, prev.external_id)
+            continue
         except _EmptyShellError:
             # The all-None-shell guard fired: a detail WAS fetched but the parser couldn't read it
             # (markup change / challenge page). Count it as an attempt that did NOT parse ok, so it
@@ -225,13 +285,47 @@ async def scrape_platform(
         if inserted is True:
             result.inserted += 1
             new_count += 1
-        else:
+        elif inserted is False:
             result.updated += 1
     result.snapshot_shadow_mismatches = int(
         getattr(scraper, "_snapshot_shadow_mismatches", 0)
     )
     result.proxy_metrics = _proxy_metrics_for(scraper)
     return result
+
+
+def _copy_crawl_evidence(result: ScrapeResult, scraper: Scraper, *, preserve_stop: bool = False) -> None:
+    result.skipped_pages = int(getattr(scraper, "_skipped_pages", 0))
+    result.site_total = getattr(scraper, "_site_total", None)
+    result.crawl_complete = bool(getattr(scraper, "_crawl_complete", False))
+    result.denominator_trusted = bool(getattr(scraper, "_site_total_trusted", False))
+    result.pages_attempted = int(getattr(scraper, "_pages_attempted", 0))
+    result.pages_failed = int(getattr(scraper, "_pages_failed", 0))
+    if not preserve_stop:
+        result.stop_reason = str(getattr(scraper, "_crawl_stop_reason", "unverified"))
+
+
+async def _evaluate_one(scraper, url, external_id, *, download_photos, preview=None):
+    """Network evaluation only: deliberately cannot call persistence/photo helpers."""
+    snapshot = _complete_snapshot_for(scraper, preview)
+    if _snapshot_mode(scraper) == "active" and snapshot is not None:
+        detail, fetched = snapshot, False
+    else:
+        detail, fetched = await _fetch_processing_detail(scraper, url), True
+    if not detail.photo_urls and detail.price_eur is None and detail.title is None:
+        raise _EmptyShellError("empty detail during evaluation")
+    return None, 0, fetched
+
+
+class _DetailFetchError(RuntimeError):
+    """A real detail transport/parser attempt failed before a usable payload was returned."""
+
+
+async def _fetch_processing_detail(scraper, url):
+    try:
+        return await scraper.fetch_detail(url)
+    except Exception as exc:
+        raise _DetailFetchError(type(exc).__name__) from exc
 
 
 class _EmptyShellError(RuntimeError):
@@ -272,6 +366,9 @@ async def _process_one(
             stmt = select(Listing).where(Listing.id == existing.id)
             row = (await session.execute(stmt)).scalar_one()
             row.last_seen_at = datetime.now(timezone.utc)
+            row.absence_streak = 0
+            row.absence_first_seen_at = row.absence_last_seen_at = row.absence_last_run_id = None
+            row.deactivated_at = None
             # Self-heal stale URLs: the platform can rewrite a listing's slug/URL while the
             # listing stays in the search results (matched by external_id). The preview URL is
             # the source of truth (now canonical numeric form) — adopt it so the stored link
@@ -310,7 +407,7 @@ async def _process_one(
         detail = snapshot
         fetched_detail = False
     else:
-        detail = await scraper.fetch_detail(url)
+        detail = await _fetch_processing_detail(scraper, url)
         fetched_detail = True
         if (
             snapshot_mode == "shadow"
@@ -552,42 +649,73 @@ def _guess_extension(url: str) -> str:
 @dataclass
 class StaleSweepResult:
     platform: Platform | None
-    marked_inactive: int
+    marked_inactive: int = 0
+    absence_recorded: int = 0
+    would_mark_inactive: int = 0
+    blocked_reasons: tuple[str, ...] = ()
+    dry_run: bool = False
 
 
 async def mark_stale_inactive(
-    *,
-    inactive_after_days: int = 10,
-    platform: Platform | None = None,
+    *, inactive_after_days: int = 10, platform: Platform | None = None,
+    source_result: ScrapeResult | None = None, dry_run: bool = False,
+    now: datetime | None = None, max_deactivations: int = 100,
 ) -> StaleSweepResult:
-    """Flip `is_active=False` on listings whose `last_seen_at` is older than the cutoff.
+    """Confirm source absence after consecutive quality weekly crawls; never hide public cards.
 
-    Run right after a *full* (non-incremental) scrape pass: anything still served on the platform
-    just had its `last_seen_at` refreshed, so what's left below the cutoff is genuinely gone from
-    the platform (rented out / unpublished / paused).
-
-    Default 10 days = 7-day cadence + 3-day grace, so a missed weekly run doesn't false-positive
-    everything.
+    ``inactive_after_days`` is retained for CLI compatibility, but row age is no longer evidence.
+    Missing/partial/untrusted source evidence is an unconditional no-write exit.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=inactive_after_days)
+    report = StaleSweepResult(platform=platform, dry_run=dry_run)
+    if source_result is None:
+        report.blocked_reasons = ("missing_source_result",)
+        return report
+    platform = platform or source_result.platform
+    report.platform = platform
+    if source_result.platform != platform or not source_result.sweep_allowed:
+        report.blocked_reasons = source_result.sweep_blocked_reasons or ("source_mismatch",)
+        return report
+    if source_result.dry_run and not dry_run:
+        report.blocked_reasons = ("evaluation_result_cannot_mutate",)
+        return report
+    now = now or datetime.now(timezone.utc)
     async with get_session() as session:
-        # Plain UPDATE — loading full ORM rows here pulls every photo_embeddings BLOB
-        # (hundreds of MB after an outage backlog) just to flip a boolean.
-        stmt = (
-            update(Listing)
-            .where(Listing.is_active.is_(True))
-            .where(Listing.last_seen_at < cutoff)
-            .values(is_active=False)
-        )
-        if platform is not None:
-            stmt = stmt.where(Listing.platform == platform)
-        res = await session.execute(stmt)
-        marked = res.rowcount or 0
-    logger.info(
-        "[stale-sweep] marked %d listings inactive (cutoff=%s, platform=%s)",
-        marked, cutoff.date(), platform.value if platform else "all",
-    )
-    return StaleSweepResult(platform=platform, marked_inactive=marked)
+        # Scalar projection avoids loading the photo embedding blobs for a full platform.
+        rows = (await session.execute(select(
+            Listing.id, Listing.external_id, Listing.is_active, Listing.absence_streak,
+            Listing.absence_first_seen_at, Listing.absence_last_seen_at, Listing.absence_last_run_id,
+        ).where(Listing.platform == platform, Listing.is_active.is_(True)))).all()
+        decisions = []
+        for row in rows:
+            decision = evaluate_absence(
+                observed=row.external_id in source_result.observed_ids,
+                streak=row.absence_streak or 0, first_seen_at=row.absence_first_seen_at,
+                last_seen_at=row.absence_last_seen_at, last_run_id=row.absence_last_run_id,
+                run_id=source_result.run_id, now=now,
+            )
+            decisions.append((row, decision))
+            if decision.deactivate and row.is_active:
+                report.would_mark_inactive += 1
+            if decision.reason not in {"already_evaluated", "confirmation_too_soon", "observed"}:
+                report.absence_recorded += 1
+        if report.would_mark_inactive > max(0, max_deactivations):
+            report.blocked_reasons = ("deactivation_cap_exceeded",)
+            return report
+        if dry_run:
+            return report
+        for row, decision in decisions:
+            if decision.reason == "observed" and not row.absence_streak and row.absence_last_run_id is None:
+                continue
+            if decision.reason in {"already_evaluated", "confirmation_too_soon"}:
+                continue
+            values = dict(absence_streak=decision.streak, absence_first_seen_at=decision.first_seen_at,
+                          absence_last_seen_at=decision.last_seen_at, absence_last_run_id=decision.last_run_id)
+            if decision.deactivate and row.is_active:
+                values["is_active"] = False
+                values["deactivated_at"] = now
+                report.marked_inactive += 1
+            await session.execute(update(Listing).where(Listing.id == row.id).values(**values))
+    return report
 
 
 # ------------------------------------------------------------------ liveness sweep (A3)
@@ -617,34 +745,24 @@ class LinkVerifyStats:
 _DEAD_LINK_STATUSES = frozenset({404, 410})
 
 
-async def hide_site_listings_for_listing(session: Any, listing_id: int) -> int:
-    """X2 auto-remove: hide every public card for a listing the platform removed.
+async def hide_site_listings_for_listing(session: Any, listing_id: int, *,
+                                         member_status_by_id: Mapping[int, str] | None = None,
+                                         remaining_hides: int | None = None,
+                                         dry_run: bool = False) -> int:
+    """Compatibility entry point: every automatic hide now goes through the common policy."""
+    from src.site.publication_policy import apply_publication_policy
 
-    `UPDATE site_listings SET is_public=False, is_featured=False WHERE is_public=True AND
-    match_id IN (SELECT id FROM matches WHERE listing_id=:lid)`. Returns the rowcount.
-    Idempotent via `WHERE is_public=True` (an already-hidden card yields 0, no churn) and
-    clears is_featured so a hidden card is never left as the «квартира недели» hero.
-
-    Runs in the CALLER's session so it commits atomically with the is_active=False flip —
-    the listing and its public card never diverge.
-    """
-    result = await session.execute(
-        update(SiteListing)
-        .where(
-            SiteListing.is_public.is_(True),
-            SiteListing.match_id.in_(
-                select(Match.id).where(Match.listing_id == listing_id)
-            ),
+    maximum = get_settings().site_liveness_max_hides if remaining_hides is None else remaining_hides
+    ids = (await session.execute(select(SiteListing.id).join(Match, Match.id == SiteListing.match_id)
+                                 .where(Match.listing_id == listing_id, SiteListing.is_public.is_(True))
+                                 .order_by(SiteListing.id))).scalars().all()
+    hidden = 0
+    for card_id in ids:
+        _decision, count = await apply_publication_policy(
+            session, card_id, member_status_by_id=member_status_by_id or {},
+            remaining_hides=maximum-hidden, dry_run=dry_run,
         )
-        .values(is_public=False, is_featured=False)
-    )
-    hidden = result.rowcount or 0
-    if hidden:
-        # is_public changed → bust the in-process read-model cache so the card disappears at
-        # once (cross-process: a running site relies on site_cache_ttl — see cache docstring).
-        from src.site.cache import invalidate_catalog_cache
-
-        invalidate_catalog_cache()
+        hidden += count
     return hidden
 
 
@@ -654,6 +772,7 @@ async def verify_active_links(
     deadline: float | None = None,
     platform: Platform | None = None,
     client: httpx.AsyncClient | None = None,
+    dry_run: bool = False,
 ) -> LinkVerifyStats:
     """A3: HEAD-check ACTIVE listings that have a PENDING/PUBLISHED match (i.e. potentially
     shown on the site) and deactivate the ones that 404/410 — so a public card never links to
@@ -673,6 +792,7 @@ async def verify_active_links(
     `client` is injectable for tests (pass a MockTransport-backed AsyncClient); in production it
     defaults to a fresh client built with the scraper User-Agent.
     """
+    checked_at = datetime.now(timezone.utc)
     async with get_session() as s:
         stmt = (
             select(Listing.id, Listing.platform, Listing.url)
@@ -685,7 +805,8 @@ async def verify_active_links(
                 )
                 .exists(),
             )
-            .order_by(Listing.id)
+            .where((Listing.link_next_retry_at.is_(None)) | (Listing.link_next_retry_at <= checked_at))
+            .order_by(Listing.link_checked_at.asc().nullsfirst(), Listing.id)
         )
         if platform is not None:
             stmt = stmt.where(Listing.platform == platform)
@@ -713,36 +834,41 @@ async def verify_active_links(
                     use_proxy=row.platform == Platform.NEKRETNINE,
                 )
 
+    observed_status: dict[int, str] = {}
+    dead_ids: set[int] = set()
+
+    async def _record_check(row, status: str, *, definitive_alive: bool = False):
+        observed_status[row.id] = status
+        if dry_run:
+            return
+        values = dict(link_checked_at=checked_at, link_status=status,
+                      link_next_retry_at=checked_at + timedelta(hours=6) if status == "INCONCLUSIVE" else None)
+        if definitive_alive:
+            values["link_succeeded_at"] = checked_at
+        if status == "DEAD":
+            values.update(is_active=False, deactivated_at=checked_at, link_succeeded_at=checked_at)
+        async with get_session() as s:
+            await s.execute(update(Listing).where(Listing.id == row.id).values(**values))
+
     async def _check_one(row: Any) -> None:
         try:
             check_client = client if client is not None else owned_clients[row.platform]
             resp = await check_client.head(row.url, timeout=10.0)
         except Exception as e:
             stats.errors += 1
-            logger.warning(
-                "[verify-links] #%s (%s) inconclusive: %s: %s",
-                row.id, row.url, type(e).__name__, e,
-            )
+            await _record_check(row, "INCONCLUSIVE")
+            logger.warning("[verify-links] #%s inconclusive: %s", row.id, type(e).__name__)
             return
         if resp.status_code in _DEAD_LINK_STATUSES:
-            async with get_session() as s:
-                await s.execute(
-                    update(Listing).where(Listing.id == row.id).values(is_active=False)
-                )
-                # X2 auto-remove: hide the public card(s) in the SAME transaction so the
-                # listing and its card flip atomically (gated by the kill switch).
-                if get_settings().nightly_auto_hide_site_listings:
-                    hidden = await hide_site_listings_for_listing(s, row.id)
-                    if hidden:
-                        stats.site_listings_hidden += hidden
+            await _record_check(row, "DEAD")
+            dead_ids.add(row.id)
             stats.deactivated += 1
-            logger.info("[verify-links] #%s → %s, deactivated", row.id, resp.status_code)
         elif resp.status_code >= 400:
-            # 5xx hiccups + anti-bot 403/405: inconclusive, never deactivate.
             stats.errors += 1
-            logger.info(
-                "[verify-links] #%s → %s, inconclusive (kept active)", row.id, resp.status_code
-            )
+            await _record_check(row, "INCONCLUSIVE")
+        else:
+            # HEAD 200 is reachable, not proof of a valid listing payload (W3 probe owns that).
+            await _record_check(row, "INCONCLUSIVE")
 
     # 4 workers pull from a shared cursor, each re-checking the deadline BEFORE taking a row, so
     # the budget (shared with heal/rolling) actually caps wall-clock mid-sweep — not just at
@@ -768,6 +894,15 @@ async def verify_active_links(
     finally:
         if owns_clients:
             await asyncio.gather(*(owned.aclose() for owned in owned_clients.values()))
+
+    if dead_ids and not dry_run:
+        # All source observations are complete before one serialized cap-controlled policy pass.
+        async with get_session() as s:
+            for listing_id in sorted(dead_ids):
+                stats.site_listings_hidden += await hide_site_listings_for_listing(
+                    s, listing_id, member_status_by_id=observed_status,
+                    remaining_hides=get_settings().site_liveness_max_hides-stats.site_listings_hidden,
+                )
 
     logger.info(
         "[verify-links] checked=%d deactivated=%d errors=%d skipped=%d (platform=%s)",
