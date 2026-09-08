@@ -48,7 +48,9 @@ def _oldest(value: datetime | None) -> datetime:
 def is_due(row: RefreshCandidate, now: datetime) -> bool:
     if row.next_retry_at and utc(row.next_retry_at) > utc(now):
         return False
-    interval = timedelta(hours=24) if row.public else timedelta(days=7)
+    # Enter the public queue before the 24-hour target; daily scheduler jitter
+    # must not defer a just-under-24-hour row for another whole day.
+    interval = timedelta(hours=20) if row.public else timedelta(days=7)
     return (
         row.broken
         or row.succeeded_at is None
@@ -68,6 +70,7 @@ async def load_candidates(
     *,
     platforms: Iterable[Platform] | None = None,
     only_broken: bool = False,
+    public_only: bool = False,
 ) -> list[RefreshCandidate]:
     """Read scalar metadata only, including retained public originals marked inactive.
 
@@ -98,6 +101,8 @@ async def load_candidates(
         statement = statement.where(Listing.platform.in_(list(platforms)))
     if only_broken:
         statement = statement.where(Listing.photo_phashes == [])
+    if public_only:
+        statement = statement.where(public)
     records = (await session.execute(statement)).all()
     return [
         RefreshCandidate(

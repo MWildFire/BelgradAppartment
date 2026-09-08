@@ -29,7 +29,7 @@ def _datetime(value):
 
 def schedules() -> dict[str, str]:
     result = {}
-    for kind in ("nightly-refresh", "weekly-full-refresh", "scrape-smoke"):
+    for kind in ("nightly-refresh", "weekly-full-refresh", "public-detail-refresh", "scrape-smoke"):
         try:
             response = subprocess.run(
                 [
@@ -249,13 +249,13 @@ async def build_operations(session, *, now: datetime | None = None) -> dict:
     created = _datetime(backup.get("created_at"))
     backup_good = bool(
         created
-        and now - created <= timedelta(hours=36)
+        and timedelta(0) <= now - created <= timedelta(hours=36)
         and backup.get("result") == "data_restore_verified"
         and backup.get("offhost_verified")
         and backup.get("protected_recovery_verified")
     )
     if not backup_good:
-        reasons.append("verified off-host backup missing or older than 36 hours")
+        reasons.append("verified off-host backup missing, future-dated or older than 36 hours")
     proxy = proxy_service_receipt(
         settings.data_dir / "state" / "proxy_service_receipt.json", now=now
     )

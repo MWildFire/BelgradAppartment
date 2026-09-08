@@ -2574,24 +2574,64 @@ async def _deliver_all(force: bool = False) -> None:
     help="Re-fetch EVERY active listing (default: only broken rows — no photos, no phashes, "
          "or no price). Use after a parser fix to backfill, e.g. the 4zida cover photo.",
 )
-@click.option("--limit", type=int, default=None, help="Cap number of listings.")
+@click.option(
+    "--limit", type=click.IntRange(min=1), default=None, help="Cap number of listings.",
+)
 @click.option("--no-photos", is_flag=True, help="Update text fields only, skip photo downloads.")
-def refetch_details(platform: str | None, refetch_all: bool, limit: int | None, no_photos: bool) -> None:
+@click.option(
+    "--public-only", is_flag=True, help="Refresh due public originals with source fairness.",
+)
+@click.option("--budget-sec", type=click.FloatRange(min=0.001), default=None,
+              help="Bound source startup, refresh work and cleanup by this time budget.")
+def refetch_details(
+    platform: str | None, refetch_all: bool, limit: int | None, no_photos: bool,
+    public_only: bool = False, budget_sec: float | None = None,
+) -> None:
     """Re-fetch detail pages for existing listings and repair their stored data.
 
-    Listings are normally detail-fetched exactly once at insert; a transient failure or a
-    parser bug at that moment freezes the row forever (no price/photos → invisible to the
-    matcher). This command heals such rows, and backfills after parser improvements.
+    The default repairs broken rows; --all supports a manual backfill after parser changes.
+    --public-only uses the due public queue with source fairness, retry backoff and a budget.
+    It updates source fields/media without publishing or sending messages.
     """
-    run_cooperatively(_refetch_details(platform, refetch_all, limit, no_photos))
+    if public_only and (refetch_all or no_photos):
+        raise click.UsageError("--public-only cannot be combined with --all or --no-photos")
+    run_cooperatively(_refetch_details(
+        platform, refetch_all, limit, no_photos, public_only=public_only, budget_sec=budget_sec,
+    ))
 
 
 async def _refetch_details(
-    platform: str | None, refetch_all: bool, limit: int | None, no_photos: bool
+    platform: str | None, refetch_all: bool, limit: int | None, no_photos: bool,
+    *, public_only: bool = False, budget_sec: float | None = None,
 ) -> None:
+    import time
+
     from src.db.models import Listing
     from src.db.session import get_session
-    from src.scrapers.orchestrator import refetch_listing_details
+    from src.scrapers.orchestrator import refetch_listing_details, rolling_detail_refresh
+
+    if public_only:
+        settings = get_settings()
+        budget = budget_sec if budget_sec is not None else settings.public_detail_refresh_budget_sec
+        cap = limit if limit is not None else settings.public_detail_refresh_limit
+        selected = ({PLATFORM_NAMES[platform.lower()]: SCRAPERS[PLATFORM_NAMES[platform.lower()]]}
+                    if platform else SCRAPERS)
+        click.echo(f"→ public detail refresh: limit={cap}, budget={budget:g}s")
+        # This path only updates source details/media. It never invokes publication,
+        # subscription, price-change notices, delivery retry or summary transports.
+        async with asyncio.timeout(budget):
+            result = await rolling_detail_refresh(
+                limit=cap, public_only=True, scrapers=selected,
+                deadline=time.monotonic() + budget,
+            )
+        click.echo(
+            f"=== PUBLIC: selected={result.selected} verified={result.refreshed} "
+            f"errors={result.errors} skipped={result.skipped} "
+            f"source_errors={len(result.source_errors)} ==="
+        )
+        if result.errors or result.skipped or result.source_errors:
+            raise SystemExit(1)
+        return
 
     stmt = select(Listing.id, Listing.platform, Listing.url).where(Listing.is_active.is_(True))
     if platform:
@@ -2627,6 +2667,7 @@ async def _refetch_details(
         download_photos=not no_photos,
         touch_refreshed_at=True,
         progress=_progress,
+        deadline=time.monotonic() + budget_sec if budget_sec is not None else None,
     )
 
     click.echo(

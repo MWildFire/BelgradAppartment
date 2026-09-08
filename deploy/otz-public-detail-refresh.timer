@@ -1,0 +1,11 @@
+[Unit]
+Description=Render Finder afternoon public detail refresh
+
+[Timer]
+OnCalendar=*-*-* 15:00:00 UTC
+RandomizedDelaySec=5min
+Persistent=true
+Unit=otz-public-detail-refresh.service
+
+[Install]
+WantedBy=timers.target

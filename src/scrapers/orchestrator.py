@@ -1173,6 +1173,7 @@ async def refetch_listing_details(
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
     progress: Callable[[DetailRefetchStats, Any, Exception | None], None] | None = None,
     deadline: float | None = None,
+    checkpoint_name: str = "refetch",
 ) -> DetailRefetchStats:
     """Refresh with a reserved time share for every selected source, including browser startup.
 
@@ -1181,6 +1182,8 @@ async def refetch_listing_details(
     details_succeeded_at. An external cancellation records the in-flight failed attempt
     and a final aggregate checkpoint before propagating to the command runner.
     """
+    if checkpoint_name not in {"refetch", "public_refetch"}:
+        raise ValueError("unsupported refresh checkpoint")
     if scrapers is None:
         from src.scrapers import SCRAPERS
 
@@ -1200,7 +1203,7 @@ async def refetch_listing_details(
     attempted_ids: set[int] = set()
 
     def checkpoint(*, final: bool) -> None:
-        _write_refresh_state("refetch", {
+        _write_refresh_state(checkpoint_name, {
             "run_id": run_id, "checkpoint_at": datetime.now(UTC).isoformat(),
             "final": final, "stop_reason": stop_reason, **asdict(stats),
             "price_changes": len(stats.price_changes),
@@ -1459,6 +1462,7 @@ _BROKEN_LISTING = (Listing.is_active.is_(True), Listing.photo_phashes == [])
 
 async def _freshness_queue(
     *, name: str, limit: int, scrapers: Mapping[Platform, type[Scraper]], only_broken: bool,
+    public_only: bool = False,
 ) -> FairRefreshPlan:
     path = get_settings().data_dir / "state" / "freshness" / f"{name}_cursor.json"
     try:
@@ -1466,7 +1470,9 @@ async def _freshness_queue(
     except (OSError, ValueError, KeyError, TypeError):
         cursor = 0
     async with get_session() as session:
-        inventory = await load_candidates(session, platforms=scrapers, only_broken=only_broken)
+        inventory = await load_candidates(
+            session, platforms=scrapers, only_broken=only_broken, public_only=public_only,
+        )
     plan = select_fair(inventory, limit=limit, source_cursor=cursor)
     _write_refresh_state(f"{name}_cursor", {
         "next_cursor": plan.next_cursor, "selected": len(plan.rows),
@@ -1513,14 +1519,21 @@ async def rolling_detail_refresh(
     limit: int = 200,
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
     deadline: float | None = None,
+    public_only: bool = False,
 ) -> RollingRefreshResult:
     """Public, broken, oldest-success priority within fair, retry-aware source queues."""
     if scrapers is None:
         from src.scrapers import SCRAPERS
 
         scrapers = SCRAPERS
-    plan = await _freshness_queue(name="rolling", limit=limit, scrapers=scrapers, only_broken=False)
-    stats = await refetch_listing_details(plan.rows, scrapers=scrapers, deadline=deadline)
+    plan = await _freshness_queue(
+        name="public" if public_only else "rolling", limit=limit, scrapers=scrapers,
+        only_broken=False, public_only=public_only,
+    )
+    stats = await refetch_listing_details(
+        plan.rows, scrapers=scrapers, deadline=deadline,
+        checkpoint_name="public_refetch" if public_only else "refetch",
+    )
     logger.info("[rolling-refresh] selected=%d verified=%d errors=%d skipped=%d",
                 len(plan.rows), stats.verified, stats.errors, stats.skipped)
     return RollingRefreshResult(

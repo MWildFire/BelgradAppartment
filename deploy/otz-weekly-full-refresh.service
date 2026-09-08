@@ -12,9 +12,8 @@ User=otz
 Group=otz
 WorkingDirectory=/opt/otz
 EnvironmentFile=/opt/otz/.env
-ExecStartPre=/opt/otz/.venv/bin/playwright install chromium
 ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli nightly-refresh --max-pages=500
 ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/nightly-refresh.log --label weekly-full-refresh
-TimeoutStartSec=8h
+TimeoutStartSec=9h
 StandardOutput=append:/var/log/otz/nightly-refresh.log
 StandardError=append:/var/log/otz/nightly-refresh.log

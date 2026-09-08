@@ -11,7 +11,6 @@ User=otz
 Group=otz
 WorkingDirectory=/opt/otz
 EnvironmentFile=/opt/otz/.env
-ExecStartPre=/opt/otz/.venv/bin/playwright install chromium
 ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli scrape-smoke
 ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/scrape-smoke.log --label scrape-smoke --lines 40
 TimeoutStartSec=30min

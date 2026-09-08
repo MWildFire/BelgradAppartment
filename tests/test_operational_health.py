@@ -1,6 +1,8 @@
 from contextlib import suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
+
+import pytest
 
 from src.admin.operational_health import build_operations
 from src.config import get_settings
@@ -61,3 +63,35 @@ async def test_cancelled_refresh_has_durable_failed_outcome(monkeypatch, tmp_pat
     assert runs[0]["status"] == "failed"
     assert runs[0]["error_code"] == "CancelledError"
     assert runs[0]["finished_at"]
+
+
+@pytest.mark.parametrize("offset_hours,expected", [(-1, True), (1, False), (-37, False)])
+async def test_backup_verification_rejects_future_and_old_receipts(
+    db,
+    monkeypatch,
+    tmp_path,
+    offset_hours,
+    expected,
+):
+    import json
+
+    from src.admin import operational_health
+
+    now = datetime(2026, 9, 8, 12, tzinfo=UTC)
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    monkeypatch.setattr(operational_health, "schedules", lambda: {})
+    receipt = tmp_path / "state/recovery_receipt.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(
+        json.dumps(
+            {
+                "created_at": (now + timedelta(hours=offset_hours)).isoformat(),
+                "result": "data_restore_verified",
+                "offhost_verified": True,
+                "protected_recovery_verified": True,
+            }
+        )
+    )
+    async with get_session() as session:
+        report = await build_operations(session, now=now)
+    assert report["backup_verified"] is expected

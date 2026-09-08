@@ -57,10 +57,10 @@ class Settings(BaseSettings):
     scrape_list_interval_min: int = 30
     scrape_recheck_interval_hours: int = 6
     scrape_incremental_source_budget_sec: int = 600
-    scrape_incremental_run_budget_sec: int = 6600
+    scrape_incremental_run_budget_sec: int = 24000
     scrape_source_budget_sec: int = 1800
     scrape_item_budget_sec: int = 90
-    scrape_run_budget_sec: int = 21600
+    scrape_run_budget_sec: int = 30000
     scrape_lock_wait_sec: int = 60
     scraper_user_agent: str = ""
     # Legacy proxy surface retained for all existing scrapers. Keep credentials out of repr/logs.
@@ -91,13 +91,13 @@ class Settings(BaseSettings):
     # Every step is disableable via env (=0 → skip) and fault-isolated at runtime:
     # a step failure adds a 🚨 line to the nightly summary, only the base scrape is fatal.
     # Broken rows (active, no photo hashes) re-fetched per night; 0 = skip.
-    nightly_heal_limit: int = 500
-    nightly_detail_refresh: int = 200  # active rows for rolling detail re-fetch per night; 0 = skip
+    nightly_heal_limit: int = 200
+    nightly_detail_refresh: int = 2400  # due rows for verified detail refresh; 0 = skip
     nightly_prune_embeddings: bool = True  # NIGHTLY_PRUNE_EMBEDDINGS=0 → skip embeddings prune
-    # A3 liveness sweep: HEAD-check active matched listings (potentially on the site) and
+    # A3 liveness sweep: read active matched source pages (potentially on the site) and
     # deactivate ones that 404/410, so a public card never links to a removed page.
     nightly_verify_links: bool = True  # NIGHTLY_VERIFY_LINKS=0 → skip the liveness sweep
-    nightly_verify_links_limit: int = 1000  # cap listings HEAD-checked per night
+    nightly_verify_links_limit: int = 250  # cap matched source checks per night
     nightly_metrics: bool = True  # NIGHTLY_METRICS=0 → skip daily_metrics snapshot + drop alert
     # X1 auto-publish: when a match is delivered (PENDING→PUBLISHED), auto-expose its card on
     # the site. auto_publish_on_send is the runtime kill switch on the delivery hot path (set
@@ -125,12 +125,15 @@ class Settings(BaseSettings):
     # Only listings created within this window are candidates (a fresh subscription doesn't get
     # blasted with the whole back-catalog; subscription_matches still guards against re-sends).
     subscription_notify_since_hours: int = 24
-    # Wall-clock budget SHARED by heal+rolling: once exhausted both stop and report skipped rows,
-    # so a night of slow Cloudflare-challenged refetches can't overrun (the 2026-06-16 SIGTERM).
-    nightly_refetch_budget_sec: int = 7200  # 2h
-    # Per-listing hard cap on fetch_detail — one pathological page (goto+poll+recycle retries)
+    # Wall-clock budget shared by heal, rolling refresh and link checks; leftovers flow forward.
+    # Slow challenged sources stop with an explicit skipped/error outcome at the deadline.
+    nightly_refetch_budget_sec: int = 19800  # 5h30 shared by heal/rolling/links
+    # Per-listing hard cap includes detail fetch, required photos and embeddings; a slow page
     # can otherwise burn minutes; this bounds it regardless of the scraper's internal retries.
     refetch_per_fetch_timeout_sec: int = 90
+    # Additional public-only queue at 15 UTC; no publication or message transports.
+    public_detail_refresh_limit: int = Field(default=500, ge=1)
+    public_detail_refresh_budget_sec: int = Field(default=2400, ge=1)
 
     # --- Price-drop alerts (W3-G3, consumed in _nightly_refresh) ---
     price_drop_alerts: bool = True  # PRICE_DROP_ALERTS=0 → no alerts
