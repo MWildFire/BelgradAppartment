@@ -91,6 +91,12 @@ async def apply_publication_policy(
             SiteListing.id == site_listing_id,
             SiteListing.is_public.is_(True),
             SiteListing.keep_on_site.is_(False),
+            select(Listing.id)
+            .where(
+                Listing.id == card.listing_id,
+                Listing.dup_group_id.is_not_distinct_from(card.dup_group_id),
+            )
+            .exists(),
             ~select(Listing.id).where(membership, Listing.is_active.is_(True)).exists(),
         )
         .values(is_public=False, is_featured=False)

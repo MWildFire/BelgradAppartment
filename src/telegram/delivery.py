@@ -131,7 +131,9 @@ async def _send_match_via_userbot(
             MatchDelivery.match_id == match_id
         ).limit(1))).scalar_one_or_none() is not None
         if existing is not None and not has_ledger and not force_resend:
-            logger.info("Match %d historical delivery (msg=%d) — skipping", match_id, existing.tg_message_id)
+            logger.info(
+                "Match %d historical delivery (msg=%d) — skipping", match_id, existing.tg_message_id
+            )
             return existing
 
         # Eager-load source_channel so we can reach it after the session closes.
@@ -150,7 +152,9 @@ async def _send_match_via_userbot(
             select(MatchDelivery.payload).where(MatchDelivery.match_id == match_id)
             .order_by(MatchDelivery.id).limit(1)
         )).scalar_one_or_none()
-        stored_paths = saved_payload.get("photo_paths", []) if saved_payload else inbound.photo_paths
+        stored_paths = (
+            saved_payload.get("photo_paths", []) if saved_payload else inbound.photo_paths
+        )
         photo_paths = [Path(p) for p in stored_paths if p][:MAX_ALBUM]
         if not photo_paths:
             raise DeliveryError(f"Match {match_id}: no inbound photos on disk")
@@ -213,7 +217,9 @@ async def _send_match_via_userbot(
             raise DeliveryError(f"Match {match_id}: {type(error).__name__}") from error
         messages = messages if isinstance(messages, list) else [messages]
         message_ids = [int(message.id) for message in messages if message is not None]
-        if len(message_ids) != len(photo_paths) or any(message_id <= 0 for message_id in message_ids):
+        if len(message_ids) != len(photo_paths) or any(
+            message_id <= 0 for message_id in message_ids
+        ):
             await finish_recipient(match_id, recipient_id, token)
             raise DeliveryError(f"Match {match_id}: provider did not confirm delivery")
         await finish_recipient(match_id, recipient_id, token, message_ids=message_ids)

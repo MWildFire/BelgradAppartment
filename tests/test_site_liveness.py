@@ -437,3 +437,69 @@ async def test_liveness_respects_remaining_combined_nightly_cap(db, monkeypatch)
     report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})), max_hides=0)
     assert not report.hidden and len(report.candidates_confirmed) == 1
     assert await _is_public(sl)
+
+
+async def test_liveness_hung_source_preserves_time_for_later_source(db, monkeypatch):
+    import asyncio
+    import time
+
+    import src.site.liveness as live
+    from src.scrapers.link_probe import LinkObservation
+
+    first = await _listing(is_active=False, platform=Platform.NEKRETNINE)
+    second = await _listing(is_active=False, platform=Platform.CITYEXPERT)
+    await _card(first)
+    await _card(second)
+    calls = []
+
+    class Probe:
+        def __init__(self, platform):
+            self.platform = platform
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *_):
+            return None
+        async def probe(self, url):
+            calls.append(self.platform)
+            if self.platform == Platform.NEKRETNINE:
+                await asyncio.sleep(20)
+            return LinkObservation('ACTIVE')
+
+    monkeypatch.setattr(live, 'SourceProbeSession', Probe)
+    monkeypatch.setattr(get_settings(), 'site_liveness_budget_sec', 0.2)
+    started = time.monotonic()
+    report = await site_liveness_sweep()
+    assert time.monotonic() - started < 1
+    assert Platform.CITYEXPERT in calls
+    assert not report.hidden
+    async with get_session() as session:
+        recovered = await session.get(Listing, second)
+        assert recovered.is_active
+        assert recovered.link_succeeded_at is not None
+
+
+async def test_liveness_unknown_backoff_allows_later_rows_next_run(db, monkeypatch):
+    import src.site.liveness as live
+    from src.scrapers.link_probe import LinkObservation
+
+    ids = [await _listing(is_active=False) for _ in range(3)]
+    for listing_id in ids:
+        await _card(listing_id)
+    calls = []
+
+    class Probe:
+        def __init__(self, _platform): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *_): return None
+        async def probe(self, url):
+            calls.append(url)
+            return LinkObservation('INCONCLUSIVE', True, 'challenge')
+
+    monkeypatch.setattr(live, 'SourceProbeSession', Probe)
+    first = await site_liveness_sweep()
+    second = await site_liveness_sweep()
+    assert first.checked == 3
+    assert second.checked == 0
+    assert len(calls) == 3
+    assert len(second.candidates_unconfirmed) == 3
+    assert not second.hidden

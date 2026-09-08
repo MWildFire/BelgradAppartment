@@ -24,17 +24,20 @@ source stays INCONCLUSIVE. Bounded source leases prevent concurrent browser/prof
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from src.config import get_settings
 from src.db import Listing, Match, get_session
 from src.db.models import Platform, SiteListing
-from src.scrapers.link_probe import SourceProbeSession
+from src.jobs.lifecycle import remaining_budget
+from src.scrapers.link_probe import LinkObservation, SourceProbeSession
 from src.scrapers.orchestrator import _DEAD_LINK_STATUSES
 from src.site.publication_policy import apply_publication_policy, evaluate_publication
 from src.telegram.bot_delivery import send_text_via_bot
@@ -74,6 +77,8 @@ class LivenessReport:
     candidates_confirmed: list[LivenessCandidate] = field(default_factory=list)
     hidden: list[LivenessCandidate] = field(default_factory=list)
     errors: int = 0
+    checked: int = 0
+    skipped: int = 0
 
     @property
     def total_flagged(self) -> int:
@@ -177,31 +182,92 @@ async def site_liveness_sweep(
         else:
             card_members[r.sl_id] = [(r.listing_id, r.is_active, r.url, r.platform)]
 
-    # HEAD every distinct INACTIVE member URL once (active members need no network call).
-    inactive_targets = {
-        (url, platform)
+    # Persist oldest-first attempts so a bounded nightly queue eventually reaches every
+    # inactive public member. Cached evidence is short-lived; stale/unvisited means UNKNOWN.
+    inactive = {
+        lid: (url, platform)
         for members in card_members.values()
-        for (_lid, is_active, url, platform) in members
+        for lid, is_active, url, platform in members
         if not is_active
     }
     url_status: dict[str, str] = {}
-    if inactive_targets:
-        if client is not None:
-            for url, _platform in inactive_targets:
-                status, errored = await _head_liveness(client, url)
-                url_status[url] = status
-                report.errors += int(errored)
-        else:
-            for platform in sorted(
-                {platform for _, platform in inactive_targets}, key=lambda value: value.value
-            ):
-                async with SourceProbeSession(platform) as probe:
-                    for url, source in inactive_targets:
-                        if source != platform:
-                            continue
-                        observation = await probe.probe(url)
-                        url_status[url] = observation.status
-                        report.errors += int(observation.errored)
+    now = datetime.now(UTC)
+    queue = []
+    if inactive:
+        async with get_session() as session:
+            records = (await session.execute(select(
+                Listing.id, Listing.link_checked_at, Listing.link_next_retry_at,
+                Listing.link_status,
+            ).where(Listing.id.in_(inactive)).order_by(
+                Listing.link_checked_at.asc().nullsfirst(), Listing.id,
+            ))).all()
+        for record in records:
+            url, platform = inactive[record.id]
+            checked = record.link_checked_at
+            retry = record.link_next_retry_at
+            checked = checked.replace(tzinfo=UTC) if checked and checked.tzinfo is None else checked
+            retry = retry.replace(tzinfo=UTC) if retry and retry.tzinfo is None else retry
+            recent = checked and now - checked < timedelta(hours=24)
+            if recent and record.link_status in {_ACTIVE, _DEAD}:
+                url_status[url] = record.link_status
+            elif retry and retry > now:
+                url_status[url] = _INCONCLUSIVE
+            else:
+                queue.append((record.id, url, platform))
+
+    async def record_probe(row, observation):
+        lid, url, _platform = row
+        url_status[url] = observation.status
+        report.errors += int(observation.errored)
+        report.checked += 1
+        if not dry_run:
+            values = {
+                "link_checked_at": now, "link_status": observation.status,
+                "link_next_retry_at": now + timedelta(hours=6)
+                if observation.status == _INCONCLUSIVE else None,
+            }
+            if observation.status in {_ACTIVE, _DEAD}:
+                values["link_succeeded_at"] = now
+            if observation.status == _ACTIVE:
+                values.update(is_active=True, deactivated_at=None, last_seen_at=now)
+            async with get_session() as session:
+                await session.execute(update(Listing).where(Listing.id == lid).values(**values))
+
+    budget = remaining_budget(settings.site_liveness_budget_sec, reserve=180)
+    deadline = time.monotonic() + budget
+    if client is not None:
+        for row in queue:
+            if time.monotonic() >= deadline:
+                break
+            status, errored = await _head_liveness(client, row[1])
+            await record_probe(row, LinkObservation(status, errored))
+    else:
+        # Sources retain separate time slices, even when the first browser is hung.
+        platforms = list(dict.fromkeys(row[2] for row in queue))
+        for index, platform in enumerate(platforms):
+            source_budget = max(0, deadline - time.monotonic()) / (len(platforms) - index)
+            source_deadline = time.monotonic() + source_budget
+            if source_budget <= 0:
+                break
+            try:
+                async with asyncio.timeout(source_budget):
+                    async with SourceProbeSession(platform) as probe:
+                        for row in (row for row in queue if row[2] == platform):
+                            left = source_deadline - time.monotonic()
+                            if left <= 0:
+                                break
+                            try:
+                                async with asyncio.timeout(left):
+                                    observation = await probe.probe(row[1])
+                            except TimeoutError:
+                                observation = LinkObservation(_INCONCLUSIVE, True, "source_budget")
+                            await record_probe(row, observation)
+            except TimeoutError:
+                report.errors += 1
+            except Exception:
+                logger.exception("[liveness] bounded source check failed: %s", platform.value)
+                report.errors += 1
+    report.skipped = len(queue) - report.checked
 
     for r in card_rows:
         members = card_members[r.sl_id]
@@ -213,7 +279,7 @@ async def site_liveness_sweep(
         inconclusive = sum(
             1
             for (_lid, is_active, url, _platform) in members
-            if not is_active and url_status.get(url) == _INCONCLUSIVE
+            if not is_active and url_status.get(url, _INCONCLUSIVE) == _INCONCLUSIVE
         )
         candidate = LivenessCandidate(
             site_listing_id=r.sl_id,

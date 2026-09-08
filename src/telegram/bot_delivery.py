@@ -122,7 +122,9 @@ async def send_match_via_bot(
             MatchDelivery.match_id == match_id, MatchDelivery.status != "sent"
         ).limit(1))).scalar_one_or_none()
         if existing is not None and not force_resend and (not has_ledger or incomplete is None):
-            logger.info("Match %d historical delivery (msg=%d) — skip", match_id, existing.tg_message_id)
+            logger.info(
+                "Match %d historical delivery (msg=%d) — skip", match_id, existing.tg_message_id
+            )
             return existing
 
         inbound = (
@@ -140,7 +142,9 @@ async def send_match_via_bot(
             select(MatchDelivery.payload).where(MatchDelivery.match_id == match_id)
             .order_by(MatchDelivery.id).limit(1)
         )).scalar_one_or_none()
-        stored_paths = saved_payload.get("photo_paths", []) if saved_payload else inbound.photo_paths
+        stored_paths = (
+            saved_payload.get("photo_paths", []) if saved_payload else inbound.photo_paths
+        )
         photo_paths = [Path(p) for p in stored_paths if p][:MAX_ALBUM]
         if not photo_paths:
             raise BotDeliveryError(f"Match {match_id}: no inbound photos on disk")
@@ -208,7 +212,9 @@ async def send_match_via_bot(
                 messages = await _send_album_with_floodwait(bot, chat_id, media)
             except Exception as error:
                 await finish_recipient(match_id, chat_id, token, error=error)
-                logger.warning("[bot_delivery] recipient=%d outcome=%s", chat_id, type(error).__name__)
+                logger.warning(
+                    "[bot_delivery] recipient=%d outcome=%s", chat_id, type(error).__name__
+                )
                 continue
             try:
                 message_ids = [int(message.message_id) for message in messages]

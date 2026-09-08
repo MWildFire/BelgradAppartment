@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from src.config import get_settings
 from src.db.models import InboundPost, Listing, Platform, SourceChannel
+from src.jobs.lifecycle import remaining_budget, run_budget, run_cooperatively
 
 # Shared with the decisions-log writer (`_record_decision`) — one ts format, defined at the source.
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
@@ -81,10 +82,12 @@ def scrape_all(
     if max_pages is None:
         max_pages = 500 if full else 3
 
-    results = asyncio.run(
+    results = run_cooperatively(
         _run_all(selected, max_pages, max_new, not no_photos, incremental=not full)
     )
     _print_summary(results)
+    if any(r.outcome in {"failed", "degraded"} for r in results):
+        raise SystemExit(1)
 
 
 @cli.command("scrape")
@@ -95,8 +98,10 @@ def scrape_all(
 def scrape_one(platform: str, max_pages: int, max_new: int | None, no_photos: bool) -> None:
     """Run one scraping pass for a single platform."""
     plat = PLATFORM_NAMES[platform.lower()]
-    results = asyncio.run(_run_all([plat], max_pages, max_new, not no_photos))
+    results = run_cooperatively(_run_all([plat], max_pages, max_new, not no_photos))
     _print_summary(results)
+    if any(r.outcome in {"failed", "degraded"} for r in results):
+        raise SystemExit(1)
 
 
 async def _run_all(
@@ -118,7 +123,10 @@ async def _run_all(
         # `async with` stays INSIDE the try: an __aenter__ failure (e.g. halooglasi's Playwright
         # browser refusing to launch) must skip that one platform, not crash the whole run.
         try:
-            async with asyncio.timeout(get_settings().scrape_source_budget_sec):
+            settings = get_settings()
+            source_budget = (settings.scrape_incremental_source_budget_sec if incremental
+                             else settings.scrape_source_budget_sec)
+            async with asyncio.timeout(source_budget):
                 async with scraper_cls() as scraper:
                     options = {"dry_run": True} if dry_run else {}
                     result = await scrape_platform(
@@ -171,7 +179,7 @@ def _print_summary(results: list[ScrapeResult]) -> None:
 @cli.command("auth")
 def auth() -> None:
     """One-off Telethon authentication — creates the .session file (interactive)."""
-    asyncio.run(_auth())
+    run_cooperatively(_auth())
 
 
 async def _auth() -> None:
@@ -197,7 +205,7 @@ async def _auth() -> None:
 )
 def add_source(identifier: str, start_date: str | None) -> None:
     """Resolve a Telegram channel (URL, @username, or username) and add it to the source list."""
-    asyncio.run(_add_source(identifier, start_date))
+    run_cooperatively(_add_source(identifier, start_date))
 
 
 async def _add_source(identifier: str, start_date: str | None) -> None:
@@ -222,7 +230,7 @@ async def _add_source(identifier: str, start_date: str | None) -> None:
 @cli.command("stats")
 def stats() -> None:
     """One-screen overview: listings per platform, inbounds per status, matches per status."""
-    asyncio.run(_stats())
+    run_cooperatively(_stats())
 
 
 async def _stats() -> None:
@@ -305,7 +313,7 @@ async def _stats() -> None:
 @cli.command("list-sources")
 def list_sources() -> None:
     """Print all source channels in the DB."""
-    asyncio.run(_list_sources())
+    run_cooperatively(_list_sources())
 
 
 async def _list_sources() -> None:
@@ -338,7 +346,7 @@ def backfill(
     source_id: int | None, limit: int | None, no_match: bool, from_date: str | None
 ) -> None:
     """Backfill historical posts from each active source channel."""
-    asyncio.run(_backfill(source_id, limit, not no_match, from_date))
+    run_cooperatively(_backfill(source_id, limit, not no_match, from_date))
 
 
 async def _backfill(
@@ -429,7 +437,7 @@ async def _backfill(
 @click.option("--start-date", "start_date", default=None, help="Set new start_date (YYYY-MM-DD).")
 def reset_source(source_id: int, start_date: str | None) -> None:
     """Clear watermark on a source so backfill replays history from start_date again."""
-    asyncio.run(_reset_source(source_id, start_date))
+    run_cooperatively(_reset_source(source_id, start_date))
 
 
 async def _reset_source(source_id: int, start_date: str | None) -> None:
@@ -480,7 +488,7 @@ async def _alert_auth_lost() -> None:
 @click.option("--no-backfill", is_flag=True, help="Skip initial backfill — go straight to live.")
 def monitor(no_backfill: bool) -> None:
     """Run backfill + live NewMessage handler. Runs forever until interrupted."""
-    asyncio.run(_monitor(not no_backfill))
+    run_cooperatively(_monitor(not no_backfill))
 
 
 @cli.command("subscription-bot")
@@ -492,7 +500,7 @@ def subscription_bot() -> None:
     """
     from src.telegram.subscription_bot import run_subscription_bot
 
-    asyncio.run(run_subscription_bot())
+    run_cooperatively(run_subscription_bot())
 
 
 @cli.command("notify-subscriptions")
@@ -503,7 +511,7 @@ def notify_subscriptions_cmd(since_hours: int, dry_run: bool) -> None:
     """C2 — run the saved-search matcher once (also wired into nightly-refresh)."""
     from src.jobs import notify_subscriptions as notify_mod
 
-    stats = asyncio.run(
+    stats = run_cooperatively(
         notify_mod.notify_subscriptions(since_hours=since_hours, dry_run=dry_run)
     )
     click.echo(
@@ -653,7 +661,7 @@ async def _monitor(do_backfill_first: bool) -> None:
 @click.argument("inbound_id", type=int)
 def match_one(inbound_id: int) -> None:
     """Run pHash matching for a single inbound post."""
-    asyncio.run(_match_one(inbound_id))
+    run_cooperatively(_match_one(inbound_id))
 
 
 async def _match_one(inbound_id: int) -> None:
@@ -670,7 +678,7 @@ async def _match_one(inbound_id: int) -> None:
 @cli.command("match-all")
 def match_all() -> None:
     """Run pHash matching for every InboundPost with status=NEW."""
-    asyncio.run(_match_all())
+    run_cooperatively(_match_all())
 
 
 @cli.command("rematch-all")
@@ -692,7 +700,7 @@ def rematch_all(hamming: int | None, keep_published: bool) -> None:
 
     Useful when threshold is too tight on cold-start or after adding many new listings.
     """
-    asyncio.run(_rematch_all(hamming, keep_published))
+    run_cooperatively(_rematch_all(hamming, keep_published))
 
 
 async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
@@ -833,7 +841,7 @@ def dupes_report(write: bool, hamming: int | None, min_shared: int | None) -> No
 
     Default is read-only; pass --write to persist the dup_group_id + is_primary tags.
     """
-    asyncio.run(_dupes_report(write, hamming, min_shared))
+    run_cooperatively(_dupes_report(write, hamming, min_shared))
 
 
 async def _dupes_report(write: bool, hamming: int | None, min_shared: int | None) -> None:
@@ -998,8 +1006,13 @@ async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None =
         report = await site_liveness_sweep(max_hides=max_hides)
         sent = await send_liveness_notice(report) if notify else False
         note = " — нотис отправлен" if sent else ""
+        errors = getattr(report, "errors", 0)
+        prefix = "🚨 " if errors else ""
+        note += (f", проверок {getattr(report, 'checked', 0)}, "
+                 f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
-            f"liveness: снято {len(report.hidden)}, подтв. {len(report.candidates_confirmed)}, "
+            f"{prefix}liveness: снято {len(report.hidden)}, "
+            f"подтв. {len(report.candidates_confirmed)}, "
             f"неподтв. {len(report.candidates_unconfirmed)}, "
             f"держим {report.kept_active + report.kept_pinned}{note}"
         )
@@ -1018,7 +1031,7 @@ async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None =
 @click.option("--force", is_flag=True, help="Recompute even if embeddings already exist.")
 def embed_all(target: str, force: bool) -> None:
     """Compute CLIP embeddings for all rows with on-disk photos but no embeddings yet."""
-    asyncio.run(_embed_all(target.lower(), force))
+    run_cooperatively(_embed_all(target.lower(), force))
 
 
 async def _listing_ids_needing_embeddings(force: bool) -> list[int]:
@@ -1113,7 +1126,7 @@ async def _embed_all(target: str, force: bool) -> None:
 @click.option("--limit", type=int, default=None)
 def hash_listings(platforms: tuple[str, ...], limit: int | None) -> None:
     """Download photos and compute pHash for listings whose photo_phashes is empty."""
-    asyncio.run(_hash_listings(platforms, limit))
+    run_cooperatively(_hash_listings(platforms, limit))
 
 
 async def _listing_rows_needing_phash(
@@ -1204,7 +1217,7 @@ def test_batch(n: int, from_id: int | None) -> None:
     process_new_inbound for each in chronological order. Use through `otz-bg test-batch N`
     to detach from the SSH session.
     """
-    asyncio.run(_test_batch(n, from_id))
+    run_cooperatively(_test_batch(n, from_id))
 
 
 async def _test_batch(n: int, from_id: int | None) -> None:
@@ -1320,7 +1333,7 @@ async def _open_userbot_if_needed():
 )
 def photo_stats(since_str: str, platform: str | None) -> None:
     """Aggregate the per-photo download log — how many ok / failed per platform."""
-    asyncio.run(_photo_stats(since_str, platform))
+    run_cooperatively(_photo_stats(since_str, platform))
 
 
 async def _photo_stats(since_str: str, platform: str | None) -> None:
@@ -1445,7 +1458,7 @@ def nightly_refresh(
     The daily systemd job uses ``--incremental`` to keep metered proxy traffic bounded. The
     weekly full unit omits it and performs the coverage/stale sweep.
     """
-    asyncio.run(
+    run_cooperatively(
         _nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental,
                          dry_run=dry_run, no_notify=no_notify)
     )
@@ -1461,7 +1474,7 @@ def weekly_refresh_alias(
     max_pages: int, inactive_after_days: int, skip_sweep: bool, skip_scrape: bool
 ) -> None:
     """Deprecated — use `nightly-refresh`. Kept as alias for legacy systemd units."""
-    asyncio.run(_nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape))
+    run_cooperatively(_nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape))
 
 
 @cli.command("site-liveness")
@@ -1476,7 +1489,7 @@ def site_liveness(dry_run: bool) -> None:
     A public card stays up while its apartment is listed on >=1 platform (its A4 dup-group) and only
     comes down when confirmed gone from all. Prints the report + a notice preview; --dry-run mutates
     nothing (Wave-6 triage). The nightly job runs the same sweep and actually sends the notice."""
-    asyncio.run(_site_liveness(dry_run))
+    run_cooperatively(_site_liveness(dry_run))
 
 
 async def _site_liveness(dry_run: bool) -> None:
@@ -1528,14 +1541,18 @@ async def _nightly_refresh(
 ) -> None:
     from src.jobs.run_history import finish_refresh, start_refresh
 
+    settings = get_settings()
+    budget = (settings.scrape_incremental_run_budget_sec if incremental
+              else settings.scrape_run_budget_sec)
     token = None if dry_run else start_refresh(incremental=incremental)
     error = None
     try:
-        async with asyncio.timeout(get_settings().scrape_run_budget_sec):
-            await _nightly_refresh_impl(
-                max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental,
-                dry_run=dry_run, no_notify=no_notify,
-            )
+        with run_budget(budget):
+            async with asyncio.timeout(budget):
+                await _nightly_refresh_impl(
+                    max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental,
+                    dry_run=dry_run, no_notify=no_notify,
+                )
     except BaseException as exc:
         error = type(exc).__name__
         raise
@@ -1579,6 +1596,7 @@ async def _nightly_refresh_impl(
         _print_summary(results)
 
     sweep_skipped_platforms: list[str] = []
+    sweep_reasons: list[str] = []
     if not skip_sweep and not incremental:
         from src.scrapers.orchestrator import StaleSweepResult
 
@@ -1593,12 +1611,16 @@ async def _nightly_refresh_impl(
                 inactive_after_days=inactive_after_days, platform=plat,
                 source_result=evidence, dry_run=dry_run,
             )
+            if res.blocked_reasons:
+                sweep_reasons.append(f"{plat.value}: {', '.join(res.blocked_reasons)}")
             total_marked += res.would_mark_inactive if dry_run else res.marked_inactive
         sweep_result = StaleSweepResult(platform=None, marked_inactive=total_marked)
         click.echo(f"  {'would mark' if dry_run else 'marked'} {total_marked} listings inactive")
         if sweep_skipped_platforms:
             skipped = ", ".join(sweep_skipped_platforms)
             click.echo(f"  sweep blocked without verified full crawl: {skipped}")
+        for reason in sweep_reasons:
+            click.echo(f"  sweep blocked: {reason}")
     elif incremental:
         click.echo("  stale sweep deferred to verified weekly full refresh")
 
@@ -1732,9 +1754,15 @@ async def _nightly_refresh_impl(
         lines.append(f"⚠️ Частичный обход (пропущены страницы): {', '.join(degraded)}")
     if sweep_skipped_platforms:
         lines.append(f"⚠️ Sweep пропущен (нездоровый скрейп): {', '.join(sweep_skipped_platforms)}")
+    for reason in sweep_reasons:
+        lines.append(f"Sweep blocked: {reason}")
     if incremental:
         lines.append("ℹ️ Daily incremental run: stale sweep deferred to weekly full refresh")
+    maintenance_failed = any("🚨" in line for line in [
+        *steps.summary_lines, liveness_line, analytics_line, dupes_line,
+    ])
     unhealthy = bool(dead or low_coverage or degraded or parse_degraded or total_errors
+                     or sweep_reasons or maintenance_failed
                      or any(r.outcome in {"failed", "degraded"} for r in results))
     from src.jobs.run_history import record_refresh_result
 
@@ -1801,15 +1829,28 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     price_changes: list[PriceChange] = []
     site_listings_hidden = 0
 
-    # ONE wall-clock deadline shared by heal+rolling: jointly they cannot overrun the budget
-    # (the 2026-06-16 SIGTERM was slow Cloudflare-challenged refetches running unbounded).
-    refetch_deadline = _time.monotonic() + settings.nightly_refetch_budget_sec
+    # Reserve time for later queues and final publication/analytics work. Unused time
+    # flows forward; a hanging heal cannot consume the rolling refresh or link slice.
+    refetch_start = _time.monotonic()
+    refetch_budget = remaining_budget(settings.nightly_refetch_budget_sec, reserve=900)
+    weights = [
+        ("heal", 0.2, settings.nightly_heal_limit > 0),
+        ("rolling", 0.7, settings.nightly_detail_refresh > 0),
+        ("links", 0.1, settings.nightly_verify_links),
+    ]
+    enabled_weight = sum(weight for _, weight, enabled in weights if enabled) or 1
+    deadlines = {}
+    cumulative = 0.0
+    for name, weight, enabled in weights:
+        if enabled:
+            cumulative += weight / enabled_weight
+        deadlines[name] = refetch_start + refetch_budget * cumulative
 
     if settings.nightly_heal_limit > 0:
         click.echo(f"\n→ Heal broken listings (limit={settings.nightly_heal_limit})…")
         try:
             heal = await heal_broken_listings(
-                limit=settings.nightly_heal_limit, deadline=refetch_deadline
+                limit=settings.nightly_heal_limit, deadline=deadlines["heal"]
             )
             line = f"heal: исправлено {heal.fixed} / осталось {heal.remaining}"
             if heal.skipped:
@@ -1825,7 +1866,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
         click.echo(f"→ Rolling detail refresh (limit={settings.nightly_detail_refresh})…")
         try:
             rolling = await rolling_detail_refresh(
-                limit=settings.nightly_detail_refresh, deadline=refetch_deadline
+                limit=settings.nightly_detail_refresh, deadline=deadlines["rolling"]
             )
             price_changes = rolling.price_changes
             line = (
@@ -1846,10 +1887,9 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             f"→ Verify active links (limit={settings.nightly_verify_links_limit})…"
         )
         try:
-            # Shares the heal+rolling wall-clock budget so the three refetch/HEAD steps
-            # jointly cannot overrun the night.
+            # The final reserved slice includes unused time from earlier queues.
             vl = await verify_active_links(
-                limit=settings.nightly_verify_links_limit, deadline=refetch_deadline
+                limit=settings.nightly_verify_links_limit, deadline=deadlines["links"]
             )
             line = (
                 f"ссылки: проверено {vl.checked}, "
@@ -1860,6 +1900,8 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
+            if vl.errors:
+                line = "🚨 " + line
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: verify-links")
@@ -1881,6 +1923,21 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     else:
         click.echo("→ Auto-publish backfill disabled (NIGHTLY_AUTO_PUBLISH=0)")
 
+    if notify and settings.tg_delivery_mode == "bot":
+        from src.telegram.bot_delivery import retry_pending_match_deliveries
+
+        try:
+            deliveries = await retry_pending_match_deliveries(limit=30)
+            prefix = "🚨 " if deliveries["errors"] or deliveries["unknown"] else ""
+            if any(deliveries.values()):
+                lines.append(
+                    f"{prefix}Finder queue: completed {deliveries['completed']}; "
+                    f"errors {deliveries['errors']}; unknown {deliveries['unknown']}"
+                )
+        except Exception:
+            log.exception("nightly step failed: finder-delivery-retry")
+            lines.append("🚨 Finder queue step failed")
+
     # C2 saved-search subscriptions: new public listings × active subscriptions → digests
     # (idempotent via subscription_matches). In-function import is the test seam (tests
     # monkeypatch notify_subscriptions on its module). Fault-isolated like every other step.
@@ -1894,7 +1951,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             )
             line = f"подписки: {sub_stats.subscriptions_notified} уведомлений отправлено"
             if sub_stats.errors:
-                line += f", ошибок доставки: {sub_stats.errors}"
+                line = "🚨 " + line + f", ошибок доставки: {sub_stats.errors}"
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: notify-subscriptions")
@@ -2184,7 +2241,7 @@ def llm_report(days: int) -> None:
     src/matching/llm_validator.py). The 0.7 gate itself (LLM_VALIDATION_MIN_CONFIDENCE)
     stays untouched — this command only builds the evidence for tuning it.
     """
-    asyncio.run(_llm_report(days))
+    run_cooperatively(_llm_report(days))
 
 
 async def _llm_report(days: int) -> None:
@@ -2318,7 +2375,7 @@ def districts_report(top: int, min_count: int) -> None:
     Replaces the manual «new micro-district appeared» routine: frequencies + ready-to-paste
     yaml lines. Remember: districts.yaml is the only data/ file deployed by deploy_sync.sh.
     """
-    asyncio.run(_districts_report(top, min_count))
+    run_cooperatively(_districts_report(top, min_count))
 
 
 async def _districts_report(top: int, min_count: int) -> None:
@@ -2343,7 +2400,7 @@ def leads_report(days: int | None, top: int) -> None:
     Read-only aggregation over the `leads` table. The supply/demand mismatch surfaced here
     (which districts & budgets are most requested) is what to hunt for.
     """
-    asyncio.run(_leads_report(days, top))
+    run_cooperatively(_leads_report(days, top))
 
 
 async def _leads_report(days: int | None, top: int) -> None:
@@ -2379,7 +2436,7 @@ def mark_stale(days: int, platform: str | None) -> None:
 
     Usually you don't call this directly — weekly-refresh runs it after a full scrape.
     """
-    asyncio.run(_mark_stale(days, platform))
+    run_cooperatively(_mark_stale(days, platform))
 
 
 async def _mark_stale(days: int, platform: str | None) -> None:
@@ -2394,7 +2451,7 @@ async def _mark_stale(days: int, platform: str | None) -> None:
 @click.option("--force", is_flag=True, help="Ignore the 15-min throttle.")
 def refresh(force: bool) -> None:
     """Manually refresh listings on all platforms (auto-triggered by each new inbound too)."""
-    asyncio.run(_refresh(force))
+    run_cooperatively(_refresh(force))
 
 
 async def _refresh(force: bool) -> None:
@@ -2431,7 +2488,7 @@ def deliver_all(force: bool) -> None:
     gets re-rendered against the current code (so e.g. a Yandex-URL fix or new district
     hashtag will appear in the re-send).
     """
-    asyncio.run(_deliver_all(force))
+    run_cooperatively(_deliver_all(force))
 
 
 async def _deliver_all(force: bool = False) -> None:
@@ -2505,7 +2562,7 @@ def refetch_details(platform: str | None, refetch_all: bool, limit: int | None, 
     parser bug at that moment freezes the row forever (no price/photos → invisible to the
     matcher). This command heals such rows, and backfills after parser improvements.
     """
-    asyncio.run(_refetch_details(platform, refetch_all, limit, no_photos))
+    run_cooperatively(_refetch_details(platform, refetch_all, limit, no_photos))
 
 
 async def _refetch_details(
@@ -2564,7 +2621,7 @@ def backfill_nekretnine_address(limit: int | None, concurrency: int) -> None:
 
     Skips listings that already have a non-null address_raw — safe to re-run.
     """
-    asyncio.run(_backfill_nekretnine_address(limit, concurrency))
+    run_cooperatively(_backfill_nekretnine_address(limit, concurrency))
 
 
 async def _backfill_nekretnine_address(limit: int | None, concurrency: int) -> None:
@@ -2664,7 +2721,7 @@ def ship_log(log_file: str, label: str | None, lines: int, session: str) -> None
     Used as `ExecStartPost=` on systemd oneshot services so each run posts its own log tail.
     Requires the `otz_logger.session` to be authorised once — run `scripts/auth_logger.py`.
     """
-    asyncio.run(_ship_log(log_file, label, lines, session))
+    run_cooperatively(_ship_log(log_file, label, lines, session))
 
 
 async def _ship_log(log_file: str, label: str | None, lines: int, session_name: str) -> None:
@@ -2722,7 +2779,7 @@ def daily_summary(hours: int) -> None:
     Wired up as a systemd timer (otz-daily-summary.timer @ 07:00 UTC = 09:00 Belgrade).
     Live monitor delivers each match in real-time but never emits a wrap-up, so this fills the gap.
     """
-    asyncio.run(_daily_summary(hours))
+    run_cooperatively(_daily_summary(hours))
 
 
 async def _photo_coverage_by_platform() -> list[tuple[str, int, int]]:
@@ -2847,7 +2904,7 @@ def notify_failure(service: str, reason: str | None) -> None:
     Units opt in by declaring `OnFailure=otz-notify-failure@%n.service` in their unit file;
     the template service passes the failing unit's name (%n) through to --service.
     """
-    asyncio.run(_notify_failure(service, reason))
+    run_cooperatively(_notify_failure(service, reason))
 
 
 _NOTIFY_MARKER_DIR = "/var/log/otz"
@@ -2949,7 +3006,7 @@ def check_links(platform: str | None, limit: int | None) -> None:
     from src.scrapers.orchestrator import verify_active_links
 
     plat = PLATFORM_NAMES[platform.lower()] if platform else None
-    stats = asyncio.run(verify_active_links(limit=limit, platform=plat))
+    stats = run_cooperatively(verify_active_links(limit=limit, platform=plat))
     click.echo(
         f"=== ссылки: проверено {stats.checked}, деактивировано {stats.deactivated}, "
         f"ошибок {stats.errors}, пропущено {stats.skipped} ==="
@@ -2974,7 +3031,7 @@ def heal_urls(platform: str, dry_run: bool, include_inactive: bool) -> None:
     T1-2 guard: by default only ACTIVE rows are swept, and the canonical URL must resolve
     (HEAD < 400) before the rewrite is written — a dead canonical is skipped with a warning.
     """
-    healed = asyncio.run(
+    healed = run_cooperatively(
         _heal_urls(platform=platform, dry_run=dry_run, include_inactive=include_inactive)
     )
     verb = "would heal" if dry_run else "healed"
@@ -3295,7 +3352,7 @@ def purge_inactive(older_than_days: int, dry_run: bool) -> None:
     deleting them would cascade-wipe match history and public site cards. On this stage
     prod runs dry-run ONLY (decision D5); the real run is coded and tested for a later go.
     """
-    result = asyncio.run(_purge_inactive(older_than_days=older_than_days, dry_run=dry_run))
+    result = run_cooperatively(_purge_inactive(older_than_days=older_than_days, dry_run=dry_run))
     _echo_purge_report(result, older_than_days=older_than_days, dry_run=dry_run)
 
 
@@ -3319,7 +3376,7 @@ def scrape_smoke(platform: str | None) -> None:
         click.echo("scrape-smoke disabled (SCRAPE_SMOKE_ENABLED=0) — no-op")
         return
     plats = [PLATFORM_NAMES[platform.lower()]] if platform else list(SCRAPERS.keys())
-    any_not_ok = asyncio.run(_run_smoke(plats))
+    any_not_ok = run_cooperatively(_run_smoke(plats))
     if any_not_ok:
         sys.exit(1)
 
@@ -3399,7 +3456,7 @@ def pipeline_probe() -> None:
     bot notice and exits 1, so a systemd OnFailure can alert. A healthy run is silent (table
     only) and exits 0.
     """
-    asyncio.run(_pipeline_probe())
+    run_cooperatively(_pipeline_probe())
 
 
 @cli.command("nekretnine-shadow-audit")
@@ -3410,7 +3467,7 @@ def pipeline_probe() -> None:
 )
 def nekretnine_shadow_audit(max_pages: int, compare_details: int, report_path: Path) -> None:
     """Read-only snapshot-vs-detail audit; exits non-zero on any quality failure."""
-    asyncio.run(_nekretnine_shadow_audit(max_pages, compare_details, report_path))
+    run_cooperatively(_nekretnine_shadow_audit(max_pages, compare_details, report_path))
 
 
 async def _nekretnine_shadow_audit(

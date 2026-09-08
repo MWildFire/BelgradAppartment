@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -106,7 +106,7 @@ def _new_matches(
             continue
         created = c.created_at
         if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
+            created = created.replace(tzinfo=UTC)
         if created < cutoff:
             continue
         if listing_matches_filters(c.view, c.rooms_raw, f):
@@ -133,7 +133,9 @@ async def _send_digest(sub: Subscription, listings: list, unsubscribe_url: str) 
     if sub.channel == "email":
         return await send_subscription_digest(sub.email, listings, unsubscribe_url)
     elif sub.channel == "telegram":
-        return await send_subscription_digest_telegram(sub.telegram_chat_id, listings, unsubscribe_url)
+        return await send_subscription_digest_telegram(
+            sub.telegram_chat_id, listings, unsubscribe_url
+        )
     else:  # pragma: no cover - guarded by _deliverable
         raise ValueError(f"unknown channel {sub.channel!r}")
 
@@ -156,7 +158,7 @@ async def _record(
     """
     if not site_listing_ids:
         return
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     async with sitedb.writer_session(database_url=database_url) as s:
         await s.execute(
             sqlite_insert(SubscriptionMatch)
@@ -184,7 +186,7 @@ async def notify_subscriptions(
     `dry_run` computes + reports what WOULD be sent but neither sends nor records.
     """
     stats = NotifyStats()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     initial_cutoff = now - timedelta(hours=since_hours)
     subs = await _active_subscriptions(database_url)
     if not subs:
@@ -196,7 +198,7 @@ async def notify_subscriptions(
         already = await _already_notified(database_url, sub.id)
         cutoff = sub.notification_cursor_at or initial_cutoff
         if cutoff.tzinfo is None:
-            cutoff = cutoff.replace(tzinfo=timezone.utc)
+            cutoff = cutoff.replace(tzinfo=UTC)
         new = _new_matches(sub, candidates, already, cutoff)
         if not dry_run:
             # Capture the entire discovered set BEFORE applying digest limits or attempting
@@ -243,7 +245,9 @@ async def notify_subscriptions(
         except Exception:
             # Provider accepted the message. Leave sending to become UNKNOWN after timeout;
             # never turn a post-send DB error into a blind automatic retry.
-            logger.warning("[notify-subs] sub=%d outcome commit failed; reconciliation needed", sub.id)
+            logger.warning(
+                "[notify-subs] sub=%d outcome commit failed; reconciliation needed", sub.id
+            )
             stats.errors += 1
             continue
         stats.subscriptions_notified += 1

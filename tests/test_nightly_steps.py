@@ -580,8 +580,8 @@ async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
     assert alerts  # drop alert from metrics still emitted
 
 
-async def test_run_nightly_steps_shares_one_deadline_for_heal_and_rolling(monkeypatch):
-    """Heal and rolling must receive the SAME deadline so they jointly respect one budget."""
+async def test_run_nightly_steps_reserves_rolling_time_inside_total_budget(monkeypatch):
+    """Heal must stop before rolling reaches the shared total deadline."""
     from src.cli import _run_nightly_steps
     from src.config import get_settings
 
@@ -597,7 +597,8 @@ async def test_run_nightly_steps_shares_one_deadline_for_heal_and_rolling(monkey
 
     assert len(deadlines) == 2
     assert deadlines[0] is not None
-    assert deadlines[0] == deadlines[1]  # one shared deadline
+    assert deadlines[0] < deadlines[1]  # later work retains a reserved slice
+    assert deadlines[1] - deadlines[0] <= settings.nightly_refetch_budget_sec
 
 
 async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):

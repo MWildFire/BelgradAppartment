@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     # --- Scrapers ---
     scrape_list_interval_min: int = 30
     scrape_recheck_interval_hours: int = 6
+    scrape_incremental_source_budget_sec: int = 600
+    scrape_incremental_run_budget_sec: int = 6600
     scrape_source_budget_sec: int = 1800
     scrape_item_budget_sec: int = 90
     scrape_run_budget_sec: int = 21600
@@ -116,6 +118,7 @@ class Settings(BaseSettings):
     # D3 — safety cap on auto-hides per night (mirrors the price-drop cap); overflow → notice
     # candidates instead of being hidden, so a bad night can't wipe the whole showcase.
     site_liveness_max_hides: int = 10
+    site_liveness_budget_sec: int = 600
     # C2: nightly saved-search digest — new public listings × active subscriptions → notices
     # (idempotent via subscription_matches). NIGHTLY_NOTIFY_SUBSCRIPTIONS=0 → skip the step.
     nightly_notify_subscriptions: bool = True

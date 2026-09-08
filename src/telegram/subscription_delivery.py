@@ -55,7 +55,9 @@ async def send_subscription_digest_telegram(
 
     bot = Bot(token=settings.tg_bot_token)
     try:
-        message = await bot.send_message(chat_id=chat_id, text=_digest_text(listings, unsubscribe_url))
+        message = await bot.send_message(
+            chat_id=chat_id, text=_digest_text(listings, unsubscribe_url)
+        )
         return isinstance(getattr(message, "message_id", None), int) and message.message_id > 0
     finally:
         await bot.session.close()
