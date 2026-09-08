@@ -290,6 +290,7 @@ async def test_one_bad_send_does_not_abort_the_batch(db_url, monkeypatch) -> Non
         if email == "boom@x.com":
             raise RuntimeError("smtp down")
         delivered.append(email)
+        return True
 
     monkeypatch.setattr("src.jobs.notify_subscriptions.send_subscription_digest", flaky)
     stats = await notify_subscriptions(database_url=db_url)
@@ -341,6 +342,7 @@ async def test_record_is_idempotent_on_duplicate(db_url) -> None:
 def _capture_email(sink: list):
     async def _send(email, listings, unsubscribe_url):
         sink.append({"email": email, "listings": list(listings), "unsub": unsubscribe_url})
+        return True
 
     return _send
 
@@ -348,5 +350,6 @@ def _capture_email(sink: list):
 def _capture_tg(sink: list):
     async def _send(chat_id, listings, unsubscribe_url):
         sink.append({"chat_id": chat_id, "listings": list(listings), "unsub": unsubscribe_url})
+        return True
 
     return _send

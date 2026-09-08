@@ -1,18 +1,9 @@
-"""C2 — nightly saved-search matcher: new public listings × active subscriptions → digests.
+"""Saved-search discovery feeds a durable queue before bounded, confirmed digest delivery.
 
-For each ACTIVE subscription, find public listings that (a) match its criteria via the SHARED
-`listing_matches_filters` predicate (the same one the catalog uses), (b) are NEW — not yet in the
-subscription_matches ledger, and (c) were exposed within `since_hours`. The matches are grouped
-into ONE digest per subscription and sent over its channel (e-mail or Telegram). A
-subscription_matches row is written per (subscription, listing) only AFTER a successful send, so:
-
-- Idempotent: a re-run sends nothing new (the UNIQUE(subscription_id, site_listing_id) ledger
-  already records every delivered listing).
-- Fault-isolated: one subscription's failed send doesn't abort the batch and doesn't record a
-  ledger row, so that subscription is retried next run.
-
-This is a write path on the catalog DB, so it uses the site writer engine (busy_timeout) for the
-ledger insert, and the read-only engine for candidate enumeration.
+The initial window selects recent public cards. A persisted cursor then covers scheduler gaps;
+queued items survive age windows and transport outages. Atomic claims prevent parallel duplicate
+sends, while transport ambiguity requires reconciliation. A confirmed ledger is written only
+in the same transaction as the corresponding sent outcome.
 """
 
 from __future__ import annotations
@@ -25,7 +16,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from src.config import get_settings
-from src.db.models import Subscription, SubscriptionMatch
+from src.db.models import Subscription, SubscriptionDelivery, SubscriptionMatch
+from src.jobs import subscription_outbox as outbox
 from src.site import db as sitedb
 from src.site.email import send_subscription_digest
 from src.site.readmodel import (
@@ -34,6 +26,7 @@ from src.site.readmodel import (
     listing_matches_filters,
     public_candidates,
 )
+from src.telegram.delivery_ledger import ambiguous_send_error
 from src.telegram.subscription_delivery import send_subscription_digest_telegram
 
 logger = logging.getLogger(__name__)
@@ -47,6 +40,8 @@ class NotifyStats:
     subscriptions_notified: int = 0
     listings_sent: int = 0
     errors: int = 0
+    pending: int = 0
+    unknown: int = 0
 
 
 def _filters_from_criteria(criteria: dict) -> Filters:
@@ -133,19 +128,19 @@ def _deliverable(sub: Subscription) -> bool:
     return False
 
 
-async def _send_digest(sub: Subscription, listings: list, unsubscribe_url: str) -> None:
+async def _send_digest(sub: Subscription, listings: list, unsubscribe_url: str) -> bool:
     """Dispatch the digest over the subscription's channel. Raises on send failure."""
     if sub.channel == "email":
-        await send_subscription_digest(sub.email, listings, unsubscribe_url)
+        return await send_subscription_digest(sub.email, listings, unsubscribe_url)
     elif sub.channel == "telegram":
-        await send_subscription_digest_telegram(sub.telegram_chat_id, listings, unsubscribe_url)
+        return await send_subscription_digest_telegram(sub.telegram_chat_id, listings, unsubscribe_url)
     else:  # pragma: no cover - guarded by _deliverable
         raise ValueError(f"unknown channel {sub.channel!r}")
 
 
 # A single digest is capped at this many listings — the Telegram message limit is 4096 chars,
-# and a fresh subscription shouldn't blast the whole back-catalog. Overflow is simply not
-# recorded, so the next run picks it up: a 100-match subscription drains 30/night.
+# and a fresh subscription should not blast the whole back-catalog. The durable queue keeps
+# every overflow item until a later confirmed send, independent of its original age.
 SUBSCRIPTION_DIGEST_MAX = 30
 
 
@@ -189,55 +184,77 @@ async def notify_subscriptions(
     `dry_run` computes + reports what WOULD be sent but neither sends nor records.
     """
     stats = NotifyStats()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-
+    now = datetime.now(timezone.utc)
+    initial_cutoff = now - timedelta(hours=since_hours)
     subs = await _active_subscriptions(database_url)
     if not subs:
         return stats
-
     candidates = await public_candidates(database_url=database_url)
 
     for sub in subs:
         stats.subscriptions_considered += 1
-        if not _deliverable(sub):
-            logger.info(
-                "[notify-subs] sub=%d not deliverable (channel=%s) — skip", sub.id, sub.channel
-            )
-            continue
         already = await _already_notified(database_url, sub.id)
+        cutoff = sub.notification_cursor_at or initial_cutoff
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
         new = _new_matches(sub, candidates, already, cutoff)
-        if not new:
+        if not dry_run:
+            # Capture the entire discovered set BEFORE applying digest limits or attempting
+            # delivery. A 72-hour transport outage cannot age queued work out of existence.
+            await outbox.enqueue(database_url, sub.id, [c.view.id for c in new], now)
+        pending = await outbox.pending_ids(database_url, sub.id)
+        if dry_run:
+            pending = list(dict.fromkeys([*pending, *(c.view.id for c in new)]))
+        if not _deliverable(sub):
             continue
-
-        # Cap the digest; overflow is left unrecorded so it flows into the next run.
-        batch = new[:SUBSCRIPTION_DIGEST_MAX]
-        views = [c.view for c in batch]
+        f = _filters_from_criteria(sub.criteria or {})
+        available = {c.view.id: c for c in candidates
+                     if listing_matches_filters(c.view, c.rooms_raw, f)}
+        # Re-check public authorization/availability now; unpublish/rented does not leak from
+        # an earlier queue capture. Such work remains queued for a possible later recovery.
+        ids = [sl_id for sl_id in pending if sl_id in available and sl_id not in already]
+        ids = ids[:SUBSCRIPTION_DIGEST_MAX]
+        if not ids:
+            continue
         if dry_run:
             stats.subscriptions_notified += 1
-            stats.listings_sent += len(views)
+            stats.listings_sent += len(ids)
             continue
-
+        token, claimed = await outbox.claim(database_url, sub.id, ids)
+        if not claimed:
+            continue
+        views = [available[sl_id].view for sl_id in ids if sl_id in claimed]
         try:
-            await _send_digest(sub, views, _unsubscribe_url(sub.token))
-        except Exception:
-            # One subscription's send must never abort the batch. No ledger row → retried next run.
-            logger.exception("[notify-subs] sub=%d digest send failed", sub.id)
+            confirmed = await _send_digest(sub, views, _unsubscribe_url(sub.token))
+        except Exception as error:
+            await outbox.finish(database_url, sub.id, token,
+                                status="unknown" if ambiguous_send_error(error) else "failed",
+                                error_code=type(error).__name__[:64])
+            logger.warning("[notify-subs] sub=%d send=%s", sub.id, type(error).__name__)
             stats.errors += 1
             continue
-
-        try:
-            # Record ONLY what we sent. Idempotent + inside the try: a ledger failure after a
-            # successful send is isolated to this subscription (worst case a re-send next run)
-            # instead of escaping uncaught and aborting every remaining subscription.
-            await _record(database_url, sub.id, [c.view.id for c in batch])
-        except Exception:
-            logger.exception("[notify-subs] sub=%d ledger record failed post-send", sub.id)
+        if confirmed is not True:
+            await outbox.finish(database_url, sub.id, token, status="failed",
+                                error_code="transport_not_confirmed")
             stats.errors += 1
             continue
-
+        try:
+            await outbox.finish(database_url, sub.id, token, status="sent")
+        except Exception:
+            # Provider accepted the message. Leave sending to become UNKNOWN after timeout;
+            # never turn a post-send DB error into a blind automatic retry.
+            logger.warning("[notify-subs] sub=%d outcome commit failed; reconciliation needed", sub.id)
+            stats.errors += 1
+            continue
         stats.subscriptions_notified += 1
         stats.listings_sent += len(views)
 
+    async with sitedb.read_session(database_url=database_url) as session:
+        outcomes = list((await session.execute(select(SubscriptionDelivery.status).where(
+            SubscriptionDelivery.subscription_id.in_([sub.id for sub in subs])
+        ))).scalars())
+    stats.pending = sum(status in {"pending", "failed", "sending"} for status in outcomes)
+    stats.unknown = outcomes.count("unknown")
     logger.info(
         "[notify-subs] considered=%d notified=%d listings=%d errors=%d",
         stats.subscriptions_considered, stats.subscriptions_notified,

@@ -25,7 +25,9 @@ from src.db import (
     get_session,
     resolve_post_send_status,
 )
+from src.db.models import MatchDelivery
 from src.post import render_post
+from src.telegram.delivery_ledger import claim_recipient, finish_recipient, prepare_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +122,11 @@ async def _send_match_via_userbot(
                 select(PublishedPost).where(PublishedPost.match_id == match_id)
             )
         ).scalar_one_or_none()
-        if existing is not None and not force_resend:
-            logger.info("Match %d already delivered (msg=%d) — skipping", match_id, existing.tg_message_id)
+        has_ledger = (await s.execute(select(MatchDelivery.id).where(
+            MatchDelivery.match_id == match_id
+        ).limit(1))).scalar_one_or_none() is not None
+        if existing is not None and not has_ledger and not force_resend:
+            logger.info("Match %d historical delivery (msg=%d) — skipping", match_id, existing.tg_message_id)
             return existing
 
         # Eager-load source_channel so we can reach it after the session closes.
@@ -136,10 +141,11 @@ async def _send_match_via_userbot(
         if inbound is None or listing is None:
             raise DeliveryError(f"Match {match_id}: missing inbound/listing")
 
-        photo_paths = [Path(p) for p in inbound.photo_paths if p]
-        photo_paths = [p for p in photo_paths if p.exists()][:MAX_ALBUM]
+        photo_paths = [Path(p) for p in inbound.photo_paths if p][:MAX_ALBUM]
         if not photo_paths:
             raise DeliveryError(f"Match {match_id}: no inbound photos on disk")
+        if any(not p.is_file() for p in photo_paths):
+            raise DeliveryError(f"Match {match_id}: missing inbound photo files")
 
     rendered_text = post_text_override if post_text_override is not None else render_post(listing, inbound).text
 
@@ -167,17 +173,32 @@ async def _send_match_via_userbot(
         full_caption = full_caption[:TELEGRAM_CAPTION_LIMIT - 1] + "…"
 
     recipient = await _resolve_delivery_target(client)
-    messages = await client.send_file(
-        recipient,
-        file=[str(p) for p in photo_paths],
-        caption=full_caption,
-    )
-
-    # Telethon returns a list for album sends, or a single Message otherwise.
-    if isinstance(messages, list):
-        first_msg_id = int(messages[0].id) if messages else 0
+    recipient_id = int(recipient.id)
+    await prepare_recipients(match_id, [recipient_id], force=force_resend)
+    token = await claim_recipient(match_id, recipient_id)
+    if token is None:
+        async with get_session() as session:
+            outcome = (await session.execute(select(MatchDelivery).where(
+                MatchDelivery.match_id == match_id, MatchDelivery.recipient_id == recipient_id,
+            ))).scalar_one_or_none()
+        if outcome is None or outcome.status != "sent" or not outcome.message_ids:
+            raise DeliveryError(f"Match {match_id}: delivery claimed or awaiting reconciliation")
+        first_msg_id = outcome.message_ids[0]
     else:
-        first_msg_id = int(messages.id) if messages else 0
+        try:
+            messages = await client.send_file(
+                recipient, file=[str(p) for p in photo_paths], caption=full_caption,
+            )
+        except Exception as error:
+            await finish_recipient(match_id, recipient_id, token, error=error)
+            raise DeliveryError(f"Match {match_id}: {type(error).__name__}") from error
+        messages = messages if isinstance(messages, list) else [messages]
+        message_ids = [int(message.id) for message in messages if message is not None]
+        if not message_ids or any(message_id <= 0 for message_id in message_ids):
+            await finish_recipient(match_id, recipient_id, token)
+            raise DeliveryError(f"Match {match_id}: provider did not confirm delivery")
+        await finish_recipient(match_id, recipient_id, token, message_ids=message_ids)
+        first_msg_id = message_ids[0]
 
     async with get_session() as s:
         m = await s.get(Match, match_id)

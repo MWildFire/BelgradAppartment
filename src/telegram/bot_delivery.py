@@ -13,6 +13,7 @@ which dispatches based on settings.
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from aiogram import Bot
@@ -31,7 +32,9 @@ from src.db import (
     get_session,
     resolve_post_send_status,
 )
+from src.db.models import MatchDelivery
 from src.post import render_post
+from src.telegram.delivery_ledger import claim_recipient, finish_recipient, prepare_recipients
 
 logger = logging.getLogger(__name__)
 
@@ -107,8 +110,14 @@ async def send_match_via_bot(
         existing = (
             await s.execute(select(PublishedPost).where(PublishedPost.match_id == match_id))
         ).scalar_one_or_none()
-        if existing is not None and not force_resend:
-            logger.info("Match %d already delivered (msg=%d) — skip", match_id, existing.tg_message_id)
+        has_ledger = (await s.execute(select(MatchDelivery.id).where(
+            MatchDelivery.match_id == match_id
+        ).limit(1))).scalar_one_or_none() is not None
+        incomplete = (await s.execute(select(MatchDelivery.id).where(
+            MatchDelivery.match_id == match_id, MatchDelivery.status != "sent"
+        ).limit(1))).scalar_one_or_none()
+        if existing is not None and not force_resend and (not has_ledger or incomplete is None):
+            logger.info("Match %d historical delivery (msg=%d) — skip", match_id, existing.tg_message_id)
             return existing
 
         inbound = (
@@ -163,7 +172,11 @@ async def send_match_via_bot(
     first_msg_id = 0
     delivered_to = 0
     try:
-        for chat_id in recipients:
+        await prepare_recipients(match_id, recipients, force=force_resend)
+        for chat_id in dict.fromkeys(recipients):
+            token = await claim_recipient(match_id, chat_id)
+            if token is None:
+                continue
             media: list[InputMediaPhoto] = []
             for j, p in enumerate(photo_paths):
                 media.append(
@@ -174,22 +187,33 @@ async def send_match_via_bot(
                 )
             try:
                 messages = await _send_album_with_floodwait(bot, chat_id, media)
-                if delivered_to == 0 and messages:
-                    first_msg_id = int(messages[0].message_id)
-                delivered_to += 1
-                logger.info(
-                    "Delivered match=%d → chat_id=%d (msg=%d, %d photos)",
-                    match_id, chat_id,
-                    int(messages[0].message_id) if messages else 0,
-                    len(photo_paths),
-                )
-            except Exception:
-                # One blocked/broken recipient must not stop the fan-out to the others.
-                logger.exception("[bot_delivery] failed to send to %d", chat_id)
+            except Exception as error:
+                await finish_recipient(match_id, chat_id, token, error=error)
+                logger.warning("[bot_delivery] recipient=%d outcome=%s", chat_id, type(error).__name__)
+                continue
+            try:
+                message_ids = [int(message.message_id) for message in messages]
+            except (TypeError, AttributeError, ValueError):
+                message_ids = []
+            if not message_ids or any(message_id <= 0 for message_id in message_ids):
+                await finish_recipient(match_id, chat_id, token)
+                continue
+            # A DB failure after provider acceptance leaves the claim in sending, becoming
+            # UNKNOWN on recovery. It must never be relabelled as a retryable transport error.
+            await finish_recipient(match_id, chat_id, token, message_ids=message_ids)
+            delivered_to += 1
+            logger.info("Delivered match=%d recipient=%d photos=%d", match_id, chat_id, len(media))
+
     finally:
         await bot.session.close()
 
-    if delivered_to == 0:
+    async with get_session() as session:
+        confirmed = (await session.execute(select(MatchDelivery).where(
+            MatchDelivery.match_id == match_id, MatchDelivery.status == "sent"
+        ).order_by(MatchDelivery.id))).scalars().all()
+    if confirmed:
+        first_msg_id = confirmed[0].message_ids[0]
+    if not confirmed:
         # NOT delivered anywhere — leave the match un-PUBLISHED so deliver-all / the next
         # pipeline run retries it. Marking it PUBLISHED here would silently lose the match.
         raise BotDeliveryError(
@@ -289,3 +313,43 @@ async def send_run_summary_via_bot(
         "[bot_delivery] summary sent to %d recipient(s): matched=%d no_match=%d errors=%d",
         len(recipients), matched, no_match, errors,
     )
+
+
+async def retry_pending_match_deliveries(*, limit: int = 30) -> dict[str, int]:
+    """Resume only this ledger's known pending/failed recipients in the current bot contour.
+
+    Historical PublishedPost rows never enter this queue. Unknown outcomes are reported for
+    manual reconciliation; new configured recipients are not added to historical fanouts.
+    """
+    recipients = _recipients()
+    if not recipients:
+        return {"considered": 0, "completed": 0, "errors": 0, "unknown": 0}
+    async with get_session() as session:
+        rows = (await session.execute(select(MatchDelivery)
+            .join(Match, Match.id == MatchDelivery.match_id).where(
+            Match.status != MatchStatus.REJECTED,
+            MatchDelivery.recipient_id.in_(recipients),
+            MatchDelivery.status.in_(["pending", "failed", "sending", "unknown"]),
+        ).order_by(MatchDelivery.updated_at, MatchDelivery.id))).scalars().all()
+    unknown = sum(row.status == "unknown" for row in rows)
+    now = datetime.now(UTC)
+    from src.telegram.delivery_ledger import CLAIM_TIMEOUT
+    eligible = [row for row in rows if row.status in {"pending", "failed"} or (
+        row.status == "sending" and row.claimed_at is not None
+        and row.claimed_at.replace(tzinfo=UTC) < now - CLAIM_TIMEOUT
+    )]
+    match_ids = list(dict.fromkeys(row.match_id for row in eligible))[:limit]
+    stats = {"considered": len(match_ids), "completed": 0, "errors": 0, "unknown": unknown}
+    for match_id in match_ids:
+        try:
+            await send_match_via_bot(match_id)
+            async with get_session() as session:
+                remaining = (await session.execute(select(MatchDelivery.id).where(
+                    MatchDelivery.match_id == match_id, MatchDelivery.status != "sent"
+                ).limit(1))).scalar_one_or_none()
+            if remaining is None:
+                stats["completed"] += 1
+        except Exception as error:
+            stats["errors"] += 1
+            logger.warning("[delivery-retry] match=%d outcome=%s", match_id, type(error).__name__)
+    return stats

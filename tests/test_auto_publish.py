@@ -447,7 +447,7 @@ class _FakeUserbotClient:
     """Minimal Telethon client stand-in for _send_match_via_userbot."""
 
     async def get_me(self):  # type: ignore[no-untyped-def]
-        return type("Me", (), {"username": "darya"})()
+        return type("Me", (), {"username": "darya", "id": 12345})()
 
     async def send_file(self, recipient, *, file, caption):  # type: ignore[no-untyped-def]
         return [_FakeMessage(777)]

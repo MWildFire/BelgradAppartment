@@ -132,24 +132,23 @@ async def send_subscription_digest(
     email: str | None,
     listings: Sequence[SiteListingView],
     unsubscribe_url: str,
-) -> None:
-    """E-mail a saved-search digest. No-op when SMTP is unconfigured (like send_lead_email).
+) -> bool:
+    """Return True only after SMTP accepts the digest; skipped/unconfigured returns False.
 
-    Also a no-op for an empty digest. Raises on a real send failure so the matcher can count it
-    and skip recording the ledger (so the subscription is retried next run).
+    A real failure raises for queued retry or explicit ambiguity reconciliation.
     """
     if not listings:
-        return
+        return False
     settings = get_settings()
     if not settings.site_smtp_host:
         logger.info("SMTP not configured, skipping subscription digest e-mail")
-        return
+        return False
     if not email:
         logger.warning("subscription digest requested with no e-mail — skipping")
-        return
+        return False
 
     msg = _build_digest_message(email, listings, unsubscribe_url)
-    await aiosmtplib.send(
+    result = await aiosmtplib.send(
         msg,
         hostname=settings.site_smtp_host,
         port=settings.site_smtp_port,
@@ -158,3 +157,6 @@ async def send_subscription_digest(
         start_tls=settings.site_smtp_starttls,
         timeout=15,
     )
+
+    # aiosmtplib confirms accepted recipients as (refused_recipients, response).
+    return isinstance(result, tuple) and len(result) == 2 and not result[0]
