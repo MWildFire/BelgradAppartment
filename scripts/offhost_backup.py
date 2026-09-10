@@ -21,7 +21,7 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
@@ -36,6 +36,33 @@ else:
 
 
 _LEASE = ContextVar("offhost_source_lease", default=None)
+
+
+@contextmanager
+def backup_phase(name):
+    """Keep the first failing operation even when cleanup also has to run."""
+    try:
+        yield
+    except Exception as error:
+        if not hasattr(error, "_offhost_phase"):
+            error._offhost_phase = name
+        raise
+
+
+def in_phase(name, operation, *args, **kwargs):
+    with backup_phase(name):
+        return operation(*args, **kwargs)
+
+
+def failure_details(error):
+    """Never include exception text, commands, paths, streams or environment values."""
+    return {
+        "phase": getattr(error, "_offhost_phase", "backup_preflight"),
+        "error_type": type(error).__name__,
+        "returncode": error.returncode
+        if isinstance(error, subprocess.CalledProcessError) and type(error.returncode) is int
+        else None,
+    }
 
 
 def assert_lease():
@@ -211,7 +238,9 @@ def transfer(args, remote_stage, pending, seed):
     transport = shlex.join(ssh(args)[:-1])
     remote_target = args.ssh_target
     remote_rsync = ["--rsync-path", shlex.join([*prefix(args), "/usr/bin/rsync"])]
-    run(
+    in_phase(
+        "transfer_data_snapshot",
+        run,
         [
             "/usr/bin/rsync",
             "-rt",
@@ -220,7 +249,7 @@ def transfer(args, remote_stage, pending, seed):
             transport,
             f"{remote_target}:{remote_stage}/",
             str(pending) + "/",
-        ]
+        ],
     )
     manifest = json.loads((pending / "manifest.json").read_text())
     recovery.require(manifest["source_project_root"] == str(args.remote_root), "wrong remote root")
@@ -282,7 +311,7 @@ def transfer(args, remote_stage, pending, seed):
                 f"{remote_target}:{source}/",
                 str(destination) + "/",
             ]
-            run(command)
+            in_phase("transfer_media", run, command)
         finally:
             file_list.unlink(missing_ok=True)
     return manifest
@@ -395,9 +424,11 @@ def snapshot_protected(args, stage, local, identifier, receipt, expected_session
     ]
     for value in args.protected_session:
         command += ["--session", value]
-    remote(args, command)
-    transfer_protected(args, stage, local)
-    proof = protected.verify(
+    in_phase("create_protected_snapshot", remote, args, command)
+    in_phase("transfer_protected_snapshot", transfer_protected, args, stage, local)
+    proof = in_phase(
+        "verify_protected_snapshot",
+        protected.verify,
         local,
         generation_id=identifier,
         data_manifest_sha256=receipt["generation_manifest_sha256"],
@@ -438,6 +469,11 @@ def publish_health(args, data_stage, protected_stage, receipt):
 
 
 def backup(args):
+    with backup_phase("backup_preflight"):
+        return _backup(args)
+
+
+def _backup(args):
     prepared_stage, prepared_checksum = prepared_snapshot_options(args)
     root = args.private_root.resolve()
     if getattr(args, "application_project_root", None) is not None:
@@ -507,7 +543,8 @@ def backup(args):
         secret_local = root / "protected-pending" / identifier
         if protected_enabled:
             secret_local.mkdir(mode=0o700)
-        with remote_lease(args):
+        with ExitStack() as lease_stack:
+            in_phase("remote_source_lease", lease_stack.enter_context, remote_lease(args))
             receipt = None
             receipt_published = False
             try:
@@ -531,25 +568,44 @@ def backup(args):
                     command += [f"--{role}-dir", str(args.remote_root / "data" / role)]
                 command += ["--published-dir", str(args.remote_published_dir)]
                 if prepared_stage is not None:
-                    check_prepared_snapshot(args, stage, prepared_checksum)
+                    in_phase(
+                        "check_prepared_snapshot",
+                        check_prepared_snapshot,
+                        args,
+                        stage,
+                        prepared_checksum,
+                    )
                 else:
-                    remote(args, command)
-                transfer(args, stage, pending, seed.resolve())
+                    in_phase("create_source_snapshot", remote, args, command)
+                in_phase("transfer_data", transfer, args, stage, pending, seed.resolve())
                 if prepared_stage is not None:
                     recovery.require(
                         recovery.digest(pending / "manifest.json") == prepared_checksum,
                         "prepared snapshot manifest changed during transfer",
                     )
                 assert_lease()
-                manifest = recovery.verify_directory(pending, progress_check=assert_lease)
-                receipt = recovery.verify_application(pending, manifest, run_child=guarded_child)
+                manifest = in_phase(
+                    "verify_data_manifest",
+                    recovery.verify_directory,
+                    pending,
+                    progress_check=assert_lease,
+                )
+                receipt = in_phase(
+                    "verify_application_restore",
+                    recovery.verify_application,
+                    pending,
+                    manifest,
+                    run_child=guarded_child,
+                )
                 assert_lease()
                 recovery.require(
                     datetime.fromisoformat(receipt["created_at"]) <= datetime.now(UTC),
                     "source snapshot time is in the future",
                 )
                 if protected_enabled:
-                    receipt["protected_proof"] = snapshot_protected(
+                    receipt["protected_proof"] = in_phase(
+                        "protected_recovery",
+                        snapshot_protected,
                         secret_args,
                         secret_stage,
                         secret_local,
@@ -567,14 +623,22 @@ def backup(args):
                 )
                 destination = root / "generations" / identifier
                 assert_lease()
-                pending.rename(destination)
-                if protected_enabled:
-                    secret_local.rename(root / "protected" / identifier)
-                atomic_json(root / "receipts" / f"{identifier}.json", receipt)
+                with backup_phase("promote_verified_generation"):
+                    pending.rename(destination)
+                    if protected_enabled:
+                        secret_local.rename(root / "protected" / identifier)
+                    atomic_json(root / "receipts" / f"{identifier}.json", receipt)
                 receipt_published = True
                 if getattr(args, "publish_health_receipt", False):
                     try:
-                        publish_health(secret_args, stage, secret_stage, receipt)
+                        in_phase(
+                            "publish_health_receipt",
+                            publish_health,
+                            secret_args,
+                            stage,
+                            secret_stage,
+                            receipt,
+                        )
                     except BaseException:
                         receipt["health_receipt_published"] = False
                         atomic_json(root / "receipts" / f"{identifier}.json", receipt)
@@ -583,12 +647,13 @@ def backup(args):
                     atomic_json(root / "receipts" / f"{identifier}.json", receipt)
                 # Only accepted generations participate; failed/pending work never displaces one.
                 assert_lease()
-                prior = [entry for entry in completed(root) if entry[1] != destination]
-                for _, old, _receipt in prior[:-1]:
-                    shutil.rmtree(old)
-                    if protected_enabled and (root / "protected" / old.name).exists():
-                        shutil.rmtree(root / "protected" / old.name)
-                    (root / "receipts" / f"{old.name}.json").unlink()
+                with backup_phase("rotate_verified_generations"):
+                    prior = [entry for entry in completed(root) if entry[1] != destination]
+                    for _, old, _receipt in prior[:-1]:
+                        shutil.rmtree(old)
+                        if protected_enabled and (root / "protected" / old.name).exists():
+                            shutil.rmtree(root / "protected" / old.name)
+                        (root / "receipts" / f"{old.name}.json").unlink()
                 return receipt
             finally:
                 # Generated staging only; never delete original configuration/session/media.
@@ -694,8 +759,13 @@ def main():
             KeyError,
             TypeError,
             subprocess.SubprocessError,
-        ):
-            print(json.dumps({"result": "backup_failed", "accepted": False}), file=sys.stderr)
+        ) as error:
+            print(
+                json.dumps(
+                    {"result": "backup_failed", "accepted": False, **failure_details(error)}
+                ),
+                file=sys.stderr,
+            )
             raise SystemExit(1) from None
 
 
