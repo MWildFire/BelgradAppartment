@@ -113,22 +113,50 @@ def test_cleanup_does_not_replace_the_original_failure_phase():
     assert job.failure_details(failed.value)["phase"] == "transfer_data_snapshot"
 
 
+def test_failure_context_cycle_is_bounded_and_private_context_is_not_reported():
+    original = subprocess.CalledProcessError(23, ["fixture-private-command"])
+    original._offhost_phase = "transfer_data_snapshot"
+    cleanup = BrokenPipeError("fixture-private-cleanup")
+    cleanup.__context__ = original
+    original.__context__ = cleanup
+    assert job.failure_details(cleanup) == {
+        "phase": "transfer_data_snapshot",
+        "error_type": "CalledProcessError",
+        "returncode": 23,
+    }
+
+
+def test_untagged_context_does_not_replace_a_known_operation():
+    error = subprocess.CalledProcessError(23, ["fixture-private-command"])
+    error._offhost_phase = "transfer_data_snapshot"
+    error.__context__ = OSError("fixture-private-earlier-handled-error")
+    assert job.failure_details(error)["error_type"] == "CalledProcessError"
+
+
 @pytest.mark.parametrize(
-    "phase",
+    "phase,cleanup_failure",
     [
-        "remote_source_lease",
-        "create_source_snapshot",
-        "transfer_data_snapshot",
+        ("remote_source_lease", False),
+        ("create_source_snapshot", False),
+        ("transfer_data_snapshot", False),
+        ("transfer_data_snapshot", True),
     ],
 )
-def test_real_backup_failure_reports_the_exact_early_boundary(source, tmp_path, monkeypatch, phase):
+def test_real_backup_failure_reports_the_exact_early_boundary(
+    source, tmp_path, monkeypatch, phase, cleanup_failure
+):
     args = environment(source, tmp_path, monkeypatch)
     previous_remote = job.remote
 
     @contextmanager
     def failed_lease(_args):
-        raise recovery.RecoveryError("fixture-private-lock")
-        yield  # pragma: no cover
+        if phase == "remote_source_lease":
+            raise recovery.RecoveryError("fixture-private-lock")
+        try:
+            yield
+        finally:
+            if cleanup_failure:
+                raise BrokenPipeError("fixture-private-cleanup")
 
     def failed_remote(remote_args, command):
         if "snapshot" in command:
@@ -138,15 +166,20 @@ def test_real_backup_failure_reports_the_exact_early_boundary(source, tmp_path, 
     def failed_transfer(_command, **_kwargs):
         raise subprocess.CalledProcessError(23, ["fixture-private-command"])
 
-    if phase == "remote_source_lease":
+    if phase == "remote_source_lease" or cleanup_failure:
         monkeypatch.setattr(job, "remote_lease", failed_lease)
-    elif phase == "create_source_snapshot":
+    if phase == "create_source_snapshot":
         monkeypatch.setattr(job, "remote", failed_remote)
-    else:
+    elif phase == "transfer_data_snapshot":
         monkeypatch.setattr(job, "run", failed_transfer)
-    with pytest.raises((recovery.RecoveryError, subprocess.CalledProcessError)) as failed:
+    with pytest.raises(
+        (recovery.RecoveryError, subprocess.CalledProcessError, BrokenPipeError)
+    ) as failed:
         job.backup(args)
     assert job.failure_details(failed.value)["phase"] == phase
+    if phase == "transfer_data_snapshot":
+        assert job.failure_details(failed.value)["returncode"] == 23
+        assert job.failure_details(failed.value)["error_type"] == "CalledProcessError"
     assert job.completed(args.private_root) == []
     pending = list((args.private_root / "pending").iterdir())
     assert len(pending) == 1 and not list(pending[0].iterdir())

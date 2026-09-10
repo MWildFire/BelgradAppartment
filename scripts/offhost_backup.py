@@ -40,7 +40,7 @@ _LEASE = ContextVar("offhost_source_lease", default=None)
 
 @contextmanager
 def backup_phase(name):
-    """Keep the first failing operation even when cleanup also has to run."""
+    """Tag an operation failure; its context preserves it if cleanup also raises."""
     try:
         yield
     except Exception as error:
@@ -56,6 +56,20 @@ def in_phase(name, operation, *args, **kwargs):
 
 def failure_details(error):
     """Never include exception text, commands, paths, streams or environment values."""
+    # A context manager's exit can replace the operation exception (e.g. broken SSH
+    # stdin while releasing the lease). Report its original tagged context, without
+    # changing exception propagation or trusting unrelated untagged exception text.
+    selected = error
+    current = error
+    seen = set()
+    for _ in range(16):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        if hasattr(current, "_offhost_phase"):
+            selected = current
+        current = current.__context__
+    error = selected
     return {
         "phase": getattr(error, "_offhost_phase", "backup_preflight"),
         "error_type": type(error).__name__,
