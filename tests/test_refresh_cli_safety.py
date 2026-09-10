@@ -48,6 +48,58 @@ async def test_all_item_errors_fail_even_with_previews(monkeypatch, tmp_path):
     forbidden.assert_not_called()
 
 
+@pytest.mark.parametrize("skipped", [0, 3])
+async def test_link_budget_skips_control_nightly_exit_and_durable_status(
+    monkeypatch, tmp_path, skipped
+):
+    import src.jobs.run_history as history
+    import src.telegram.bot_delivery as bot_delivery
+    import src.telegram.delivery as delivery
+    from src.scrapers import orchestrator
+
+    settings = commands.get_settings()
+    for name, value in {
+        "data_dir": tmp_path,
+        "nightly_heal_limit": 0,
+        "nightly_detail_refresh": 0,
+        "nightly_verify_links": True,
+        "nightly_auto_publish": False,
+        "nightly_metrics": False,
+        "nightly_prune_embeddings": False,
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+    results = [ScrapeResult(platform=p, previewed=5, fetched=5) for p in commands.SCRAPERS]
+    monkeypatch.setattr(commands, "_run_all", AsyncMock(return_value=results))
+    verify = AsyncMock(
+        return_value=orchestrator.LinkVerifyStats(checked=5 - skipped, skipped=skipped)
+    )
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify)
+    monkeypatch.setattr(commands, "_build_price_drop_alerts", AsyncMock(return_value=([], None)))
+    for name in ("_liveness_nightly_line", "_analytics_nightly_line", "_dupes_report_nightly_line"):
+        monkeypatch.setattr(commands, name, AsyncMock(return_value="ok"))
+    forbidden = AsyncMock(side_effect=AssertionError("external transport opened"))
+    monkeypatch.setattr(commands, "_open_userbot_if_needed", forbidden)
+    monkeypatch.setattr(delivery, "send_text_to_recipients", forbidden)
+    monkeypatch.setattr(bot_delivery, "retry_pending_match_deliveries", forbidden)
+
+    if skipped:
+        with pytest.raises(SystemExit) as exc:
+            await commands._nightly_refresh(5, 3, True, False, incremental=True, no_notify=True)
+        assert exc.value.code == 1
+    else:
+        await commands._nightly_refresh(5, 3, True, False, incremental=True, no_notify=True)
+
+    verify.assert_awaited_once()
+    runs = history.read_runs(tmp_path / "state" / "refresh_runs")
+    assert len(runs) == 1 and runs[0]["finished_at"]
+    assert runs[0]["status"] == ("degraded" if skipped else "success")
+    link_line = next(line for line in runs[0]["summary"] if "ссылки: проверено" in line)
+    assert link_line.startswith("🚨") is bool(skipped)
+    if skipped:
+        assert "пропущено по бюджету: 3" in link_line
+    forbidden.assert_not_called()
+
+
 async def test_dry_run_skips_every_mutating_maintenance_step(monkeypatch):
     from types import SimpleNamespace
 

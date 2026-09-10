@@ -1921,7 +1921,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
-            if vl.errors:
+            if vl.errors or vl.skipped:
                 line = "🚨 " + line
             lines.append(line)
         except Exception:
