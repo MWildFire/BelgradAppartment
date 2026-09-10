@@ -2,43 +2,25 @@
 
 Цель этого документа — дать новому агенту или человеку проверяемый контекст для продолжения работы над проектом.
 
-> **НАЧАТЬ ЗДЕСЬ — план исправлений 08.09, работа возобновлена 10.09.2026.**
-> Дмитрий поручил: «Продолжай работу до конца». Предыдущие просьбы о паузе сняты.
-> Кандидат выпуска `4684f4709df727accac20cebff598f47a272e5bd`: **1513 unit /54 browser /CI34449236488 PASS**.
-> Исправлены конкурентный delivery finalizer, ложный success пропущенных link checks,
-> скорость публичного каталога (индекс0014 + узкая проекция) и права папок выпуска при umask077.
-> Реальный изолированный Linux startup:18.029s, health/ready/catalog200, clean shutdown;
-> прежний production runtime совместим с DB0014, новые тестовые данные сохранены.
-> **Production:4684f47, DB0014; выпуск и первичная live-проверка PASS.**
-> Все207 прав публикации сохранены: каталог188 квартир, карта174, sitemap188;
-> опубликованные фото GET/HEAD200, известное закрытое фото GET/HEAD404, admin401.
-> Caddy обход закрыт; 12capacity settings применены, остальные env-строки имеют прежний SHA.
-> Все3 службы перезапущены с новой конфигурацией; readiness200 за7.187s.
-> Свежая внешняя generation0013 **20260910-072302-c5c6aa45** полностью принята:
-> 1,053,270files/5468photo references, DB/app/photo/config/2sessions проверены.
-> Automatic backup0014 запущен настоящим LaunchAgent RunAtLoad07:45:24UTC;
-> Первый запуск failed; фоновой службе исправлен путь к тому же SSH key.
-> Новый RunAtLoad08:06:22UTC:gen20260910-080628-2989418e, sourcePID331909, restorepending.
-> Telegram source08:00UTC проверен: последний альбом09.09 уже вDB, watermark совпал.
-> Future operator tools HEAD8756a6d; app4684 и running backup runtime2fb не менялись.
-> После реального automatic backup PASS: public canary → full/automatic acceptance.
-> Baseline10.09:207 прав публикации; старые184 не считать сегодняшним инвариантом.
-> Детальные текущие результаты и каждый F-ID — в статусе ниже и [доказательствах10.09](docs/reviews/2026-09-10-resume-evidence.json).
-> История пауз08.09: [15:56](docs/reviews/2026-09-08-checkpoint-1556.md),
-> [предыдущее продолжение](docs/reviews/2026-09-08-continuation-handoff.md).
-> Их запреты на возобновление и старые команды backup/release теперь исторические.
-> Реализовать [план исправлений F01–F23](docs/superpowers/plans/2026-09-08-reliability-remediation.md).
-> Причины и доказательства: [ревью](docs/reviews/2026-09-08-project-review.md), [production baseline](docs/reviews/2026-09-08-evidence.json).
-> Прогресс вести в [статусе реализации](docs/reviews/2026-09-08-implementation-status.md).
-> Weekly **запускается**, но последний success скрыл 677 ошибок Nekretnine; legacy proxy отвечает 402;
-> ошибка public-dedup скрывала 20 активных карточек/16 квартир на baseline. **Ремонт выполняется**
-> в `codex/reliability-2026-09-08`; точный локальный/live статус каждого F-ID — по ссылке выше.
-> План 08.09 заменяет временные freezes и очередь задач августовской миграции для этого ремонта;
-> успешный пользовательский результат бота и приватность сохраняются. Начать с W0 → W1/W2,
-> не покупать новые ISP и не включать active только из-за старого PASS.
-> **Все пометки «актуальный», «самый свежий», «следующий шаг» ниже — исторические на указанную дату.**
-> Не выполнять старые команды деплоя со старым VPS по умолчанию. Полномочия на внешние действия
-> определяются актуальной инструкцией Дмитрия, а не историей ниже.
+> **НАЧАТЬ ЗДЕСЬ — ПАУЗА 10.09.2026, 12:35 Asia/Dubai.**
+> Последняя команда Дмитрия: «Остановись не надолго. Продолжим позже. Сделай чекпоинт и расскажи про статус».
+> **Продолжать только после новой команды.** Агенты остановлены, Codex heartbeat не создан.
+> Самодостаточный [чекпоинт10.09](docs/reviews/2026-09-10-checkpoint-1235.md) — текущая точка входа.
+> Production **4684f4709df727accac20cebff598f47a272e5bd /DB0014** уже выпущен:
+> 1513unit/54browser/CI PASS; live207 прав публикации сохранены, каталог188/карта174/sitemap188.
+> Published photos200, actual private photo404, admin401; Caddy bypass закрыт, новые лимиты применены.
+> Рабочие site/monitor/admin/Caddy и прежние4 timers включены. Новый public timer пока выключен.
+> Последняя принятая внешняя копия **20260910-072302-c5c6aa45**, schema0013: полный restore PASS.
+> Новый automatic RunAtLoad0014 **20260910-080628-2989418e прерван по просьбе пользователя**.
+> Backup LaunchAgent disabled/unloaded; local pending сохранён; runner удалил собственный remote staging.
+> Source/canary процессов нет, leases свободны. Для0014 понадобится новая копия; canary/full не запускались.
+> Фоновый SSH исправлен private operational path того же ключа; 4.208s реальная launchd probe PASS.
+> Canary runner frozen ebb0d66e:39tests/independent review PASS, live не установлен/не запускался.
+> Правильный Telegram source проверен: последний альбом09.09 уже вDB; исторического replay нет.
+> Все F01–F23: [статус](docs/reviews/2026-09-08-implementation-status.md), [доказательства10.09](docs/reviews/2026-09-10-resume-evidence.json).
+> План08.09: [remediation](docs/superpowers/plans/2026-09-08-reliability-remediation.md).
+> Сохранять привычный результат Render Finder для Даши, snapshot shadow, activeoff, ручные публикации.
+> Старые пометки «продолжать/актуально/следующий шаг» ниже исторические; новая пауза имеет приоритет.
 
 > **Исторический план миграции (24.08.2026; контекст):**
 > [`Nekretnine Zero-Regression — list snapshot + ISP proxy без изменений Render Finder Bot`](docs/superpowers/plans/2026-08-24-nekretnine-zero-regression-isp-migration.md).

@@ -2683,5 +2683,229 @@
     "root_release_tests_passed": 46,
     "current_running_backup_runtime": "2fb3971 unchanged",
     "new_stable_runtime": "being_prepared_separately"
+  },
+  "pause_20260910": {
+    "observed_at": "2026-09-10T08:37:59.544783+00:00",
+    "user_request": "Остановись не надолго. Продолжим позже. Сделай чекпоинт и расскажи про статус",
+    "result": "paused_by_user_not_complete",
+    "resume_requires_new_user_command": true,
+    "launchagent": {
+      "observed_at": "2026-09-10T08:37:59.544783+00:00",
+      "label": "com.mvstrike.rentbelgrad-backup",
+      "unloaded": true,
+      "disabled": true,
+      "recurrence_paused_by_user": true,
+      "initial_disabled_false_was_parser_error": true,
+      "plist_retained": true
+    },
+    "local_backup": {
+      "observed_at": "2026-09-10T08:37:59.544783+00:00",
+      "backup_lock_available": true,
+      "generation": "20260910-080628-2989418e",
+      "new_receipt_exists": false,
+      "pending_manifest_exists": false,
+      "pending_retained": true,
+      "protected_pending_retained": true,
+      "interruption": "KeyboardInterrupt",
+      "trace_functions": [
+        "<module>",
+        "main",
+        "backup",
+        "remote",
+        "run",
+        "communicate",
+        "_communicate",
+        "select"
+      ],
+      "backup_related_local_processes_observed_after_stop": 0,
+      "canary_sha256": "ebb0d66e0cb493ede4e351ba375a697d20f3b8207f4d7d12e219338c73b07055"
+    },
+    "server_readback": {
+      "observed_at": "2026-09-10T08:34:23.458699+00:00",
+      "release": "4684f4709df727accac20cebff598f47a272e5bd",
+      "source_stage_exists": false,
+      "source_manifest_exists": false,
+      "owned_backup_or_canary_processes": [],
+      "offhost_lease_available": true,
+      "recovery_receipt": {
+        "generation_id": "20260910-072302-c5c6aa45",
+        "created_at": "2026-09-10T06:53:33.721055+00:00",
+        "manifest_sha256": "7029ef4fa88ec70aba31dd69c11fb9c0f626f709360fdb114bd7825107d6cdb2",
+        "offhost_verified": true,
+        "protected_recovery_verified": true,
+        "database": {
+          "revisions": [
+            "0013_delivery_outcomes"
+          ],
+          "schema_sha256": "dce42d1de3ecf75fc01441180bd0cae03475e337e331ab2bfb729377f67cc29e",
+          "table_counts": {
+            "alembic_version": 1,
+            "daily_metrics": 345,
+            "inbound_posts": 704,
+            "leads": 12,
+            "listings": 77454,
+            "match_deliveries": 0,
+            "matches": 394,
+            "published_posts": 391,
+            "site_events": 7934,
+            "site_listings": 290,
+            "site_stats_daily": 1413,
+            "source_channels": 1,
+            "subscription_deliveries": 0,
+            "subscription_matches": 0,
+            "subscriptions": 0
+          }
+        }
+      },
+      "services": {
+        "otz-site.service": {
+          "MainPID": "328218",
+          "ActiveState": "active",
+          "SubState": "running"
+        },
+        "otz-monitor.service": {
+          "MainPID": "328217",
+          "ActiveState": "active",
+          "SubState": "running"
+        },
+        "otz-admin.service": {
+          "MainPID": "328219",
+          "ActiveState": "active",
+          "SubState": "running"
+        },
+        "caddy.service": {
+          "MainPID": "540",
+          "ActiveState": "active",
+          "SubState": "running"
+        }
+      },
+      "timers": {
+        "otz-nightly-refresh.timer": {
+          "NextElapseUSecRealtime": "Fri 2026-09-11 03:07:30 UTC",
+          "LastTriggerUSec": "Thu 2026-09-10 03:03:37 UTC",
+          "ActiveState": "active",
+          "SubState": "waiting"
+        },
+        "otz-weekly-full-refresh.timer": {
+          "NextElapseUSecRealtime": "Sun 2026-09-13 02:05:21 UTC",
+          "LastTriggerUSec": "Sun 2026-09-06 04:01:42 UTC",
+          "ActiveState": "active",
+          "SubState": "waiting"
+        },
+        "otz-scrape-smoke.timer": {
+          "NextElapseUSecRealtime": "Thu 2026-09-10 12:34:26 UTC",
+          "LastTriggerUSec": "Thu 2026-09-10 06:31:57 UTC",
+          "ActiveState": "active",
+          "SubState": "waiting"
+        },
+        "otz-daily-summary.timer": {
+          "NextElapseUSecRealtime": "Fri 2026-09-11 07:00:00 UTC",
+          "LastTriggerUSec": "Thu 2026-09-10 07:00:07 UTC",
+          "ActiveState": "active",
+          "SubState": "waiting"
+        },
+        "otz-public-detail-refresh.timer": {
+          "NextElapseUSecRealtime": "",
+          "LastTriggerUSec": "",
+          "ActiveState": "inactive",
+          "SubState": "dead"
+        }
+      }
+    },
+    "canary": {
+      "result": "offline_review_pass_not_installed_or_run",
+      "sha256": "ebb0d66e0cb493ede4e351ba375a697d20f3b8207f4d7d12e219338c73b07055",
+      "tests_passed": 39,
+      "review": "independent_pass_author_freeze_confirmed"
+    },
+    "stable_offhost_runtime": {
+      "result": "stable_runtime_verified_not_installed_or_launched",
+      "revision": "8756a6dc42a93a4326276a4c60f1ee8c277edb38",
+      "runtime_root": "/Users/mvstrike/Backups/RentBelgrad/offhost/runtime/8756a6d",
+      "source_files_verified": 432,
+      "source_inventory_exact_after_tests": true,
+      "all_git_blobs_match": true,
+      "application_and_recovery_unchanged": {
+        "src": {
+          "git_object": "de2bba785509337b49c5324c76023a7dbced381a",
+          "identical_to_4684": true
+        },
+        "alembic": {
+          "git_object": "6289fe05d7ae6c2116672d2d358ba6c0242ba99b",
+          "identical_to_4684": true
+        },
+        "scripts/recovery.py": {
+          "git_object": "f37edcb6381b3d1e63b5307ae4b89ceff031d3ac",
+          "identical_to_4684": true
+        },
+        "scripts/protected_recovery.py": {
+          "git_object": "c797e1ef023c6a8b9f010e122a044705774957be",
+          "identical_to_4684": true
+        },
+        "uv.lock": {
+          "git_object": "673dcf2bd04c7bf2ea0f1474281bde731cc5ecbe",
+          "identical_to_4684": true
+        },
+        "pyproject.toml": {
+          "git_object": "296873dafbc94a1c292046716698423b4aa85ebb",
+          "identical_to_4684": true
+        }
+      },
+      "scripts": {
+        "scripts/release.py": "b9a0e5ac8a500191ffc1d983d1396fe55b8e32a8c2e97550e5adda8d46b76329",
+        "scripts/offhost_backup.py": "52c9266b836ef0e673487b92076f4a2b710fc3cc9df8e85c14114976e0260f81",
+        "scripts/recovery.py": "9a0b2f3d85c2550c7a7da33a20a0d81c639b5e96bc2de8ca7b65e04bea83e2f4",
+        "scripts/protected_recovery.py": "571cf58bbdd55cab94f925fe3229cd198722c4c8fafa1cd540222782c5a09e3b"
+      },
+      "python": "3.12.13",
+      "installed_packages": 67,
+      "locked_versions_match": true,
+      "non_editable_install": true,
+      "dev_dependencies_absent": true,
+      "schema_heads": [
+        "0014_group_availability_index"
+      ],
+      "expected_tables": 15,
+      "focused_fake_tests": "11 passed, 1 PytestConfigWarning in10.39s",
+      "test_warning": "asyncio_mode configuration warning because external pytest plugins were intentionally disabled; focused tests are synchronous",
+      "test_python": "/Users/mvstrike/Backups/RentBelgrad/offhost/runtime/8756a6d/venv/bin/python",
+      "external_test_tooling_readonly": "/Users/mvstrike/Backups/RentBelgrad/2026-09-10/check-venv/lib/python3.12/site-packages appended after new runtime paths",
+      "permissions": {
+        "directories": 719,
+        "private_regular_files": 6806,
+        "executable_regular_files": 227,
+        "symlinks_left_unchanged": 3
+      },
+      "credential_artifacts_copied": [],
+      "old_runtime_selected_hashes_unchanged": true,
+      "launchagent_modified": false,
+      "ssh_calls": 0,
+      "live_backup_calls": 0,
+      "archive_sha256": "304804115c5ae711f38e2b3c7ffc0dc688900241646182119ed5c05a5034cbcc",
+      "evidence_sha256": {
+        "offhost-runtime-8756a6d-install.log": "376a7b94cce4f0f806d970ee13e39960cf0e269b17ab0da089f12798204b211e",
+        "offhost-runtime-8756a6d-lock-check.json": "d680dc8899e262e721b91827d6457f7d68c837fdbf0428216de3fa02ea8954ce",
+        "offhost-runtime-8756a6d-tests.log": "afe08fa213b36bee878fc250355c271ec9e04e96ddcd07579de47df4d4ffe54a",
+        "offhost-runtime-8756a6d-build.json": "48c4175b738e2a01b7a4f82a111e7368c19ff1d02816b690d4dec5fbd9cd1a1b",
+        "offhost-runtime-8756a6d-imports.json": "342c82169182abce296d72beb441560e1a02edf0bc66e47c11b39ad27cd41418"
+      }
+    },
+    "latest_pushed_ci": {
+      "head": "356c05ebfd9e3b0722c35d4b45eaffdb7f49a65e",
+      "run": 34454175058,
+      "unit_job": 102796625335,
+      "browser_job": 102796625104,
+      "conclusions": [
+        "success",
+        "success"
+      ]
+    },
+    "evidence_paths": {
+      "pause-launchagent.json": "/Users/mvstrike/Backups/RentBelgrad/2026-09-10/pause-launchagent.json",
+      "pause-launchagent-readback.json": "/Users/mvstrike/Backups/RentBelgrad/2026-09-10/pause-launchagent-readback.json",
+      "pause-local-readback.json": "/Users/mvstrike/Backups/RentBelgrad/2026-09-10/pause-local-readback.json",
+      "pause-server-readback.json": "/Users/mvstrike/Backups/RentBelgrad/2026-09-10/pause-server-readback.json"
+    },
+    "checkpoint": "docs/reviews/2026-09-10-checkpoint-1235.md"
   }
 }

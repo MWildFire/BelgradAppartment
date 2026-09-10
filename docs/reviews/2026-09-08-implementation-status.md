@@ -1,6 +1,6 @@
 # RentBelgrad — статус реализации ревью 08.09.2026
 
-Обновлено 10.09.2026, около12:15 Asia/Dubai. **Работа выполняется до конца по команде Дмитрия.** Выпущена4684f47, liveDB0014; сохранены207 прав публикации. Проверены все188 квартир каталога,174 точки карты,188 sitemap URL, доступ к опубликованным/закрытым фото и admin auth. Новые настройки применены к работающим службам. Настоящий автоматический backup0014 запущен через RunAtLoad; первый запуск завершился exit1 без принятой копии. Фоновый доступ исправлен заменой только пути к тому же ключу; новый настоящий RunAtLoad08:06:22UTC создаёт0014 generation. Data canary, полный и автоматический проходы ещё не приняты.
+Обновлено 10.09.2026, около12:35 Asia/Dubai. **Пауза по просьбе Дмитрия; продолжать только после новой команды.** Выпущена4684f47/DB0014, live каталог и защита фото проверены. Агенты остановлены; backup прерван и LaunchAgent disabled/unloaded, прежние рабочие службы/таймеры сохранены. Новая0014 копия, data canary, полный и автоматический проходы ещё не приняты. Самодостаточный [чекпоинт паузы](2026-09-10-checkpoint-1235.md).
 
 - План: [reliability remediation](../superpowers/plans/2026-09-08-reliability-remediation.md); [ревью F01–F23](2026-09-08-project-review.md); [исторический baseline](2026-09-08-evidence.json).
 - Ветка `codex/reliability-2026-09-08`, замороженный кандидат `4684f4709df727accac20cebff598f47a272e5bd`, опубликован в GitHub. Общий frozen gate:1513unit PASS/1skip,54browser PASS; GitHub CI34449236488 оба jobs SUCCESS. Новый индекс — additive migration0014. Предыдущий ccafc5c не прошёл CI; его PASS не используется для нового выпуска.
@@ -16,7 +16,7 @@
 | F04 | Public representative | live_verified | 207 исходных прав неизменны; все8 страниц каталога188=DB representatives, карта174=geo subset, sitemap188; loss0 |
 | F05 | Apartment availability | live_verified | Все188 catalog representatives и174 map points согласованы сDB:68 active/120 unknown.8 detail witnesses включают inactive original с active sibling; статусы совпали. Freshness — отдельный F08 |
 | F06 | Общая политика снятия | deployed | all-DEAD/pin/live sibling/warn-only/cap, race-safe policy;207 live rights unchanged. Controlled data pass pending |
-| F07 | Backup/recovery | in_progress | Свежая внешняя0013 generation полностью принята доrelease;0014 automatic RunAtLoad07:45:24UTC/PID46794 начат, первый automatic запуск failed/acceptedfalse; key-path fix подтверждён, новый RunAtLoad08:06:22UTC/gen080628 выполняется |
+| F07 | Backup/recovery | in_progress | Свежая внешняя0013 generation полностью принята доrelease;0014 automatic RunAtLoad07:45:24UTC/PID46794 начат, первый automatic запуск failed/acceptedfalse; key-path fix подтверждён, новый RunAtLoad08:06:22UTC/gen080628 прерван по просьбе пользователя08:32UTC; staging штатно удалён, pending сохранён,0014 restore не выполнен; LaunchAgent disabled/unloaded |
 | F08 | Успешная свежесть/квота | in_progress | Quota2400/nightly реально применена. Baseline active13360, подтверждённых новых successes0; требуется минимум2004 successes/day, реальная success rate ещёнеизмерена. Public timer offдоcanary;24h/7d targets pending |
 | F09 | Attempt отдельно от success | deployed | Additive0014 без ложного backfill successes. Isolated20/20verified PASS; первый production data canary pending |
 | F10 | Конкуренция процессов | deployed | Per-platform leases/bounded wait/3process tests PASS. Live concurrent automatic outcomes pending |
@@ -32,7 +32,7 @@
 | F20 | HTML escaping | deployed | HTML input escaping and readable plain text regression PASS; deployedhash verified; no test email sent |
 | F21 | Link queue без starvation | deployed | Oldest eligible/backoff/fair inactive public queue tests PASS; live limited runs pending |
 | F22 | 0/1/несколько фото | deployed | 0/1/album API contract and frozen Finder caption/photo-order/recipients oracle PASS; historical oversized312 not replayed |
-| F23 | CI/env/instructions | in_progress | Exact4684:1513unit/54browser/static/CI34449236488 SUCCESS; actual frozen release and201hashes PASS. Final docs/automatic evidence pending |
+| F23 | CI/env/instructions | in_progress | Exact4684:1513unit/54browser/static/CI34449236488 SUCCESS; actual frozen release and201hashes PASS. Canary harness39tests+independent review PASS, но live не запущен. Документы паузы сохранены; final automatic evidence pending |
 
 **Проверки:** baseline1148 passed/1 skipped. Exact `7ff9512`: unit **1491 passed / 1 skipped / 36 warnings** (126.59s), browser **54 passed** (59.24s), changed-code lint0, shell syntax, frozen lock107packages и diff-check PASS. [GitHub Actions34219047309](https://github.com/MWildFire/BelgradAppartment/actions/runs/34219047309) — jobsunit102037573646/browser102037573868 **SUCCESS**. Packet423files SHA25624eab5705afae640ffaaabc5c40588c356559ab9aa069d42f596f163046ac053. Предыдущий2f8b31a:1440unit/54browser иCI34217184273PASS.
 
@@ -46,9 +46,15 @@
 - AWS Console требует IAM/root sign-in; безопасных AWS/B2/rclone credentials на проверенных стандартных путях сервера нет. Security Group/cloud backup пока не подтверждены. Используется реально доступная внешняя защищённая копия на Mac.
 - Ошибка worker QA: старый wrapper в изолированном worktree запустил SSH/rsync к obsolete VPS из теста; процессы немедленно остановлены на стадии соединения, transfer output не наблюдался. Это не доказательство zero remote effect. Дальнейшие проверки используют current wrapper и fake subprocess; повторное обращение не выполняется.
 
-**Следующее действие:** принять настоящий automatic backup0014 generation20260910-080628-2989418e, затем public canary20/600s с запретом сообщений и before/after/media proof; после него полный и автоматический проходы. Root единственный live operator. Новые операторские guards8756a6d готовятся отдельно; работающий app остаётся4684f47, backup runtime2fb3971 не меняется во время процесса.
+**Следующее действие:** ждать новой команды Дмитрия. После неё короткая live-проверка → новая автоматическая source/restore0014 (старый прерванный staging удалён) → reviewed public canary20/600s → полный и реальный автоматический проходы. ExactcanarySHA/runtime8756/receipts/команды — в чекпоинте. Не запускать по прежним разрешениям на продолжение, пока действует новая пауза.
 
 ## Журнал реализации
+
+### 10.09, 08:32–08:35UTC — пауза пользователя
+
+- Все агенты остановлены, frozen canary ebb0d66e прошёл39offline tests/review, live не установлен/не запускался. Runbook принят локальным docs commit197161f; без production изменений.
+- LaunchAgent disable/SIGINT/bootout завершились; отдельный readback disabled+unloaded PASS. Runner удалил свой source staging, interrupted generation не принята, local pending сохранён. Local/remote leases свободны, source/canary процессов0. Последняя принятая copy0013 прежняя.
+- На08:34:23UTC четыре рабочие службы active/running, прежние4 timers active, новый public timer inactive. Полный checkpoint с точными шагами продолжения сохранён; самовозобновления нет.
 
 ###10.09,08:00–08:15UTC — точная source диагностика и исправление фонового backup
 
