@@ -481,6 +481,15 @@ def effective_units(deploy):
                 configured["ExecStart"] in actual["ExecStart"],
                 f"effective {unit.name} command differs from release",
             )
+            # Replacing a base unit leaves local drop-ins active. Canonical services
+            # without a pre-start command must not inherit one (for example a legacy
+            # browser download outside the application lease). Other overrides remain
+            # operator-owned; do not reject or delete a drop-in merely because it exists.
+            if not configured.get("ExecStartPre"):
+                require(
+                    not actual["ExecStartPre"],
+                    f"effective {unit.name} has unexpected ExecStartPre",
+                )
             for key in ("User", "Type", "WorkingDirectory"):
                 require(actual[key] == configured[key], f"effective {unit.name} {key} differs")
             if "TimeoutStartSec" in configured:

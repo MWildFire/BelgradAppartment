@@ -211,6 +211,77 @@ def test_canonical_timers_separate_refresh_and_smoke_windows():
         assert f"RandomizedDelaySec={random}" in text and "Persistent=true" in text
 
 
+@pytest.fixture
+def effective_service(tmp_path, monkeypatch):
+    """Replay systemctl's effective values without invoking a host command."""
+    deploy = tmp_path / "deploy"
+    deploy.mkdir()
+    properties = {}
+    queried = []
+
+    def configure(name):
+        source = (release.ROOT / "deploy" / name).read_text()
+        (deploy / name).write_text(source)
+        configured = dict(
+            line.split("=", 1)
+            for line in source.splitlines()
+            if "=" in line and not line.lstrip().startswith("#")
+        )
+        properties.update(
+            ExecStart=f"{{ argv[]={configured['ExecStart']} ; ignore_errors=no ; }}",
+            ExecStartPre="",
+            User=configured["User"],
+            Type=configured["Type"],
+            WorkingDirectory=configured["WorkingDirectory"],
+            TimeoutStartUSec=configured.get("TimeoutStartSec", "1min 30s"),
+            DropInPaths="",
+        )
+        return deploy, properties, queried
+
+    def command(args, **kwargs):
+        assert args[:2] == ["systemctl", "show"]
+        assert args[2].startswith("otz-") and (deploy / args[2]).is_file()
+        assert args[3].startswith("--property=") and args[4:] == ["--value"]
+        assert kwargs == {"capture": True}
+        queried.append(args)
+        return properties[args[3].removeprefix("--property=")]
+
+    monkeypatch.setattr(release, "run", command)
+    return configure
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["otz-weekly-full-refresh.service", "otz-scrape-smoke.service", "otz-site.service"],
+)
+def test_effective_units_rejects_prestart_absent_from_canonical_service(effective_service, name):
+    deploy, properties, _ = effective_service(name)
+    # The legacy weekly drop-in survived base-unit replacement in the actual deployment.
+    properties.update(
+        ExecStartPre=(
+            "{ path=/opt/otz/.venv/bin/playwright ; "
+            "argv[]=/opt/otz/.venv/bin/playwright install chromium ; ignore_errors=no ; }"
+        ),
+        DropInPaths=f"/etc/systemd/system/{name}.d/10-playwright.conf",
+    )
+    with pytest.raises(release.ReleaseError, match="unexpected ExecStartPre"):
+        release.effective_units(deploy)
+
+
+def test_effective_units_allows_unrelated_dropins_without_mutating_units(effective_service):
+    name = "otz-weekly-full-refresh.service"
+    deploy, properties, queried = effective_service(name)
+    # Non-command overrides remain an operator setting, not an automatic rejection/removal.
+    properties["DropInPaths"] = f"/etc/systemd/system/{name}.d/20-resources.conf"
+    (deploy / "other.service").write_text("[Service]\nExecStart=/bin/true\n")
+    evidence = release.effective_units(deploy)
+    assert list(evidence) == [name]
+    assert evidence[name]["DropInPaths"] == properties["DropInPaths"]
+    assert evidence[name]["ExecStartPre"] == ""
+    assert queried and all(args[:2] == ["systemctl", "show"] for args in queried)
+    assert (deploy / "other.service").read_text() == "[Service]\nExecStart=/bin/true\n"
+
+
 @pytest.mark.parametrize("failure", [None, "browser", "health", "hash"])
 @pytest.mark.parametrize("process_umask", [0o022, 0o077])
 def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
