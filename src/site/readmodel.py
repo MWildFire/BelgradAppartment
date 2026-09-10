@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.orm import load_only
 
 from src.config import get_settings
 from src.db.models import InboundPost, Listing, Match, PublishedPost, SiteListing
@@ -152,6 +153,17 @@ async def _load_rows(
     """
     stmt = (
         select(SiteListing, Listing, InboundPost, PublishedPost.published_at)
+        .options(
+            # Public display and the legacy comparison need only these scalars. Avoid
+            # decoding scraper payloads and copying CLIP blobs for every public card.
+            load_only(
+                Listing.price_eur, Listing.area_m2, Listing.rooms, Listing.district,
+                Listing.lat, Listing.lon, Listing.dup_group_id, Listing.is_active,
+                Listing.link_status, Listing.deactivated_at, Listing.absence_streak,
+                Listing.is_primary, Listing.title, Listing.description, raiseload=True,
+            ),
+            load_only(InboundPost.photo_paths, raiseload=True),
+        )
         .join(Match, Match.id == SiteListing.match_id)
         .join(Listing, Listing.id == Match.listing_id)
         .join(InboundPost, InboundPost.id == Match.inbound_post_id, isouter=True)

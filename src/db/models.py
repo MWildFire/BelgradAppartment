@@ -164,6 +164,12 @@ class Listing(Base):
         Index("ix_listing_scraped_at", "scraped_at"),
         Index("ix_listings_last_seen_at", "last_seen_at"),
         Index("ix_listings_platform_active", "platform", "is_active"),
+        # Public availability reads these five scalars for authorized apartment groups;
+        # covering them avoids scanning the scraper payload/embedding table on each view.
+        Index(
+            "ix_listings_group_availability", "dup_group_id", "is_active", "link_status",
+            "deactivated_at", "absence_streak",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
