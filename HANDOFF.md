@@ -2,19 +2,31 @@
 
 Цель этого документа — дать новому агенту или человеку проверяемый контекст для продолжения работы над проектом.
 
-> **НАЧАТЬ ЗДЕСЬ — актуальная передача от 08.09.2026.**
-> **ПОВТОРНАЯ ПАУЗА 08.09 в 15:56 Dubai по просьбе Дмитрия.** Сначала прочитать
-> [новый чекпоинт](docs/reviews/2026-09-08-checkpoint-1556.md). Агенты остановлены;
-> source snapshot0013 завершён, local restore ещё не начат. ccafc5c локально1500/54PASS,
-> но CIoutbox concurrency FAIL и isolatedcoldstartFAIL остаются blockers. Не возобновлять
-> работу и не создавать automation до новой команды пользователя. Сайт работает на старом
-> коде после отката; DB0013 сохранена. Нижний блок возобновления14:25 — история.
-> **ВОЗОБНОВЛЕНО ПО КОМАНДЕ ДМИТРИЯ, 08.09 около14:25 Dubai.** Сначала прочитать
-> [документ продолжения](docs/reviews/2026-09-08-continuation-handoff.md).
-> Перваяактивация7ff9512 (1491unit/54browser/CI PASS) автоматическиоткатилась11:23UTC:
-> startuphealthнеуспелза6sec. Старыеservicesactive/site200; DB0013сохранена.
-> Full0011offhostrestore/protectedproofPASS; fresh0013backup и startupwaitfix вработе.
-> Исторический документ паузы сохранён; актуальный прогресс — в статусе реализации ниже.
+> **НАЧАТЬ ЗДЕСЬ — план исправлений 08.09, работа возобновлена 10.09.2026.**
+> Дмитрий поручил: «Продолжай работу до конца». Предыдущие просьбы о паузе сняты.
+> Кандидат выпуска `4684f4709df727accac20cebff598f47a272e5bd`: **1513 unit /54 browser /CI34449236488 PASS**.
+> Исправлены конкурентный delivery finalizer, ложный success пропущенных link checks,
+> скорость публичного каталога (индекс0014 + узкая проекция) и права папок выпуска при umask077.
+> Реальный изолированный Linux startup:18.029s, health/ready/catalog200, clean shutdown;
+> прежний production runtime совместим с DB0014, новые тестовые данные сохранены.
+> **Production:4684f47, DB0014; выпуск и первичная live-проверка PASS.**
+> Все207 прав публикации сохранены: каталог188 квартир, карта174, sitemap188;
+> опубликованные фото GET/HEAD200, известное закрытое фото GET/HEAD404, admin401.
+> Caddy обход закрыт; 12capacity settings применены, остальные env-строки имеют прежний SHA.
+> Все3 службы перезапущены с новой конфигурацией; readiness200 за7.187s.
+> Свежая внешняя generation0013 **20260910-072302-c5c6aa45** полностью принята:
+> 1,053,270files/5468photo references, DB/app/photo/config/2sessions проверены.
+> Automatic backup0014 запущен настоящим LaunchAgent RunAtLoad07:45:24UTC;
+> Первый запуск failed; фоновой службе исправлен путь к тому же SSH key.
+> Новый RunAtLoad08:06:22UTC:gen20260910-080628-2989418e, sourcePID331909, restorepending.
+> Telegram source08:00UTC проверен: последний альбом09.09 уже вDB, watermark совпал.
+> Future operator tools HEAD8756a6d; app4684 и running backup runtime2fb не менялись.
+> После реального automatic backup PASS: public canary → full/automatic acceptance.
+> Baseline10.09:207 прав публикации; старые184 не считать сегодняшним инвариантом.
+> Детальные текущие результаты и каждый F-ID — в статусе ниже и [доказательствах10.09](docs/reviews/2026-09-10-resume-evidence.json).
+> История пауз08.09: [15:56](docs/reviews/2026-09-08-checkpoint-1556.md),
+> [предыдущее продолжение](docs/reviews/2026-09-08-continuation-handoff.md).
+> Их запреты на возобновление и старые команды backup/release теперь исторические.
 > Реализовать [план исправлений F01–F23](docs/superpowers/plans/2026-09-08-reliability-remediation.md).
 > Причины и доказательства: [ревью](docs/reviews/2026-09-08-project-review.md), [production baseline](docs/reviews/2026-09-08-evidence.json).
 > Прогресс вести в [статусе реализации](docs/reviews/2026-09-08-implementation-status.md).
