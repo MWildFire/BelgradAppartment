@@ -115,13 +115,22 @@ def packet(tmp_path, monkeypatch):
     return target
 
 
-def test_packet_is_exact_tracked_revision_without_local_secrets(packet, tmp_path):
+@pytest.mark.parametrize("process_umask", [0o022, 0o077])
+def test_packet_is_exact_tracked_revision_without_local_secrets(packet, tmp_path, process_umask):
     destination = tmp_path / "extract"
-    manifest = release.unpack_packet(packet, destination)
+    destination.mkdir(mode=0o700)
+    previous_umask = release.os.umask(process_umask)
+    try:
+        manifest = release.unpack_packet(packet, destination)
+    finally:
+        release.os.umask(previous_umask)
     assert (destination / "code/src/app.py").read_text() == "version=1"
     assert not (destination / "code/.env").exists()
     assert (destination / "code/scripts/release.py").stat().st_mode & 0o777 == 0o755
     assert (destination / "code/src").stat().st_mode & 0o777 == 0o755
+    assert (destination / "code/scripts").stat().st_mode & 0o777 == 0o755
+    assert (destination / "code").stat().st_mode & 0o777 == 0o755
+    assert destination.stat().st_mode & 0o777 == 0o700
     assert manifest["tests"]["revision"] == manifest["revision"]
 
 
@@ -203,8 +212,9 @@ def test_canonical_timers_separate_refresh_and_smoke_windows():
 
 
 @pytest.mark.parametrize("failure", [None, "browser", "health", "hash"])
+@pytest.mark.parametrize("process_umask", [0o022, 0o077])
 def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
-    tmp_path, monkeypatch, backup_receipt, failure
+    tmp_path, monkeypatch, backup_receipt, failure, process_umask
 ):
     """Exercise actual activation/rollback path with isolated files and fake host commands."""
     root = tmp_path / "app"
@@ -251,6 +261,7 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
         version = (root / "src/app.py").read_text()
         events.append((args, version))
         if args[0] == "runuser":
+            assert (root / ".releases" / revision).stat().st_mode & 0o777 == 0o750
             browser_commands.append((args, kwargs))
             if "-c" in args and failure == "browser":
                 raise release.ReleaseError("fixture Chromium launch failed")
@@ -282,11 +293,15 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
 
     monkeypatch.setattr(pwd, "getpwnam", lambda user: SimpleNamespace(pw_dir=str(tmp_path)))
     args = argparse.Namespace(remote_root=root, uv_bin=uv, backup_receipt=receipt, packet=None)
-    if failure:
-        with pytest.raises(release.ReleaseError):
-            release.activate(args)
-    else:
-        assert release.activate(args)["result"] == "activated_manual_verification_pending"
+    previous_umask = release.os.umask(process_umask)
+    try:
+        if failure:
+            with pytest.raises(release.ReleaseError):
+                release.activate(args)
+        else:
+            assert release.activate(args)["result"] == "activated_manual_verification_pending"
+    finally:
+        release.os.umask(previous_umask)
     assert len(browser_commands) == 2
     install, launch = browser_commands
     assert install[0][-2:] == ["install", "chromium"]

@@ -262,6 +262,7 @@ def unpack_packet(packet, destination):
             "packet inventory mismatch",
         )
         validate_tests(manifest["tests"], manifest["revision"], manifest["required_checks"])
+        destination.mkdir(mode=0o700, parents=True, exist_ok=True)
         for member in members:
             content = tar.extractfile(member).read()
             if member.name != "release.json":
@@ -270,7 +271,21 @@ def unpack_packet(packet, destination):
                     "packet hash mismatch",
                 )
             target = destination / member.name
-            target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+            # Runtime folders must remain traversable after a root-private operator
+            # invocation. Correct only directories created for validated packet paths;
+            # the private outer staging directory and existing folders keep their modes.
+            directory = destination
+            for part in Path(member.name).parts[:-1]:
+                directory = directory / part
+                try:
+                    directory.mkdir(mode=0o755)
+                except FileExistsError:
+                    require(
+                        directory.is_dir() and not directory.is_symlink(),
+                        "unsafe packet directory",
+                    )
+                else:
+                    directory.chmod(0o755)
             target.write_bytes(content)
             target.chmod(
                 0o600
@@ -565,6 +580,7 @@ def activate(args):
                 not release.exists(), "release already staged; inspect existing activation first"
             )
             release.mkdir(parents=True, mode=0o750)
+            release.chmod(0o750)
             release.parent.chmod(0o750)
             run(["chown", "root:otz", str(release.parent), str(release)])
             shutil.copytree(unpacked / "code", release / "code")
