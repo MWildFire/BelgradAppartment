@@ -19,6 +19,7 @@ from pathlib import Path
 from aiogram import Bot
 from aiogram.types import FSInputFile, InputMediaPhoto
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import selectinload
 
 from src.admin.publish import auto_publish_site_listing
@@ -282,6 +283,9 @@ async def send_match_via_bot(
         ).order_by(MatchDelivery.id))).scalars().all()
     if confirmed:
         first_msg_id = confirmed[0].message_ids[0]
+        # A worker can lose every claim to another fanout. Its newly rendered text
+        # must not replace the immutable caption that was actually delivered.
+        full_caption = confirmed[0].payload["caption"]
     if not confirmed:
         if preflight_error is not None:
             raise preflight_error
@@ -305,12 +309,22 @@ async def send_match_via_bot(
             existing.post_text = full_caption
             published = existing
         else:
-            published = PublishedPost(
+            inserted_id = (await s.execute(sqlite_insert(PublishedPost).values(
                 match_id=match_id,
                 tg_message_id=first_msg_id,
                 post_text=full_caption,
-            )
-            s.add(published)
+            ).on_conflict_do_nothing(index_elements=["match_id"])
+              .returning(PublishedPost.id))).scalar_one_or_none()
+            published = (await s.execute(select(PublishedPost).where(
+                PublishedPost.match_id == match_id
+            ))).scalar_one()
+            if inserted_id is None:
+                # Another process committed this summary and its site overlay. Its
+                # unique-row win is not a failed send and must not roll back ours.
+                return published
+            # The insert now owns SQLite's write lock. Re-read a human rejection
+            # committed while this worker waited before changing the match status.
+            await s.refresh(m)
         # PENDING→PUBLISHED only: never resurrect a REJECTED set by a human mid-send.
         m.status = resolve_post_send_status(m.status)
         # X1 auto-publish: expose the card on the site in THIS session — but only when the

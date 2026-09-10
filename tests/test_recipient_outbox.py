@@ -6,14 +6,18 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import select
+import pytest_asyncio
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
+import src.db.session as db_session
 from src.config import get_settings
 from src.db import get_session
-from src.db.models import MatchDelivery, PublishedPost
+from src.db.models import Base, MatchDelivery, MatchStatus, PublishedPost
 from src.telegram import bot_delivery
 from src.telegram.delivery_ledger import (
     claim_recipient,
+    finish_recipient,
     prepare_recipients,
     reconcile_match_delivery,
 )
@@ -31,6 +35,24 @@ async def _states(mid):
 def bot_config(monkeypatch):
     monkeypatch.setattr(get_settings(), "tg_bot_recipients", "123,456")
     monkeypatch.setattr(get_settings(), "auto_publish_on_send", False)
+
+
+@pytest_asyncio.fixture
+async def concurrent_db(tmp_path, monkeypatch):
+    """Separate SQLite connections with the production WAL/timeout/FK settings.
+
+    The shared :memory: fixture puts independent sessions on one connection; one
+    session's rollback can undo another session's uncommitted delivery receipt.
+    """
+    monkeypatch.setattr(db_session, "_engine", None)
+    monkeypatch.setattr(db_session, "_session_factory", None)
+    engine = db_session.init_engine(f"sqlite+aiosqlite:///{tmp_path}/outbox.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    try:
+        yield engine
+    finally:
+        await db_session.dispose_engine()
 
 
 @pytest.mark.asyncio
@@ -75,7 +97,7 @@ async def test_timeout_after_acceptance_is_unknown_not_automatically_replayed(db
 
 
 @pytest.mark.asyncio
-async def test_atomic_claim_allows_only_one_concurrent_sender(db, tmp_path, bot_config):
+async def test_atomic_claim_allows_only_one_concurrent_sender(concurrent_db, tmp_path, bot_config):
     mid = await _seed_match_with_real_photo(get_session, tmp_path)
     await prepare_recipients(mid, [123])
     claims = await asyncio.gather(claim_recipient(mid, 123), claim_recipient(mid, 123))
@@ -121,7 +143,7 @@ async def test_missing_media_never_records_success(db, tmp_path, bot_config, mon
 
 
 @pytest.mark.asyncio
-async def test_full_concurrent_fanouts_send_each_recipient_once(db, tmp_path, bot_config, monkeypatch):
+async def test_full_concurrent_fanouts_send_each_recipient_once(concurrent_db, tmp_path, bot_config, monkeypatch):
     mid = await _seed_match_with_real_photo(get_session, tmp_path)
     bot = StrictBot()
     original = bot.send_photo
@@ -130,8 +152,115 @@ async def test_full_concurrent_fanouts_send_each_recipient_once(db, tmp_path, bo
         return await original(**kwargs)
     bot.send_photo = slow_send
     monkeypatch.setattr(bot_delivery, "_make_bot", lambda: bot)
-    await asyncio.gather(bot_delivery.send_match_via_bot(mid), bot_delivery.send_match_via_bot(mid), return_exceptions=True)
+    results = await asyncio.gather(
+        bot_delivery.send_match_via_bot(mid), bot_delivery.send_match_via_bot(mid),
+    )
     assert sorted(c["chat_id"] for c in bot.photo_calls) == [123, 456]
+    assert await _states(mid) == {123: "sent", 456: "sent"}
+    assert len({result.id for result in results}) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejected_during_finalize", [False, True])
+async def test_concurrent_finalizers_keep_one_summary_and_confirmed_receipts(
+    concurrent_db, tmp_path, bot_config, monkeypatch, rejected_during_finalize,
+):
+    """Both workers observe no summary before writing; neither may lose its receipt."""
+    from src.db.models import Match, SiteListing
+
+    mid = await _seed_match_with_real_photo(get_session, tmp_path)
+    monkeypatch.setattr(get_settings(), "auto_publish_on_send", True)
+    bot = StrictBot()
+    send_barrier = asyncio.Barrier(2)
+
+    async def concurrent_send(**kwargs):
+        bot.photo_calls.append(kwargs)
+        await send_barrier.wait()
+        return SimpleNamespace(message_id=kwargs["chat_id"] + 1000)
+
+    bot.send_photo = concurrent_send
+    monkeypatch.setattr(bot_delivery, "_make_bot", lambda: bot)
+    receipt_barrier = asyncio.Barrier(2)
+    original_finish = bot_delivery.finish_recipient
+
+    async def commit_both_receipts(*args, **kwargs):
+        await original_finish(*args, **kwargs)
+        await receipt_barrier.wait()
+
+    monkeypatch.setattr(bot_delivery, "finish_recipient", commit_both_receipts)
+    finalize_barrier = asyncio.Barrier(2)
+    rejection_committed = asyncio.Event()
+    summary_reads = {}
+    finalizer_connections = set()
+    original_execute = AsyncSession.execute
+
+    async def intersect_finalizers(session, statement, *args, **kwargs):
+        result = await original_execute(session, statement, *args, **kwargs)
+        if getattr(statement, "is_select", False) and any(
+            item.get("entity") is PublishedPost for item in statement.column_descriptions
+        ):
+            task = asyncio.current_task()
+            summary_reads[task] = summary_reads.get(task, 0) + 1
+            if summary_reads[task] == 2:
+                connection = await session.connection()
+                raw = await connection.get_raw_connection()
+                finalizer_connections.add(id(raw.driver_connection))
+                last_reader = await finalize_barrier.wait()
+                if rejected_during_finalize:
+                    if last_reader == 0:
+                        async with get_session() as operator:
+                            await operator.execute(update(Match).where(Match.id == mid)
+                                                   .values(status=MatchStatus.REJECTED))
+                        rejection_committed.set()
+                    await rejection_committed.wait()
+        return result
+
+    monkeypatch.setattr(AsyncSession, "execute", intersect_finalizers)
+    async with asyncio.timeout(10):
+        results = await asyncio.gather(
+            bot_delivery.send_match_via_bot(mid), bot_delivery.send_match_via_bot(mid),
+        )
+    assert len(finalizer_connections) == 2
+    assert sorted(call["chat_id"] for call in bot.photo_calls) == [123, 456]
+    assert len({result.id for result in results}) == 1
+    async with get_session() as session:
+        rows = (await session.execute(select(MatchDelivery))).scalars().all()
+        assert {row.recipient_id: (row.status, row.message_ids, row.attempts) for row in rows} == {
+            123: ("sent", [1123], 1), 456: ("sent", [1456], 1),
+        }
+        assert all(row.claim_token is None and row.delivered_at is not None for row in rows)
+        published = (await session.execute(select(PublishedPost))).scalar_one()
+        assert published.tg_message_id == 1123
+        assert published.post_text == bot.photo_calls[0]["caption"]
+        status = MatchStatus.REJECTED if rejected_during_finalize else MatchStatus.PUBLISHED
+        assert (await session.get(Match, mid)).status == status
+        overlay = (await session.execute(select(SiteListing))).scalar_one_or_none()
+        assert overlay is None if rejected_during_finalize else overlay.is_public
+    # A subsequent automatic retry must not replay either confirmed recipient.
+    assert (await bot_delivery.retry_pending_match_deliveries())["considered"] == 0
+    assert len(bot.photo_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_summary_without_owned_claim_uses_the_confirmed_frozen_caption(
+    db, tmp_path, bot_config, monkeypatch,
+):
+    mid = await _seed_match_with_real_photo(get_session, tmp_path)
+    from src.db.models import InboundPost
+
+    async with get_session() as session:
+        paths = (await session.execute(select(InboundPost.photo_paths))).scalar_one()
+    frozen = {"caption": "Даша: согласованный Finder", "photo_paths": paths}
+    await prepare_recipients(mid, [123, 456], payload=frozen)
+    for chat_id in [123, 456]:
+        token = await claim_recipient(mid, chat_id)
+        await finish_recipient(mid, chat_id, token, message_ids=[chat_id + 1000])
+    bot = StrictBot()
+    monkeypatch.setattr(bot_delivery, "_make_bot", lambda: bot)
+    published = await bot_delivery.send_match_via_bot(mid, post_text_override="Другой текст")
+    assert published.post_text == frozen["caption"]
+    assert published.tg_message_id == 1123
+    assert bot.photo_calls == [] and bot.album_calls == []
     assert await _states(mid) == {123: "sent", 456: "sent"}
 
 
