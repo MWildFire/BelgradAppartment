@@ -318,8 +318,9 @@ def transfer(args, remote_stage, pending, seed):
                 "-0",
                 "--files-from",
                 str(file_list),
-                "--link-dest",
-                str(seed / archive),
+                # Unchanged files were hardlinked above. Changed files must come
+                # from the source; openrsync retains link-dest descriptors and
+                # exhausts launchd's file limit on large changed batches.
                 "-e",
                 transport,
                 f"{remote_target}:{source}/",

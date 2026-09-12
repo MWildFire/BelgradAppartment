@@ -22,6 +22,37 @@ from tests.test_protected_recovery import protected_source as protected_fixture
 from tests.test_recovery import source as recovery_source
 
 
+@pytest.mark.skipif(not Path("/usr/bin/rsync").exists(), reason="system rsync not installed")
+def test_changed_media_batch_restores_under_launchd_file_limit(source, tmp_path, monkeypatch):
+    import resource
+
+    for number in range(600):
+        folder = source.listings_dir / str(number)
+        folder.mkdir()
+        (folder / "data.bin").write_bytes(b"old1")
+    args = environment(source, tmp_path, monkeypatch)
+    for number in range(600):
+        (source.listings_dir / str(number) / "data.bin").write_bytes(b"new1")
+    original_run = subprocess.run
+
+    def limited_rsync(command, **kwargs):
+        if command[0] == "/usr/bin/rsync":
+            def set_limit():
+                hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+                resource.setrlimit(resource.RLIMIT_NOFILE, (256, hard_limit))
+            kwargs["preexec_fn"] = set_limit
+        return original_run(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", limited_rsync)
+    receipt = job.backup(args)
+    generation = args.private_root / "generations" / receipt["generation_id"]
+    assert receipt["offhost_verified"]
+    for number in range(600):
+        relative = Path("data/listings") / str(number) / "data.bin"
+        assert (generation / relative).read_bytes() == b"new1"
+        assert (args.seed_dir / relative).read_bytes() == b"old1"
+
+
 @pytest.fixture
 def source(tmp_path):
     return recovery_source.__wrapped__(tmp_path)

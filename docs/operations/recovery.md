@@ -111,10 +111,17 @@ Mac directory. It creates complete immutable generations, not incomplete daily a
 SQLite online snapshot + all state + every file declared in all media roots + a complete
 manifest. Media unchanged by SHA-256 is hard-linked from the previous generation or an
 extracted seed on the same filesystem. Changed files use system rsync protocol 29 with
-`--link-dest`, `-I` and an exact NUL-separated file list; no `--inplace`, source deletion
+`-I` and an exact NUL-separated file list. The changed-file transfer deliberately omits
+`--link-dest`: unchanged files are already linked explicitly, and macOS openrsync can
+exhaust launchd's file descriptor limit when copying changed files from a link destination.
+No `--inplace`, source deletion
 or remote prune occurs. Source and receiver re-hash all media; this consumes local I/O
 but unchanged image bytes are neither retransferred nor duplicated per day. New or
 changed media still requires its actual extra disk space.
+
+The photo index is frozen before enumerating media, so concurrent publication cannot
+add index references after the file inventory is fixed. Restore still requires every
+indexed original and derivative, every DB photo reference, and every declared checksum.
 
 Preserve the first completed full archive's extraction instead of downloading it again:
 
