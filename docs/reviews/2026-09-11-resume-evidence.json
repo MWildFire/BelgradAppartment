@@ -1,0 +1,151 @@
+{
+  "observed_at": "2026-09-10T20:56:49.227398+00:00",
+  "revision": "4684f4709df727accac20cebff598f47a272e5bd",
+  "schema": [
+    "0014_group_availability_index"
+  ],
+  "aws_console": "deferred_by_user",
+  "backup": {
+    "generation": "20260910-184241-f1d30b53",
+    "result": "data_restore_verified",
+    "files": 1053274,
+    "photo_references": 5468,
+    "protected_recovery_verified": true,
+    "live_authentication_checked": false,
+    "automatic_launchagent_exit_code": 0,
+    "receipt_sha256": "f2e55cf356ff7afd9743b618d99824ca80b724a6179e0d18523edd83513ce1bd"
+  },
+  "canaries": [
+    {
+      "name": "public-canary-evening-001",
+      "result": "canary_failed",
+      "child_exit": 1,
+      "supervisor_problem": "unattributed_new_otz_process",
+      "attempted": 10,
+      "verified": 7,
+      "safety_checks": {
+        "all_overlays_unchanged": true,
+        "bounded_public_attempts": true,
+        "existing_inbound_originals_unchanged": true,
+        "listing_identity_unchanged": true,
+        "new_successful_public_checkpoint_matches_database": false,
+        "public_original_identity_unchanged": true,
+        "public_rights_unchanged": true,
+        "real_success_progress": true
+      },
+      "media_phash_verified_count": 175,
+      "residual_processes": 0
+    },
+    {
+      "name": "public-canary-evening-002",
+      "result": "canary_failed",
+      "child_exit": 1,
+      "supervisor_problem": null,
+      "attempted": 20,
+      "verified": 13,
+      "safety_checks": {
+        "all_overlays_unchanged": true,
+        "bounded_public_attempts": true,
+        "existing_inbound_originals_unchanged": true,
+        "listing_identity_unchanged": true,
+        "new_successful_public_checkpoint_matches_database": false,
+        "public_original_identity_unchanged": true,
+        "public_rights_unchanged": true,
+        "real_success_progress": true
+      },
+      "media_phash_verified_count": 337,
+      "residual_processes": 0
+    }
+  ],
+  "controlled_full": {
+    "unit": "rentbelgrad-controlled-full-20260910",
+    "invocation_id": "db2017f08eae451b933b4f008a6083ad",
+    "run_id": "932d921313d64651b19f185cfee7e65f",
+    "status": "running",
+    "notifications_enabled": false,
+    "automatic_hiding_enabled": false,
+    "prior_timers": "paused_until_owned_cleanup",
+    "automatic_run": false,
+    "sources_observed": [
+      {
+        "platform": "NEKRETNINE",
+        "outcome": "degraded",
+        "errors": 1,
+        "previewed": 4365,
+        "inserted": 229,
+        "updated": 1607,
+        "crawl_complete": false,
+        "sweep_allowed": false,
+        "stop_reason": "source_timeout",
+        "quality_reasons": [
+          "cancelled",
+          "TimeoutError"
+        ],
+        "proxy_metrics": {
+          "proxy_attempts": 1123,
+          "proxy_failovers": 2,
+          "proxy_challenges": 2,
+          "proxy_errors": 0,
+          "browser_proxy_errors": 0,
+          "http_attempts": 557,
+          "http_errors": 557,
+          "http_recovered_errors": 557,
+          "http_residual_errors": 0,
+          "browser_attempts": 566,
+          "browser_errors": 9,
+          "browser_recovered_errors": 9,
+          "http_attempts_primary": 195,
+          "browser_attempts_primary": 199,
+          "browser_attempts_secondary": 211,
+          "http_attempts_secondary": 207,
+          "browser_attempts_additional-1": 156,
+          "http_attempts_additional-1": 155,
+          "failed_proxy_slots": 2
+        }
+      }
+    ],
+    "step": "scrape:CETIRI_ZIDA"
+  },
+  "public_timer": "inactive",
+  "plan_complete": false,
+  "separate_canary_safety_acceptance": {
+    "attempted": 20,
+    "confirmed_dead": 5,
+    "diagnostic_sha256": "acc3cde67e6f0a7a6854e759a38ebcb79d5b5eb7389c6c8f222aa2f1044c13e8",
+    "empty_source_unknown": 2,
+    "failed": 7,
+    "finished_at": "2026-09-10T20:43:10.089128+00:00",
+    "original_failed_receipt_sha256": "ba3c1f365f64e8a66cb6d3fe142ad359e584ca4bb5573a404b22d294d8ce720c",
+    "preflight": {
+      "backup": {
+        "accepted_and_server_match": true,
+        "created_at": "2026-09-10T18:43:11.133564+00:00",
+        "generation_id": "20260910-184241-f1d30b53",
+        "manifest_sha256": "7ad22618d53bf0c77ffd24507bc303fc59405181cdd90b9805c92699b70b8861",
+        "offhost_restore_verified": true,
+        "protected_restore_verified": true,
+        "schema": [
+          "0014_group_availability_index"
+        ]
+      },
+      "evidence_helper_sha256": "f418688e876a8971e4bd3008792792f87d0e741de95dc850a06c359bbc326c23",
+      "release_marker_sha256": "4672a302efe14dd8359ad92dcbc480dde4abe195324df5c055fae6f3f8f4e271",
+      "revision": "4684f4709df727accac20cebff598f47a272e5bd"
+    },
+    "quality_status": "degraded",
+    "result": "canary_safety_verified_quality_degraded",
+    "revision": "4684f4709df727accac20cebff598f47a272e5bd",
+    "safety_checks": {
+      "deactivation_count_matches_confirmed_dead": true,
+      "every_failure_independently_probed_readonly": true,
+      "failed_content_media_and_prior_success_preserved": true,
+      "failures_are_confirmed_dead_or_unresolved_empty_source": true,
+      "no_residual_processes": true,
+      "normal_child_exit_with_honest_quality_failure": true,
+      "original_strict_safety_and_media_passed": true,
+      "terminal_degraded_checkpoint_matches_all_attempts": true
+    },
+    "scope": "permits controlled full run with notifications and automatic hiding disabled; not quality success",
+    "verified": 13
+  }
+}

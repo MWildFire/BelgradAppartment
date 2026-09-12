@@ -1,0 +1,264 @@
+{
+  "format": 1,
+  "observation_date": "2026-09-12",
+  "production_revision": "52266a2cce295342cd5b8a1ea3c7ceea0d1a040d",
+  "code_commits": [
+    "97d6493",
+    "bde91c5",
+    "52266a2"
+  ],
+  "tests": {
+    "unit_passed": 1545,
+    "unit_skipped": 1,
+    "browser_passed": 54,
+    "recovery_targeted_passed": 54,
+    "ci_run_id": 34705731731,
+    "ci_result": "success"
+  },
+  "packet_sha256": "115df94e84c35183de1dda986a3199d177a2373fdd0a8de3db024eb07ee7cd58",
+  "live_postdeploy": {
+    "result": "postdeploy_readonly_checks_passed",
+    "database": {
+      "expected_map_ids_sha256": "8fac6a45da10720144923464eee33662b4dc159513f8cce45de07d0e73053034",
+      "expected_map_point_count": 181,
+      "foreign_key_errors": 0,
+      "integrity": "ok",
+      "private_candidate_excluded_from_all_public_media": true,
+      "private_candidate_exists": true,
+      "private_rows_scanned": 1,
+      "public_overlay_rights_sha256": "a6f260e17644c7f41fa69fd064d2d3fde99f8c7d9a1fc17fabc3e05bca07d166",
+      "public_representative_count": 194,
+      "public_representative_ids_sha256": "44ed6ded53afd712696fc4cf89e15ae9a4917d9be3acf17771a498cad167b951",
+      "query_only": true,
+      "raw_public_overlay_count": 215,
+      "readonly_uri": true,
+      "schema": [
+        "0014_group_availability_index"
+      ]
+    },
+    "runtime": {
+      "revision_matches": true,
+      "runtime_files_verified": 201,
+      "runtime_hashes_match": true
+    },
+    "receipt_sha256": "6dd8b2afbda323fac8ebd95b2fdd2101c1ac71a13c0df2775903f7fc9252c90a"
+  },
+  "backup": {
+    "generation": "20260912-162130-917ffa02",
+    "files": 1068893,
+    "photo_references": 5631,
+    "source_created_at": "2026-09-12T16:21:55.657429+00:00",
+    "full_restore_accepted": true,
+    "protected_material_verified": true,
+    "session_live_authentication_checked": false,
+    "method": "operator_fresh_snapshot_reusing_unaccepted_media",
+    "receipt_sha256": "51d6c26ed4582d5b39a4cb5dea0b9bceaf740e1ba4ea8a1ebf3901b3d0d22442"
+  },
+  "backup_agent": {
+    "recorded_at": "2026-09-12T17:04:03.506479+00:00",
+    "runtime_revision": "52266a2cce295342cd5b8a1ea3c7ceea0d1a040d",
+    "code_files_verified": 435,
+    "uv": "0.8.22",
+    "python": "3.12.13",
+    "frozen_packages": 67,
+    "new_plist_sha256": "5ee943be5e03da9e6570237b406cc0e94ba569c325f864e54f6d8c56b7e8dba7",
+    "other_fields_preserved": true,
+    "startup_run_count": 1,
+    "startup_exit_code": 0,
+    "startup_result": "skipped_not_due",
+    "accepted_generation": "20260912-162130-917ffa02",
+    "full_automatic_backup_run": false
+  },
+  "capacity": {
+    "scrape_source_budget_sec": 3600,
+    "nightly_detail_refresh": 3000,
+    "public_detail_refresh_limit": 500,
+    "public_detail_refresh_budget_sec": 2400,
+    "nekretnine_list_snapshot_mode": "shadow",
+    "site_liveness_auto_hide": false
+  },
+  "canary_safety": {
+    "attempted": 20,
+    "confirmed_dead": 3,
+    "diagnostic_sha256": "94493942d2a9f8a7491e5342ada0887a73acdbad88234869361b094908922474",
+    "failed": 11,
+    "finished_at": "2026-09-12T17:19:43.957211+00:00",
+    "original_failed_receipt_sha256": "680000f5fd3ea895ee1fed7fde03665c7980ad657998552ab20bba88312439b9",
+    "preflight": {
+      "backup": {
+        "accepted_and_server_match": true,
+        "created_at": "2026-09-12T16:21:55.657429+00:00",
+        "generation_id": "20260912-162130-917ffa02",
+        "manifest_sha256": "da395d4abd8867f6a4fa4fee8e795b99d8726baf0b48a74cf3aee80a05e76ef4",
+        "offhost_restore_verified": true,
+        "protected_restore_verified": true,
+        "schema": [
+          "0014_group_availability_index"
+        ]
+      },
+      "evidence_helper_sha256": "f418688e876a8971e4bd3008792792f87d0e741de95dc850a06c359bbc326c23",
+      "release_marker_sha256": "34546ed871280fa0e36ae54455cd5109c4ac77b0a4456b61aef8496802becf9f",
+      "revision": "52266a2cce295342cd5b8a1ea3c7ceea0d1a040d"
+    },
+    "quality_status": "degraded",
+    "result": "canary_safety_verified_quality_degraded",
+    "revision": "52266a2cce295342cd5b8a1ea3c7ceea0d1a040d",
+    "safety_checks": {
+      "deactivation_count_matches_recorded_dead": true,
+      "every_failure_independently_probed_readonly": true,
+      "failed_attempts_have_backoff": true,
+      "failed_content_photos_and_prior_success_preserved": true,
+      "no_residual_processes": true,
+      "normal_supervised_degraded_exit": true,
+      "original_safety_media_and_attribution_passed": true,
+      "recorded_dead_has_independent_404_or_410": true,
+      "terminal_checkpoint_matches_database_attempts": true,
+      "unconfirmed_failures_do_not_change_availability": true
+    },
+    "scope": "permits scheduled public-only data refresh with automatic hiding disabled; does not assert source quality success",
+    "unresolved_failures": 8,
+    "verified": 9
+  },
+  "natural_delivery": {
+    "new_matches": 8,
+    "recipients_per_match": 2,
+    "sent_rows": 16,
+    "provider_ids_and_album_lengths_verified": true,
+    "operator_test_sends": 0,
+    "historical_replay": false
+  },
+  "public_automatic_start": {
+    "observed_at": "2026-09-12T17:33:24.433256+00:00",
+    "timer": "otz-public-detail-refresh.timer",
+    "last_trigger_utc": "2026-09-12T17:32:37+00:00",
+    "service": "otz-public-detail-refresh.service",
+    "invocation_id": "d42002917ae948339d9843ab0e8a9726",
+    "run_id": "457147e963cf49c5bc1369c1cb28fa1c",
+    "selected": 185,
+    "manual_start_performed": false,
+    "terminal_result_pending": false
+  },
+  "remaining_gates": [
+    "freshness_24h_7d_attainment",
+    "full_source_coverage",
+    "post_repair_full_automatic_backup",
+    "AWS_console_security_group_deferred_by_user"
+  ],
+  "public_automatic_terminal": {
+    "attempted_by_source": {
+      "CETIRI_ZIDA": 44,
+      "CITYEXPERT": 28,
+      "HALOOGLASI": 78,
+      "NEKRETNINE": 35
+    },
+    "checkpoint": {
+      "checkpoint_at": "2026-09-12T17:39:22.741261+00:00",
+      "deactivated": 22,
+      "errors": 43,
+      "final": true,
+      "photos": 0,
+      "price_changes": 1,
+      "run_id": "457147e963cf49c5bc1369c1cb28fa1c",
+      "selected": 185,
+      "skipped": 0,
+      "source_errors": {},
+      "stop_reason": "degraded",
+      "updated": 142,
+      "verified": 142
+    },
+    "checks": {
+      "all_selected_attempted": true,
+      "attempts_match": true,
+      "dead_count_matches": true,
+      "failed_have_backoff": true,
+      "failures_match": true,
+      "successes_match": true
+    },
+    "duration_sec": 406,
+    "exit_code": 1,
+    "exit_utc": "2026-09-12T17:39:23+00:00",
+    "failed_by_source": {
+      "CETIRI_ZIDA": 18,
+      "HALOOGLASI": 3,
+      "NEKRETNINE": 22
+    },
+    "invocation_id": "d42002917ae948339d9843ab0e8a9726",
+    "last_trigger_utc": "2026-09-12T17:32:37+00:00",
+    "manual_service_start": false,
+    "mode_ro": true,
+    "observed_at": "2026-09-12T17:41:20.374081+00:00",
+    "query_only": true,
+    "result": "terminal_checkpoint_database_verified",
+    "verified_by_source": {
+      "CETIRI_ZIDA": 26,
+      "CITYEXPERT": 28,
+      "HALOOGLASI": 75,
+      "NEKRETNINE": 13
+    }
+  },
+  "post_automatic": {
+    "result": "evidence_collected",
+    "http_status": "passed",
+    "catalog_representatives": 194,
+    "map_points": 181,
+    "public_rights": 215,
+    "public_rights_sha256": "6b40654ef112d30f82203afdd6a2e1304c19bca102001587d8827bbb951dd10b",
+    "public_rights_unchanged": true,
+    "core_services_active": 4,
+    "enabled_active_timers": 5,
+    "next_public_trigger_utc": "2026-09-12T23:33:45+00:00",
+    "computed_health": {
+      "attainment_from_quota_claimed": false,
+      "capacity_status": "estimate_only",
+      "configuration_source": "operator_explicit_argument",
+      "configured_daily_attempts": 3000,
+      "estimated_daily_attempts": 2431,
+      "last_full_success_by_source": {
+        "CETIRI_ZIDA": null,
+        "CITYEXPERT": "2026-09-11T00:45:58.122186+00:00",
+        "HALOOGLASI": null,
+        "NEKRETNINE": null
+      },
+      "minimum_daily_successes": 2168,
+      "reasons": [
+        "public_refresh_degraded",
+        "CETIRI_ZIDA_no_verified_full_8d",
+        "CETIRI_ZIDA_active_success_7d_below_95pct",
+        "CETIRI_ZIDA_public_success_24h_below_100pct",
+        "HALOOGLASI_no_verified_full_8d",
+        "HALOOGLASI_active_success_7d_below_95pct",
+        "HALOOGLASI_public_success_24h_below_100pct",
+        "NEKRETNINE_no_verified_full_8d",
+        "NEKRETNINE_active_success_7d_below_95pct",
+        "NEKRETNINE_public_success_24h_below_100pct"
+      ],
+      "status": "degraded",
+      "timer_evidence": "separate_operator_verification_required",
+      "unattended_updates_proven": false
+    },
+    "public_freshness_by_source": {
+      "CETIRI_ZIDA": {
+        "count": 49,
+        "success_24h": 27,
+        "success_7d": 29
+      },
+      "CITYEXPERT": {
+        "count": 33,
+        "success_24h": 33,
+        "success_7d": 33
+      },
+      "HALOOGLASI": {
+        "count": 83,
+        "success_24h": 77,
+        "success_7d": 77
+      },
+      "NEKRETNINE": {
+        "count": 40,
+        "success_24h": 15,
+        "success_7d": 15
+      }
+    },
+    "receipt_sha256": "21ed6fa07a0e867325b3234c7281c29069afc2021a56483ec136d05026c7039a",
+    "generic_report_unattended_flag_note": "Original generic collector does not consume systemd evidence; actual scheduled invocation and terminal proof are recorded separately above."
+  }
+}

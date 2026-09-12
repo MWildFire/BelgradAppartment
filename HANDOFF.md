@@ -1,8 +1,10 @@
 # otz-rent-finder — handoff документ
 
+> **ПРОДОЛЖЕНИЕ 12.09,17:42UTC:** [текущий итог](docs/reviews/2026-09-12-continuation.md). Production52266a2/0014 выпущен:1545unit/54browser/CI PASS, fresh backup1068893files/5631refs принят. Настоящий public timer17:32–17:39UTC:185attempts/142verified/43errors/0skipped, qualitydegraded; DB и post-run HTTP194catalog/181map/215rights PASS. Core4/4 и5timers active. Лимиты3600s/3000 применены, Finder8matches×2recipients подтверждён. Полные source-quality/freshness24h/7d, новая полная automatic backup после исправления и AWS Console остаются открытыми.
+
 Цель этого документа — дать новому агенту или человеку проверяемый контекст для продолжения работы над проектом.
 
-> **НАЧАТЬ ЗДЕСЬ — ПАУЗА 10.09.2026, 12:35 Asia/Dubai.**
+> **ИСТОРИЧЕСКИЙ ЧЕКПОИНТ — ПАУЗА 10.09.2026, 12:35 Asia/Dubai.**
 > Последняя команда Дмитрия: «Остановись не надолго. Продолжим позже. Сделай чекпоинт и расскажи про статус».
 > **Продолжать только после новой команды.** Агенты остановлены, Codex heartbeat не создан.
 > Самодостаточный [чекпоинт10.09](docs/reviews/2026-09-10-checkpoint-1235.md) — текущая точка входа.
