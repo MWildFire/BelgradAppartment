@@ -16,6 +16,8 @@ import re
 from typing import Any, ClassVar
 from urllib.parse import urljoin
 
+from selectolax.parser import HTMLParser
+
 from src.config import get_settings
 from src.db.models import Platform
 from src.scrapers.base import ListingDetail, ListingPreview, Scraper
@@ -246,22 +248,34 @@ class CetiriZidaScraper(Scraper):
 
     @staticmethod
     def _total_from_html(html: str) -> int | None:
-        """Parse the "6.947 oglasa" results-count header.
+        """Read the rendered counter, never approximate counts in SEO metadata.
 
-        Tolerates dot/comma/space/nbsp thousands separators — a separator change that made the
-        regex match only the trailing digits would silently understate the total, shrink the
-        walk bound and skip segmentation while still passing the coverage health check.
+        The current header splits the number and label across sibling strong/span
+        elements. Older pages put both in one strong element (or a paragraph).
+        Conflicting counters are unknown rather than a trusted crawl denominator.
         """
-        m = re.search(r"(\d[\d.,  ]*)\s*oglas", html)
-        if not m:
-            return None
-        digits = re.sub(r"\D", "", m.group(1))
-        if not digits:
-            return None
-        try:
-            return int(digits)
-        except ValueError:
-            return None
+        tree = HTMLParser(html)
+        counts: set[int] = set()
+        for node in tree.css("strong, p"):
+            ancestor = node.parent
+            excluded = False
+            while ancestor is not None:
+                if ancestor.tag in {
+                    "head", "script", "style", "template", "noscript", "a", "small",
+                }:
+                    excluded = True
+                    break
+                ancestor = ancestor.parent
+            if excluded:
+                continue
+            candidates = [node.text(separator=" ", strip=True)]
+            if node.tag == "strong" and node.parent is not None:
+                candidates.append(node.parent.text(separator=" ", strip=True))
+            for text in candidates:
+                match = re.fullmatch(r"(\d+(?:[.,\s]\d{3})*)\s+oglasa?", text)
+                if match:
+                    counts.add(int(re.sub(r"\D", "", match.group(1))))
+        return next(iter(counts)) if len(counts) == 1 else None
 
     async def fetch_detail(self, url: str) -> ListingDetail:
         resp = await self._client.get(url)

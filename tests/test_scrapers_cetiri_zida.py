@@ -174,3 +174,50 @@ def test_total_from_html_parses_thousands_dot() -> None:
     assert CetiriZidaScraper._total_from_html("<p>6.947 oglasa</p>") == 6947
     assert CetiriZidaScraper._total_from_html("<p>567 oglasa</p>") == 567
     assert CetiriZidaScraper._total_from_html("<p>no count here</p>") is None
+
+
+def test_real_legacy_header_ignores_agency_offer_counts(cetiri_zida_list_html: str) -> None:
+    assert CetiriZidaScraper._total_from_html(cetiri_zida_list_html) == 6947
+
+
+@pytest.mark.parametrize("number,expected", [("4.496", 4496), ("216", 216), ("0", 0),
+                                             ("4\u00a0496", 4496), ("4,496", 4496)])
+def test_rendered_split_counter_takes_precedence_over_seo(number, expected) -> None:
+    # Live markup on 2026-09-12: the SEO approximation is not the search total.
+    html = ('<meta name="description" content="Pretražite više od 6.500 oglasa">'
+            '<a href="/agency"><small><strong>2495 oglasa</strong></small></a>'
+            '<span class="inline-flex items-baseline gap-1.5">'
+            f'<strong class="text-2xl font-bold text-gray-800">{number}</strong>'
+            '<span class="text-xs font-normal text-gray-400">oglasa</span></span>')
+    assert CetiriZidaScraper._total_from_html(html) == expected
+
+
+@pytest.mark.parametrize("html", [
+    '<meta name="description" content="više od 6.500 oglasa">',
+    '<p>Pretražite više od 6.500 oglasa</p>',
+    '<script>"6.500 oglasa"</script>',
+    '<template><strong>6.500 oglasa</strong></template>',
+    '<strong>216 oglasa</strong><strong>220 oglasa</strong>',
+    '<strong>1.5 oglasa</strong>',
+])
+def test_approximate_hidden_or_conflicting_counts_are_not_trusted(html) -> None:
+    assert CetiriZidaScraper._total_from_html(html) is None
+
+
+@pytest.mark.asyncio
+async def test_split_counter_bounds_walk_without_false_empty_page_failure() -> None:
+    requested = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params.get("strana", "1"))
+        requested.append(page)
+        html = _list_html([f"id{page}a", f"id{page}b"], total=6)
+        html = html.replace('6 oglasa', '<strong>6</strong><span>oglasa</span>')
+        html = '<meta content="više od 6.500 oglasa">' + html
+        return httpx.Response(200, text=html)
+
+    scraper = _make_scraper(handler)
+    previews = await scraper.list_recent(max_pages=10)
+    assert requested == [1, 2, 3]
+    assert len(previews) == scraper._site_total == 6
+    assert scraper._pages_failed == scraper._skipped_pages == 0
