@@ -383,6 +383,26 @@ def test_changed_media_transfers_despite_same_size_mtime_and_seed_timestamp_drif
     ).stat().st_ino
 
 
+@pytest.mark.skipif(not Path("/usr/bin/rsync").exists(), reason="system rsync not installed")
+def test_changed_only_nested_directory_is_created_without_reusing_stale_seed(
+    source, tmp_path, monkeypatch
+):
+    import os
+
+    original = source.listings_dir / "platform/listing/data.bin"
+    original.parent.mkdir(parents=True)
+    original.write_bytes(b"old-data")
+    args = environment(source, tmp_path, monkeypatch)
+    retained = args.seed_dir / "data/listings/platform/listing/data.bin"
+    original.write_bytes(b"new-data")
+    timestamp = retained.stat().st_mtime
+    os.utime(original, (timestamp, timestamp))
+    receipt = job.backup(args)
+    current = args.private_root / "generations" / receipt["generation_id"]
+    assert (current / "data/listings/platform/listing/data.bin").read_bytes() == b"new-data"
+    assert retained.read_bytes() == b"old-data"
+
+
 def test_full_archive_and_incremental_runner_share_source_lock(source):
     folder = source.db.parent / "backups"
     folder.mkdir()

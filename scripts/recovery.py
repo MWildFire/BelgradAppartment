@@ -215,6 +215,20 @@ def check_media_references(db: Path, manifest: dict, entries: dict) -> int:
     return count
 
 
+def stage_photo_manifest(published: Path, destination: Path) -> Path | None:
+    """Freeze the atomic photo index before enumerating its media dependencies."""
+    source = published.parent / "photo_manifest.json"
+    if not source.exists():
+        return None
+    require(not source.is_symlink(), "photo manifest must not be a symlink")
+    destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    # Publishers replace the index atomically; an open descriptor pins one version.
+    with source.open("rb") as incoming, destination.open("xb") as outgoing:
+        os.chmod(destination, 0o600)
+        shutil.copyfileobj(incoming, outgoing)
+    return destination
+
+
 class HashingReader:
     """Hash exactly the bytes tar consumes, including during a streamed backup."""
 
@@ -291,14 +305,12 @@ def _create_backup(args: argparse.Namespace) -> dict:
             },
         }
         inputs = {"data/otz.db": db}
+        photo_manifest = stage_photo_manifest(roots["published"], staging / "photo_manifest.json")
+        if photo_manifest is not None:
+            inputs["data/photo_manifest.json"] = photo_manifest
         for path, archive in unique_roots.items():
             for item in files_below(path):
                 inputs[f"{archive}/{item.relative_to(path).as_posix()}"] = item
-        # Derivative manifest lives beside the public media root, not inside it.
-        photo_manifest = roots["published"].parent / "photo_manifest.json"
-        if photo_manifest.exists():
-            require(not photo_manifest.is_symlink(), "photo manifest must not be a symlink")
-            inputs["data/photo_manifest.json"] = photo_manifest
         manifest["photo_references"] = check_media_references(db, manifest, inputs)
         for role in ("inbound", "listings", "published"):
             archive = components[role]["archive"]
@@ -640,6 +652,9 @@ def create_snapshot(args: argparse.Namespace) -> dict:
         },
     }
     inputs = {"data/otz.db": db}
+    photo_manifest = stage_photo_manifest(roots["published"], output / "data/photo_manifest.json")
+    if photo_manifest is not None:
+        inputs["data/photo_manifest.json"] = photo_manifest
     unique = {}
     for name, root in roots.items():
         archive = unique.setdefault(root, f"data/{name}")
@@ -647,10 +662,6 @@ def create_snapshot(args: argparse.Namespace) -> dict:
     for root, archive in unique.items():
         for path in files_below(root):
             inputs[f"{archive}/{path.relative_to(root).as_posix()}"] = path
-    photo_manifest = roots["published"].parent / "photo_manifest.json"
-    if photo_manifest.exists():
-        require(not photo_manifest.is_symlink(), "photo manifest symlink")
-        inputs["data/photo_manifest.json"] = photo_manifest
     manifest["photo_references"] = check_media_references(db, manifest, inputs)
     for role in ("inbound", "listings", "published"):
         prefix = manifest["components"][role]["archive"] + "/"
@@ -658,7 +669,7 @@ def create_snapshot(args: argparse.Namespace) -> dict:
     state_prefix = manifest["components"]["state"]["archive"] + "/"
     for relative, path in inputs.items():
         before = path.stat()
-        if relative.startswith(state_prefix) or relative == "data/photo_manifest.json":
+        if relative.startswith(state_prefix):
             copied = output / relative
             copied.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copyfile(path, copied)

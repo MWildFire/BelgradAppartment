@@ -212,6 +212,46 @@ def test_incomplete_derivative_manifest_rejected(source):
         backup(source)
 
 
+@pytest.mark.parametrize("mode", ["archive", "directory"])
+def test_photo_index_is_frozen_before_concurrent_publication(source, tmp_path, monkeypatch, mode):
+    index = source.inbound_dir.parent / "photo_manifest.json"
+    initial = {"photo.jpg": {"w": 30, "h": 20}}
+    index.write_text(json.dumps(initial))
+    original_files_below = recovery.files_below
+    published = False
+
+    def enumerate_then_publish(root):
+        nonlocal published
+        files = original_files_below(root)
+        if root == source.inbound_dir and not published:
+            published = True
+            Image.new("RGB", (30, 20), "red").save(root / "new.jpg")
+            replacement = index.with_suffix(".tmp")
+            replacement.write_text(json.dumps({**initial, "new.jpg": {"w": 30, "h": 20}}))
+            os.replace(replacement, index)
+        return files
+
+    monkeypatch.setattr(recovery, "files_below", enumerate_then_publish)
+    if mode == "archive":
+        extract(backup(source), tmp_path)
+        restored = tmp_path / "restored"
+    else:
+        source.output_dir = tmp_path / "snapshot"
+        recovery.create_snapshot(source)
+        restored = source.output_dir
+        manifest = json.loads((restored / "manifest.json").read_text())
+        # Snapshot stages only state; reproduce the declared media transfer.
+        for relative in manifest["files"]:
+            target = restored / relative
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((source.project_root / relative).read_bytes())
+        recovery.verify_directory(restored)
+    assert published
+    assert json.loads((restored / "data/photo_manifest.json").read_text()) == initial
+    assert not (restored / "data/inbound/new.jpg").exists()
+
+
 def test_archive_traversal_rejected_before_any_extraction(source, tmp_path):
     archive = backup(source)
     rewrite(archive, lambda files: files.update({"../outside": b"bad"}))
