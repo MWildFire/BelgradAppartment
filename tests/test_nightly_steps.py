@@ -520,6 +520,32 @@ def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False, deadlines: lis
     return calls
 
 
+@pytest.mark.parametrize("errors", [0, 2])
+async def test_all_inventory_step_overrides_zero_quota_and_reports_backoff(monkeypatch, errors):
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import orchestrator
+
+    settings = get_settings()
+    calls = _canned_step_stubs(monkeypatch)
+    monkeypatch.setattr(settings, "nightly_heal_limit", 500)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh_all", True)
+
+    async def all_rows(*, limit, deadline, all_listings):
+        assert limit == 0 and all_listings and deadline > 0
+        return orchestrator.RollingRefreshResult(
+            4001, 4001-errors, errors, [], inventory_count=4004, retry_deferred=3,
+        )
+
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", all_rows)
+    lines, *_ = await _run_nightly_steps()
+    line = next(line for line in lines if "деталей обновлено" in line)
+    assert "4001" in line and "4004" in line and "3" in line
+    assert line.startswith("🚨")
+    assert not any(call.startswith("heal:") for call in calls)
+
+
 async def test_run_nightly_steps_assembles_summary_lines(monkeypatch):
     from src.cli import _run_nightly_steps
     from src.config import get_settings

@@ -1178,6 +1178,7 @@ async def refetch_listing_details(
     progress: Callable[[DetailRefetchStats, Any, Exception | None], None] | None = None,
     deadline: float | None = None,
     checkpoint_name: str = "refetch",
+    source_weights: Mapping[Platform, float] | None = None,
 ) -> DetailRefetchStats:
     """Refresh with a reserved time share for every selected source, including browser startup.
 
@@ -1286,6 +1287,7 @@ async def refetch_listing_details(
             plan, refresh, budget_sec=budget,
             item_timeout_sec=get_settings().refetch_per_fetch_timeout_sec,
             context_factory=lambda platform: scrapers[platform](),
+            source_weights=source_weights,
         )
         stats.source_errors = dict(execution.source_errors)
         stats.skipped += sum(item.row.id not in attempted_ids for item in execution.items)
@@ -1465,8 +1467,9 @@ _BROKEN_LISTING = (Listing.is_active.is_(True), Listing.photo_phashes == [])
 
 
 async def _freshness_queue(
-    *, name: str, limit: int, scrapers: Mapping[Platform, type[Scraper]], only_broken: bool,
+    *, name: str, limit: int | None, scrapers: Mapping[Platform, type[Scraper]], only_broken: bool,
     public_only: bool = False,
+    due_only: bool = True,
 ) -> FairRefreshPlan:
     path = get_settings().data_dir / "state" / "freshness" / f"{name}_cursor.json"
     try:
@@ -1477,10 +1480,16 @@ async def _freshness_queue(
         inventory = await load_candidates(
             session, platforms=scrapers, only_broken=only_broken, public_only=public_only,
         )
-    plan = select_fair(inventory, limit=limit, source_cursor=cursor)
+    plan = select_fair(
+        inventory, limit=len(inventory) if limit is None else limit,
+        source_cursor=cursor, due_only=due_only,
+        retry_backoff_cap=timedelta(hours=12) if not due_only else None,
+    )
     _write_refresh_state(f"{name}_cursor", {
         "next_cursor": plan.next_cursor, "selected": len(plan.rows),
         "eligible": plan.eligible, "deferred": plan.deferred,
+        "inventory_count": plan.inventory_count, "retry_deferred": plan.retry_deferred,
+        "selection_mode": "due" if due_only else "all_inventory",
         "checkpoint_at": datetime.now(UTC).isoformat(),
     })
     return plan
@@ -1516,6 +1525,8 @@ class RollingRefreshResult:
     price_changes: list[PriceChange]
     skipped: int = 0
     source_errors: dict[str, str] = field(default_factory=dict)
+    inventory_count: int = 0
+    retry_deferred: int = 0
 
 
 async def rolling_detail_refresh(
@@ -1524,25 +1535,41 @@ async def rolling_detail_refresh(
     scrapers: Mapping[Platform, type[Scraper]] | None = None,
     deadline: float | None = None,
     public_only: bool = False,
+    all_listings: bool = False,
 ) -> RollingRefreshResult:
     """Public, broken, oldest-success priority within fair, retry-aware source queues."""
+    if all_listings and public_only:
+        raise ValueError("all inventory refresh cannot be public-only")
     if scrapers is None:
         from src.scrapers import SCRAPERS
 
         scrapers = SCRAPERS
     plan = await _freshness_queue(
-        name="public" if public_only else "rolling", limit=limit, scrapers=scrapers,
-        only_broken=False, public_only=public_only,
+        name="public" if public_only else "rolling",
+        limit=None if all_listings else limit, scrapers=scrapers,
+        only_broken=False, public_only=public_only, due_only=not all_listings,
     )
+    allocation = {}
+    if all_listings:
+        # Relative cost observed in the 2026-09-14 sustained probes, with room for
+        # local photo validation. Weight the actual queue, never equal-size quotas.
+        cost = {Platform.CETIRI_ZIDA: 2, Platform.CITYEXPERT: 1,
+                Platform.HALOOGLASI: 1, Platform.NEKRETNINE: 3}
+        weights: dict[Platform, float] = {}
+        for row in plan.rows:
+            weights[row.platform] = weights.get(row.platform, 0) + cost.get(row.platform, 1)
+        allocation = {"source_weights": weights}
     stats = await refetch_listing_details(
         plan.rows, scrapers=scrapers, deadline=deadline,
         checkpoint_name="public_refetch" if public_only else "refetch",
+        **allocation,
     )
     logger.info("[rolling-refresh] selected=%d verified=%d errors=%d skipped=%d",
                 len(plan.rows), stats.verified, stats.errors, stats.skipped)
     return RollingRefreshResult(
         len(plan.rows), stats.verified, stats.errors, stats.price_changes, stats.skipped,
         stats.source_errors,
+        plan.inventory_count, plan.retry_deferred,
     )
 
 

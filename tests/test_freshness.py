@@ -41,6 +41,19 @@ def complete():
     )
 
 
+def test_nightly_retry_cap_rechecks_yesterdays_failures_but_preserves_recent_cooldown():
+    rows = [candidate(1, attempted_at=NOW-timedelta(hours=14),
+                      next_retry_at=NOW+timedelta(hours=10)),
+            candidate(2, attempted_at=NOW-timedelta(hours=2),
+                      next_retry_at=NOW+timedelta(hours=22))]
+    normal = select_fair(rows, limit=10, now=NOW, due_only=False)
+    assert not normal.rows and normal.retry_deferred == 2
+    nightly = select_fair(rows, limit=10, now=NOW, due_only=False,
+                          retry_backoff_cap=timedelta(hours=12))
+    assert [row.id for row in nightly.rows] == [1]
+    assert nightly.retry_deferred == 1 and nightly.inventory_count == 2
+
+
 def test_partial_fields_photos_and_invalid_prices_do_not_prove_success():
     assert complete().succeeded
     detail = SimpleNamespace(price_eur=600, area_m2=40, photo_urls=["one", "two"])
@@ -198,6 +211,32 @@ async def test_first_hanging_item_respects_other_sources_reserved_time():
     assert len(visited) == 3
     assert result.items[0].evidence.reason == "TimeoutError"
     assert result.elapsed_sec < 0.5
+
+
+async def test_inventory_weight_reserves_time_for_large_source_and_later_source():
+    plan = select_fair([candidate(1, PLATFORMS[0]), candidate(2, PLATFORMS[1])],
+                       limit=2, now=NOW)
+    first, last = plan.source_order
+    visited = []
+    async def callback(row, _context):
+        visited.append(row.platform)
+        if row.platform == first:
+            await asyncio.sleep(0.18)  # Would exceed the old equal 0.15s slice.
+        return CallbackResult(complete())
+    result = await run_fair_refresh(plan, callback, budget_sec=0.3, item_timeout_sec=1,
+                                    source_weights={first: 9, last: 1})
+    assert result.succeeded == result.attempted == 2
+    assert visited == [first, last]
+
+
+@pytest.mark.parametrize("weight", [0, -1, float("nan"), float("inf")])
+async def test_invalid_source_weight_rejected_before_work(weight):
+    plan = select_fair([candidate(1)], limit=1, now=NOW)
+    async def forbidden(*_args):
+        pytest.fail("invalid allocation must not run callbacks")
+    with pytest.raises(ValueError, match="positive finite weights"):
+        await run_fair_refresh(plan, forbidden, budget_sec=1, item_timeout_sec=1,
+                               source_weights={plan.source_order[0]: weight})
 
 
 async def test_hanging_context_startup_cannot_consume_other_sources():

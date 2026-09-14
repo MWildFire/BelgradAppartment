@@ -1848,9 +1848,13 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     # flows forward; a hanging heal cannot consume the rolling refresh or link slice.
     refetch_start = _time.monotonic()
     refetch_budget = remaining_budget(settings.nightly_refetch_budget_sec, reserve=900)
+    # All-inventory refresh already prioritizes broken rows. Do not spend a separate
+    # browser/timeout slice attempting the same broken inventory before that pass.
+    heal_enabled = settings.nightly_heal_limit > 0 and not settings.nightly_detail_refresh_all
     weights = [
-        ("heal", 0.2, settings.nightly_heal_limit > 0),
-        ("rolling", 0.7, settings.nightly_detail_refresh > 0),
+        ("heal", 0.2, heal_enabled),
+        ("rolling", 0.7,
+         settings.nightly_detail_refresh_all or settings.nightly_detail_refresh > 0),
         ("links", 0.1, settings.nightly_verify_links),
     ]
     enabled_weight = sum(weight for _, weight, enabled in weights if enabled) or 1
@@ -1861,7 +1865,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             cumulative += weight / enabled_weight
         deadlines[name] = refetch_start + refetch_budget * cumulative
 
-    if settings.nightly_heal_limit > 0:
+    if heal_enabled:
         click.echo(f"\n→ Heal broken listings (limit={settings.nightly_heal_limit})…")
         try:
             heal = await heal_broken_listings(
@@ -1877,14 +1881,19 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
         except Exception:
             log.exception("nightly step failed: heal")
             lines.append("🚨 heal-шаг упал — см. логи")
+    elif settings.nightly_detail_refresh_all:
+        click.echo("→ Broken listings included in the all-inventory refresh")
     else:
         click.echo("→ Heal step disabled (NIGHTLY_HEAL_LIMIT=0)")
 
-    if settings.nightly_detail_refresh > 0:
-        click.echo(f"→ Rolling detail refresh (limit={settings.nightly_detail_refresh})…")
+    if settings.nightly_detail_refresh_all or settings.nightly_detail_refresh > 0:
+        scope = ("all inventory" if settings.nightly_detail_refresh_all
+                 else str(settings.nightly_detail_refresh))
+        click.echo(f"→ Rolling detail refresh (limit={scope})…")
         try:
+            selection = {"all_listings": True} if settings.nightly_detail_refresh_all else {}
             rolling = await rolling_detail_refresh(
-                limit=settings.nightly_detail_refresh, deadline=deadlines["rolling"]
+                limit=settings.nightly_detail_refresh, deadline=deadlines["rolling"], **selection,
             )
             price_changes = rolling.price_changes
             line = (
@@ -1893,7 +1902,11 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             )
             if rolling.skipped:
                 line += f", пропущено по бюджету: {rolling.skipped}"
-            if rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {}):
+            if settings.nightly_detail_refresh_all:
+                line += (f", выбрано: {rolling.selected} / база: {rolling.inventory_count}, "
+                         f"ожидают повторной попытки: {rolling.retry_deferred}")
+            if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
+                    or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
                 line = (f"🚨 {line}, ошибок: {rolling.errors}; "
                         f"ошибок источников: {len(getattr(rolling, 'source_errors', {}))}")
             lines.append(line)

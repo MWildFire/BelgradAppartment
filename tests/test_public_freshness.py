@@ -133,6 +133,46 @@ async def test_public_inventory_includes_retained_original_but_not_private(db):
     assert all(row.public for row in rows)
 
 
+async def test_all_inventory_refresh_includes_recent_rows_beyond_quota_but_respects_backoff(
+    db, monkeypatch, tmp_path,
+):
+    import json
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+    now = datetime.now(UTC)
+    recent = await seed("recent", details_succeeded_at=now, photo_phashes=["0123456789abcdef"])
+    other = await seed("recent-other", Platform.CITYEXPERT,
+                       details_succeeded_at=now, photo_phashes=["0123456789abcdef"])
+    retained = await seed("retained-gone", public=True, is_active=False)
+    await seed("backoff", details_next_retry_at=now + timedelta(hours=2))
+    await seed("private-inactive", is_active=False)
+    captured = []
+
+    async def refetch(rows, **kwargs):
+        captured.extend(rows)
+        assert kwargs["checkpoint_name"] == "refetch"
+        return orch.DetailRefetchStats(selected=len(rows), updated=len(rows), verified=len(rows))
+
+    monkeypatch.setattr(orch, "refetch_listing_details", refetch)
+    result = await orch.rolling_detail_refresh(limit=1, all_listings=True)
+    assert {row.id for row in captured} == {recent, other, retained}
+    assert result.selected == result.refreshed == 3
+    assert result.inventory_count == 4
+    assert result.retry_deferred == 1
+    cursor = json.loads((tmp_path / "state/freshness/rolling_cursor.json").read_text())
+    assert cursor["selection_mode"] == "all_inventory"
+    assert cursor["inventory_count"] == cursor["selected"] + cursor["retry_deferred"]
+    assert cursor["deferred"] == 0
+
+
+async def test_all_inventory_cannot_expand_public_only_scope(monkeypatch):
+    selection = AsyncMock()
+    monkeypatch.setattr(orch, "_freshness_queue", selection)
+    with pytest.raises(ValueError, match="cannot be public-only"):
+        await orch.rolling_detail_refresh(public_only=True, all_listings=True)
+    selection.assert_not_called()
+
+
 async def test_public_queue_keeps_source_fairness_backoff_and_own_cursor(db, monkeypatch, tmp_path):
     monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
     first = await seed("one", public=True)
@@ -233,18 +273,18 @@ def test_configured_budgets_fit_runner_and_scheduled_main_windows():
     nightly = service_timeout("otz-nightly-refresh")
     weekly = service_timeout("otz-weekly-full-refresh")
     public = service_timeout("otz-public-detail-refresh")
-    assert nightly >= settings.scrape_incremental_run_budget_sec + 600
+    assert nightly >= settings.scrape_run_budget_sec + 600
     assert weekly >= settings.scrape_run_budget_sec + 600
     assert public >= settings.public_detail_refresh_budget_sec + 300
     # Include the full main-process hard timeout and all randomized delay. Eight days
     # cover both Sunday weekly replacement and the last public slot crossing midnight.
     windows = []
     for day in range(8):
-        main = ("otz-weekly-full-refresh", [120]) if day % 7 == 6 else (
-            "otz-nightly-refresh", [180]
+        main = ("otz-weekly-full-refresh", [1260]) if day % 7 == 6 else (
+            "otz-nightly-refresh", [1260]
         )
         for name, slots in [
-            main, ("otz-scrape-smoke", [30, 750]),
+            main, ("otz-scrape-smoke", [720, 1200]),
             ("otz-public-detail-refresh", public_timer_slots()),
         ]:
             jitter = unit_seconds(f"{name}.timer", "RandomizedDelaySec")

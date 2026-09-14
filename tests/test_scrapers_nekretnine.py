@@ -688,6 +688,56 @@ async def test_playwright_fallback_closes_last_failed_context() -> None:
     assert sc._pw_context is None
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page_limit,expected_sessions", [(2, 3), (0, 1)])
+async def test_long_browser_walk_recycles_session_without_exhausting_isp(
+    monkeypatch, nekretnine_detail_html: str, page_limit: int, expected_sessions: int,
+) -> None:
+    from types import SimpleNamespace
+
+    from src.config import get_settings
+    from src.scrapers.proxy_pool import ProxyCandidate, ProxyPool
+
+    monkeypatch.setattr(get_settings(), "nekretnine_browser_session_pages", page_limit)
+    class Page:
+        async def goto(self, *_args, **_kwargs):
+            return SimpleNamespace(status=200)
+        async def content(self):
+            return nekretnine_detail_html
+        async def close(self):
+            pass
+
+    class Context:
+        closed = False
+        async def new_page(self):
+            assert not self.closed
+            return Page()
+        async def close(self):
+            self.closed = True
+
+    sc = _make_scraper(lambda _request: httpx.Response(200))
+    sc._proxy_pool = ProxyPool((ProxyCandidate("primary", "static_isp", "http://proxy.invalid"),))
+    sc._failed_proxy_slots.add("secondary")
+    contexts = []
+    async def start():
+        assert sc._select_proxy().slot == "primary"
+        context = Context()
+        contexts.append(context)
+        sc._pw_context = context
+    sc._start_browser = start
+    try:
+        for _ in range(5):
+            assert await sc._playwright_html(_DETAIL_URL) == nekretnine_detail_html
+        assert len(contexts) == expected_sessions
+        assert all(c.closed for c in contexts[:-1])
+        assert sc._failed_proxy_slots == {"secondary"}
+        assert sc.proxy_metrics["proxy_failovers"] == 0
+        assert sc.proxy_metrics["browser_session_recycles"] == expected_sessions - 1
+    finally:
+        await sc.aclose()
+    assert all(c.closed for c in contexts)
+
+
 def test_browser_payload_check_accepts_list_pages(nekretnine_list_html: str) -> None:
     """The fallback is shared by detail and list requests; a list must not be rejected as WAF HTML."""
     assert NekretnineScraper._has_browser_payload(

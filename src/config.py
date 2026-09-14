@@ -57,19 +57,23 @@ class Settings(BaseSettings):
     scrape_list_interval_min: int = 30
     scrape_recheck_interval_hours: int = 6
     scrape_incremental_source_budget_sec: int = 600
-    scrape_incremental_run_budget_sec: int = 24000
+    scrape_incremental_run_budget_sec: int = 28800
     scrape_source_budget_sec: int = 1800
     scrape_item_budget_sec: int = 90
-    scrape_run_budget_sec: int = 30000
+    scrape_run_budget_sec: int = 34200
     scrape_lock_wait_sec: int = 60
     scraper_user_agent: str = ""
     # Legacy proxy surface retained for all existing scrapers. Keep credentials out of repr/logs.
     scraper_proxy_url: str = Field(default="", repr=False)
+    # Optional dedicated route for 4zida only; never affects other sources or photo traffic.
+    cetiri_zida_proxy_url: str = Field(default="", repr=False)
     # Nekretnine list/detail browser pool. Empty candidates preserve the current direct local/test
     # behavior; the Nekretnine scraper must fail closed when a required pool is selected.
     nekretnine_list_snapshot_mode: Literal["legacy", "shadow", "active"] = "legacy"
     nekretnine_proxy_mode: Literal["legacy_rotating", "static_isp"] = "legacy_rotating"
     nekretnine_proxy_allow_legacy_fallback: bool = False
+    # Bound browser session lifetime on long ISP walks; 0 is an explicit rollback.
+    nekretnine_browser_session_pages: int = Field(default=100, ge=0)
     nekretnine_proxy_primary_url: str = Field(default="", repr=False)
     nekretnine_proxy_secondary_url: str = Field(default="", repr=False)
     # Comma/newline-separated extra static ISP candidates, kept out of repr/logs.
@@ -93,6 +97,8 @@ class Settings(BaseSettings):
     # Broken rows (active, no photo hashes) re-fetched per night; 0 = skip.
     nightly_heal_limit: int = 200
     nightly_detail_refresh: int = 2400  # due rows for verified detail refresh; 0 = skip
+    # Complete inventory each night, including recent successes; backoff/budgets still apply.
+    nightly_detail_refresh_all: bool = False
     nightly_prune_embeddings: bool = True  # NIGHTLY_PRUNE_EMBEDDINGS=0 → skip embeddings prune
     # A3 liveness sweep: read active matched source pages (potentially on the site) and
     # deactivate ones that 404/410, so a public card never links to a removed page.
@@ -127,7 +133,7 @@ class Settings(BaseSettings):
     subscription_notify_since_hours: int = 24
     # Wall-clock budget shared by heal, rolling refresh and link checks; leftovers flow forward.
     # Slow challenged sources stop with an explicit skipped/error outcome at the deadline.
-    nightly_refetch_budget_sec: int = 19800  # 5h30 shared by heal/rolling/links
+    nightly_refetch_budget_sec: int = 25200  # 7h shared by heal/rolling/links
     # Per-listing hard cap includes detail fetch, required photos and embeddings; a slow page
     # can otherwise burn minutes; this bounds it regardless of the scraper's internal retries.
     refetch_per_fetch_timeout_sec: int = 90

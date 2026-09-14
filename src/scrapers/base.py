@@ -113,6 +113,9 @@ class Scraper(CrawlEvidence, abc.ABC):
                 if candidate is not None
                 else None
             )
+        elif (getattr(cls, "platform", None) == Platform.CETIRI_ZIDA
+              and settings.cetiri_zida_proxy_url):
+            proxy = settings.cetiri_zida_proxy_url
         else:
             proxy = settings.scraper_proxy_url or None if cls.use_scraper_proxy else None
         return httpx.AsyncClient(

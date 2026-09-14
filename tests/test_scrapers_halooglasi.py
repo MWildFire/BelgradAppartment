@@ -136,6 +136,43 @@ async def test_smsprint_fetch_requires_the_expected_payload_marker() -> None:
     assert _DETAIL_VAR in html
 
 
+@pytest.mark.asyncio
+async def test_print_catalogue_redirect_stays_unknown_without_browser_retry() -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/nekretnine/izdavanje-stanova":
+            return httpx.Response(302, headers={"location": "/nekretnine/izdavanje-stanova"})
+        return httpx.Response(200, text="QuidditaEnvironment.serverListData = {};")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()  # No browser method can be called on this sentinel.
+    try:
+        with pytest.raises(_MarkerMissing, match="availability unknown"):
+            await scraper.fetch_detail(_DETAIL_URL)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [GOOD_DETAIL_HTML, CHALLENGE_HTML, ""])
+async def test_print_slug_redirect_preserves_payload_or_browser_fallback(body: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/updated-slug/123":
+            return httpx.Response(302, headers={"location": "/updated-slug/123"})
+        return httpx.Response(200, text=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    try:
+        result = await scraper._fetch_via_smsprint(_DETAIL_URL, ready_marker=_DETAIL_VAR)
+        assert result == (body if _DETAIL_VAR in body else "")
+    finally:
+        await scraper.aclose()
+
+
 class _FakePage:
     """Playwright-Page stand-in: serves `sequence[n]` for the n-th navigation (goto, then reloads)."""
 

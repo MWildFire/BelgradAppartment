@@ -2,7 +2,7 @@
 Description=Render Finder public detail refresh cadence
 
 [Timer]
-OnCalendar=*-*-* 11,17,23:30:00 UTC
+OnCalendar=*-*-* 08,14,19:00:00 UTC
 RandomizedDelaySec=5min
 Persistent=true
 Unit=otz-public-detail-refresh.service

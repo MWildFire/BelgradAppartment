@@ -54,3 +54,27 @@ def test_proxy_is_reserved_for_nekretnine(monkeypatch) -> None:
 
     assert captured[0]["proxy"] == "http://eu-proxy:3128"
     assert captured[1]["proxy"] is None
+
+
+def test_explicit_4zida_route_is_isolated_and_direct_override_wins(monkeypatch) -> None:
+    from src.scrapers.cityexpert import CityExpertScraper
+    from src.scrapers.halooglasi import HalooglasiScraper
+
+    captured = []
+
+    class SpyClient:
+        def __init__(self, **kwargs):
+            captured.append(kwargs.get("proxy"))
+
+    monkeypatch.setattr("src.scrapers.base.httpx.AsyncClient", SpyClient)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "cetiri_zida_proxy_url", "http://four:secret@isp.test:12323")
+    monkeypatch.setattr(settings, "nekretnine_proxy_primary_url", "http://nek.test:3128")
+    monkeypatch.setattr(settings, "scraper_proxy_url", "http://exhausted-metered.test:12323")
+    for cls in (CetiriZidaScraper, NekretnineScraper, HalooglasiScraper, CityExpertScraper, Scraper):
+        cls._make_client()
+    CetiriZidaScraper._make_client(proxy_override=None)
+    assert captured == [
+        "http://four:secret@isp.test:12323", "http://nek.test:3128", None, None, None, None,
+    ]
+    assert "four:secret" not in repr(settings)

@@ -14,6 +14,6 @@ WorkingDirectory=/opt/otz
 EnvironmentFile=/opt/otz/.env
 ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli nightly-refresh --max-pages=500
 ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/nightly-refresh.log --label weekly-full-refresh
-TimeoutStartSec=9h
+TimeoutStartSec=10h
 StandardOutput=append:/var/log/otz/nightly-refresh.log
 StandardError=append:/var/log/otz/nightly-refresh.log

@@ -115,6 +115,7 @@ class NekretnineScraper(Scraper):
         # default (anti-bot denies headless-shell); prod units already run under `xvfb-run -a`.
         self._pw: Any = None
         self._pw_context: Any = None
+        self._browser_session_pages = 0
         self._pw_user_data_dir: Path | None = None
         self._pw_headless = os.environ.get("NEKRETNINE_HEADLESS", "false").lower() == "true"
         self._proxy_pool = ProxyPool.from_settings(get_settings())
@@ -132,6 +133,7 @@ class NekretnineScraper(Scraper):
             "http_attempts": 0, "http_errors": 0, "http_recovered_errors": 0,
             "http_residual_errors": 0, "browser_attempts": 0, "browser_errors": 0,
             "browser_recovered_errors": 0,
+            "browser_session_recycles": 0,
         }
 
     @property
@@ -508,6 +510,7 @@ class NekretnineScraper(Scraper):
 
     async def _stop_browser(self) -> None:
         """Stop the fallback browser and remove its short-lived profile."""
+        self._browser_session_pages = 0
         if self._pw_context is not None:
             with suppress(Exception):
                 await self._pw_context.close()
@@ -529,6 +532,12 @@ class NekretnineScraper(Scraper):
         blob, so `parse_detail` is reused verbatim. Best-effort by contract — any failure returns
         None and the caller re-raises the original 403 (never a false "listing is gone").
         """
+        page_limit = get_settings().nekretnine_browser_session_pages
+        if self._pw_context is not None and page_limit and self._browser_session_pages >= page_limit:
+            # Reuse the approved IP with a fresh bounded browser session. This is not a
+            # proxy failure: do not poison its slot or reset previously failed slots.
+            await self._stop_browser()
+            self._proxy_metrics["browser_session_recycles"] += 1
         session_limit = (
             max(1, len(self._proxy_pool.candidates)) if self._proxy_pool.candidates else 3
         )
@@ -539,6 +548,7 @@ class NekretnineScraper(Scraper):
                     await self._start_browser()
                 page = await self._pw_context.new_page()
                 try:
+                    self._browser_session_pages += 1
                     self._record_operation("browser")
                     resp = await page.goto(
                         url, wait_until="domcontentloaded", timeout=self.pw_timeout_ms

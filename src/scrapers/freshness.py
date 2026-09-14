@@ -48,7 +48,7 @@ def _oldest(value: datetime | None) -> datetime:
 def is_due(row: RefreshCandidate, now: datetime) -> bool:
     if row.next_retry_at and utc(row.next_retry_at) > utc(now):
         return False
-    # Public runs at 11:30/17:30/23:30 UTC leave at most 12h05 between starts.
+    # Public runs at 08:00/14:00/19:00 UTC leave at most 13h05 between starts.
     # Eligibility at 10h leaves room for that gap and the 40-minute work budget.
     # Actual 24h freshness still requires enough capacity and successful source reads.
     interval = timedelta(hours=10) if row.public else timedelta(days=7)
@@ -129,6 +129,8 @@ class FairRefreshPlan:
     next_cursor: int
     eligible: int
     deferred: int
+    inventory_count: int = 0
+    retry_deferred: int = 0
 
 
 def select_fair(
@@ -138,14 +140,25 @@ def select_fair(
     now: datetime | None = None,
     source_cursor: int = 0,
     due_only: bool = True,
+    retry_backoff_cap: timedelta | None = None,
 ) -> FairRefreshPlan:
     """Round-robin quotas; unused source slots go to other eligible sources.
 
     Public/broken/oldest-success priority applies within each source, so one source cannot
     consume every slot. Persist ``next_cursor`` between runs when limit < source count.
-    ``due_only=False`` allows preventive refreshes; explicit backoff always applies.
+    ``due_only=False`` allows preventive refreshes. An explicit retry cap can bound old
+    exponential delays for a nightly inventory pass; recent attempts still cool down.
     """
     now = utc(now or datetime.now(UTC))
+    if retry_backoff_cap is not None and retry_backoff_cap <= timedelta(0):
+        raise ValueError("positive retry backoff cap required")
+    def retry_due(row: RefreshCandidate) -> bool:
+        if row.next_retry_at is None:
+            return True
+        retry_at = utc(row.next_retry_at)
+        if retry_backoff_cap is not None and row.attempted_at is not None:
+            retry_at = min(retry_at, utc(row.attempted_at) + retry_backoff_cap)
+        return retry_at <= now
     require_unique = {row.id for row in candidates}
     if len(require_unique) != len(candidates):
         raise ValueError("duplicate listing IDs in freshness inventory")
@@ -161,7 +174,7 @@ def select_fair(
                     row
                     for row in candidates
                     if row.platform == source
-                    and (row.next_retry_at is None or utc(row.next_retry_at) <= now)
+                    and retry_due(row)
                     and (not due_only or is_due(row, now))
                 ),
                 key=priority,
@@ -180,7 +193,9 @@ def select_fair(
     next_cursor = (all_sources.index(last_source) + 1) % len(all_sources) if last_source else cursor
     source_order = tuple(dict.fromkeys(row.platform for row in selected))
     return FairRefreshPlan(
-        tuple(selected), source_order, next_cursor, eligible, eligible - len(selected)
+        tuple(selected), source_order, next_cursor, eligible, eligible - len(selected),
+        len(candidates),
+        sum(not retry_due(row) for row in candidates),
     )
 
 
@@ -368,6 +383,7 @@ async def run_fair_refresh(
     budget_sec: float,
     item_timeout_sec: float,
     context_factory: Callable[[Platform], AbstractAsyncContextManager[Any]] = _empty_context,
+    source_weights: Mapping[Platform, float] | None = None,
 ) -> FairExecutionResult:
     """Reserve a share of remaining time for every remaining source; one context at a time.
 
@@ -390,13 +406,20 @@ async def run_fair_refresh(
         or len({row.id for row in plan.rows}) != len(plan.rows)
     ):
         raise ValueError("invalid or duplicate rows/source order in refresh plan")
+    weights = {source: 1.0 for source in plan.source_order}
+    if source_weights is not None:
+        if set(source_weights) != set(weights) or any(
+            not math.isfinite(value) or value <= 0 for value in source_weights.values()
+        ):
+            raise ValueError("positive finite weights required for every selected source")
+        weights = dict(source_weights)
     items = []
     source_errors = {}
     for index, platform in enumerate(plan.source_order):
         rows = grouped[platform]
-        remaining_sources = len(plan.source_order) - index
         remaining_time = max(0.0, overall_deadline - time.monotonic())
-        source_budget = remaining_time / remaining_sources
+        remaining_weight = sum(weights[source] for source in plan.source_order[index:])
+        source_budget = remaining_time * weights[platform] / remaining_weight
         attempted_ids = set()
         in_flight = None
         attempted_at = None

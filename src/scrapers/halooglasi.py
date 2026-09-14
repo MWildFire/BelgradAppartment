@@ -376,6 +376,18 @@ class HalooglasiScraper(Scraper):
         if ready_marker in response.text:
             logger.debug("[halooglasi] loaded %s via smsprint", url)
             return response.text
+        if (
+            ready_marker == _DETAIL_VAR
+            and response.history
+            and response.url.host == "smsprint.halooglasi.com"
+            and response.url.path.rstrip("/") == "/nekretnine/izdavanje-stanova"
+            and _LIST_VAR in response.text
+        ):
+            # A removed/unavailable print page redirects to the catalogue. Retrying the
+            # challenged canonical host cannot validate this response. Keep the stored
+            # listing unchanged and let the normal UNKNOWN/backoff policy record the gap;
+            # a mirror redirect alone is never evidence for deactivation.
+            raise _MarkerMissing("print detail redirected to catalogue; availability unknown")
         logger.warning("[halooglasi] smsprint response missing marker '%s' for %s", ready_marker, url)
         return ""
 
