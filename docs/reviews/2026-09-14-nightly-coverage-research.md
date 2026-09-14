@@ -274,7 +274,7 @@ redirect внутри print host, конечный `/404`, aspxerrorpath точ�
 1.312 / 0.496 / 0.469 s, без browser/DB/photo writes. Полный тестовый прогон идёт.
 Production остаётся d0fcb3e; контрольный полный проход не прерывался ради правки.
 
-13:50 UTC: решено штатно остановить контрольный d0 проход после выявленного
+13:48 UTC: решено штатно остановить контрольный d0 проход после выявленного
 повторяемого bottleneck, затем проверить данные и новый кандидат. Это отменённый
 диагностический проход, не успешное полное обновление. SIGTERM отправлен только
 main supervisor; он должен сам выполнить адресный SIGINT ребёнку, собрать after
@@ -282,3 +282,37 @@ snapshot и вернуть таймеры. Результаты очистки �
 Новый кандидат: 1573 unit passed / 1 skipped (125.13 s), 54 browser passed (49.83 s).
 В Halo-файле ruff сообщает четыре прежних нарушения вне изменённых строк;
 новых нарушений правка не добавляет. Полный проход с исправлением ещё не начат.
+
+
+## 14:01 UTC: 827b904 выпущен, повторный полный проход начался
+
+Старый full d0 штатно остановлен 13:48:50 UTC. Supervisor завершил проверку
+13:50:34, result=full_refresh_degraded; child problem=KeyboardInterrupt,
+журнал CancelledError. Все пять invariants passed, 112 public albums проверены,
+SIGKILL=false, survivors/unknown processes/guard failures отсутствуют. Все пять
+таймеров восстановлены. After snapshot подтверждает 2153 попытки:
+City 871 / 869 verified; Halo 1282 / 1060 verified; сумма errors=224.
+Другие два источника в этом прерванном detail-проходе ещё не проверялись.
+
+Server original-URL probe direct+primary: 3×print404 и canonical403 challenge на
+каждом маршруте. Точный новый runtime 827b904 обрабатывает все шесть случаев как
+UNKNOWN за0.18–0.566s, без browser/DB/photos/messages. Ошибка зеркала не считается
+каноническим доказательством удаления.
+
+827b904c7d405a56c289eb33c96edbc124630934 установлен, schema0014, readiness200.
+Packet SHA fadb2af25d6aecaa5aadaf5b9c483b027a5a6183c7c385a947a7713ee6f79907;
+CI34851632065, browser104000766704 и unit104000767086 success.
+Canary — профилактическая выборка20 public originals с прежним успешным evidence,
+по5 на источник; не оценка полной доступности. Стандартный due queue к этому
+моменту уже обслужен, поэтому отдельный root-owned hash-pinned helper использует
+существующий data path с due_only=false, без обхода failure-backoff. Основные
+safety guards сохранены, custom process распознаётся как maintenance, 77 supervisor
+tests passed. 20/20 verified за29s,283 media phash verified, все8 checks passed,
+никаких concurrent activity/остатков/SIGKILL. Canary receipt SHA
+`da0f847da032256241b7623fa75342702e1bf203fd81fd4ac6b276610cbf1f9e`.
+
+Новый полный запуск `rentbelgrad-full-refresh-827b904`, journal
+`b9f3f0e55db646a688fb0a45767c20e8`, начало14:00:01 UTC. Его supervisor снова
+владеет временной паузой всех maintenance timers и обязан их вернуть. На14:01
+Nekretnine25 страниц/0failed, детали ещё не начались. Полная суточная свежесть
+остаётся недоказанной до финальной сверки этого запуска.
