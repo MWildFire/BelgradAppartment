@@ -157,6 +157,49 @@ async def test_print_catalogue_redirect_stays_unknown_without_browser_retry() ->
 
 
 @pytest.mark.asyncio
+async def test_print_error_redirect_records_unknown_without_browser_or_dead_evidence() -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/404":
+            return httpx.Response(302, headers={"location": f"/404?aspxerrorpath={request.url.path}"})
+        return httpx.Response(404, text="Page unavailable")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()
+    try:
+        # An HTTPStatusError(404) could be interpreted as removal by the caller;
+        # this response must instead enter its ordinary UNKNOWN/backoff path.
+        with pytest.raises(_MarkerMissing, match="availability unknown"):
+            await scraper.fetch_detail(_DETAIL_URL)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["direct", "other_path", "other_host", "other_origin", "challenge", "payload"])
+async def test_unconfirmed_print_errors_keep_canonical_fallback(case: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/404" and case != "direct":
+            origin = "/unrelated" if case == "other_origin" else request.url.path
+            host = "https://example.com" if case == "other_host" else ""
+            path = "/missing" if case == "other_path" else "/404"
+            if request.url.path != "/missing":
+                return httpx.Response(302, headers={"location": f"{host}{path}?aspxerrorpath={origin}"})
+        body = CHALLENGE_HTML if case == "challenge" else GOOD_DETAIL_HTML if case == "payload" else "Missing"
+        return httpx.Response(404, text=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    try:
+        assert await scraper._fetch_via_smsprint(_DETAIL_URL, ready_marker=_DETAIL_VAR) == ""
+    finally:
+        await scraper.aclose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("body", [GOOD_DETAIL_HTML, CHALLENGE_HTML, ""])
 async def test_print_slug_redirect_preserves_payload_or_browser_fallback(body: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:

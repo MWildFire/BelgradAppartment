@@ -19,7 +19,7 @@ import json
 import logging
 import re
 from typing import Any, ClassVar
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -369,6 +369,22 @@ class HalooglasiScraper(Scraper):
             return ""
         try:
             response = await self._client.get(mirror_url)
+            if (
+                ready_marker == _DETAIL_VAR
+                and response.status_code == 404
+                and response.history
+                and all(r.url.host == "smsprint.halooglasi.com" for r in response.history)
+                and response.url.host == "smsprint.halooglasi.com"
+                and response.url.path == "/404"
+                and parse_qs(response.url.query.decode()).get("aspxerrorpath")
+                == [urlsplit(mirror_url).path]
+                and not _is_challenge(response.text)
+                and _DETAIL_VAR not in response.text
+            ):
+                # The print application explicitly redirected this exact listing to its
+                # error page. Do not spend the per-card browser timeout on that response,
+                # and do not expose its mirror-only 404 as canonical evidence of removal.
+                raise _MarkerMissing("print detail redirected to error page; availability unknown")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.info("[halooglasi] smsprint unavailable for %s: %s", url, type(exc).__name__)
