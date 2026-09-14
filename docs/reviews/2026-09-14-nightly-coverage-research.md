@@ -157,3 +157,65 @@ Read-only очередь по действующей DB: inventory 15467, select
 проверками независимой безопасности degraded canary; 40 supervisor tests passed.
 Свежая копия 20260914-090745-3331d106 создала manifest и переносит данные; до accepted
 receipt и сверки protected recovery рабочая версия остаётся 52266a2.
+
+## Выпуск и контроль 14 сентября, 12:19 UTC
+
+Свежая копия `20260914-090745-3331d106` принята: 1080718 файлов, восстановление
+DB/catalog/detail/photo и protected recovery подтверждены; локальный и серверный
+receipts согласованы. Ручная попытка backup завершилась exit 0; это не доказательство
+исправления прежней автоматической ошибки.
+
+Применена атомарная конфигурация, рабочая версия **d0fcb3e** установлена.
+Эффективно: all=true, recycle=100, refetch=25200, full=34200, оба auto-hide=false,
+4zida route присутствует, snapshot=shadow. Бот/site/admin/caddy active; monitor
+NRestarts=0. Новые календари установлены и проверены.
+
+Операционный нюанс: Persistent weekly timer при смене календаря немедленно догнал
+пропущенное воскресное 21:00. Первый canary корректно отказался с
+`competing_maintenance_cli`, не начав запись. Задание стартовало 10:01 UTC и было
+кооперативно остановлено 12:14 UTC, journal failed/CancelledError сохранён. Оно
+успело завершить discovery четырёх площадок: Nekretnine 4215/4222, 696 новых деталей
+и 9788 фото, 0 ошибок карточек/failed slots; 4zida 4371/4405, 86 новых, 1 ошибка и
+2 failed pages; Halo 3301/3379, 121 новых без ошибок; City 659/659, 9 новых.
+Nekr/4zida/Halo sweep запрещён по неполному покрытию. Полным ночным обновлением
+этот прерванный запуск не считается.
+
+Weekly и public timers временно остановлены для контрольной проверки; остальные
+активные таймеры сохранены. Нужно восстановить эти два таймера после проверки и
+учесть возможный немедленный public catch-up; не оставлять их выключенными.
+
+Повторный canary: 20 попыток / 7 verified / 13 errors / 1 deactivated за 29 s;
+результат честно degraded. Сохранены public rights, overlays, identities, inbound
+originals и медиа; единственный quality-check не прошёл из-за неполной проверки.
+Survivors/guard failures/SIGKILL = 0. Точные 13 ошибок перепроверяются независимо,
+после этого требуется отдельная строгая safety receipt. Первый диагностический
+probe отказался до сети на чтении root-private release.json; v2 проверяет точные
+SHA доступных runtime-файлов, права root marker не менялись.
+
+Независимая проверка после выпуска: public rights и overlays совпадают с baseline,
+22 sent deliveries не изменились, 197 representatives / 184 map points, 9 страниц
+каталога и 8 detail witnesses HTTP PASS. Источники всё ещё degraded; полного
+обновления всех 15 тысяч карточек пока нет.
+
+12:20 UTC: независимые 13 проб завершены — 6 пустых 4zida, 6 Halo catalogue UNKNOWN,
+1 Nekretnine HTTP404. Все 10 safety checks passed, отдельная receipt
+`b83ff0699ae3df677d93589fdda7777ff87dd70d16e5df42f1db9221010ddad0`; качество осталось
+degraded. Weekly и public timers восстановлены; weekly next 20 сентября 21:11 UTC,
+public немедленно запустил пропущенный слот. После него планируется контролируемый
+полный проход; пока он не запущен.
+
+Public catch-up завершился 12:21:33 UTC: 141 selected, 131 verified, 10 errors,
+0 skipped / deactivated; terminal degraded, source_errors пуст.
+
+Первый полный supervisor не дошёл до DB: `public_timer_not_off`, таймеры не менял.
+Исправлен только приватный управляющий helper v2: сам фиксирует и останавливает
+public timer перед общими guards; тот же finally восстанавливает его и остальные
+принадлежащие запуску активные таймеры, включая отказ позднего preflight. 42 tests
+PASS, в том числе partial timer operations и отказ guard после паузы. Runtime
+приложения остаётся d0fcb3e; принятая canary safety и hash-pinned core не менялись.
+
+Запущен `rentbelgrad-full-refresh-d0fcb3e-v2`, output
+`/opt/otz/data/research/acceptance-20260914/full-refresh-d0fcb3e-v2`.
+Он должен собрать before/after, сверить права/оригиналы/медиа, сохранить отдельный
+результат покрытия и вернуть свои таймеры. Пока это выполняющееся задание, не
+доказательство обновления всей базы.
