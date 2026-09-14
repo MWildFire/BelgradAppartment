@@ -115,7 +115,7 @@ def evaluate_health(
     """Emit only a changed actionable condition or newly completed run, never a repeated poll.
 
     Ordinary progress/count movement below a target does not repeatedly notify. Crossing
-    the 95% active or 100% public freshness target does. Failed delivery-count growth and
+    the configured active or 100% public freshness target does. Failed delivery-count growth and
     resolution are meaningful; a merely pending queue is not called failed without age proof.
     Proxy verification/expiry/renewal and capacity conditions are independent of overall
     degraded status. Unchanged inadequate capacity is quiet even on a later calendar day.
@@ -129,8 +129,14 @@ def evaluate_health(
     sources = {}
     for entry in health.get("sources", []):
         name = _code(entry.get("platform"))
-        active, fresh = _count(entry.get("active")), _count(entry.get("fresh_7d"))
-        fresh_enough = active == 0 or fresh / active >= 0.95
+        active = _count(entry.get("active"))
+        if "fresh_for_target" in entry:
+            fresh = _count(entry.get("fresh_for_target"))
+            target_pct = entry.get("fresh_target_pct")
+            target = target_pct / 100 if type(target_pct) is int and target_pct in {95, 100} else 1
+        else:
+            fresh, target = _count(entry.get("fresh_7d")), 0.95
+        fresh_enough = active == 0 or fresh / active >= target
         overdue = bool(entry.get("full_overdue", True))
         outcome = entry.get("outcome", "unknown")
         outcome = outcome if outcome in SOURCE_OUTCOMES else "unknown"

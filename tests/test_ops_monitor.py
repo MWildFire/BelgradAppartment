@@ -64,6 +64,22 @@ def test_unchanged_and_minor_count_changes_are_quiet():
     assert "private" not in json.dumps(second)
 
 
+def test_daily_target_cannot_reuse_weekly_success_or_alert_on_every_count_change():
+    value = health()
+    previous = evaluate_health(value, now=NOW)["next_state"]
+    source = value["sources"][0]
+    source.update(fresh_7d=100, fresh_for_target=94, fresh_target_hours=24, fresh_target_pct=100)
+    event = evaluate_health(value, previous, now=NOW)
+    assert event["emit"] and "nekretnine:active_freshness_below_target" in event["attention_added"]
+    source["fresh_for_target"] = 95
+    quiet = evaluate_health(value, event["next_state"], now=NOW)
+    assert not quiet["emit"]
+    source["fresh_for_target"] = 100
+    recovered = evaluate_health(value, quiet["next_state"], now=NOW)
+    assert recovered["emit"] and recovered["kind"] == "recovered"
+    assert recovered["messages_sent"] == 0
+
+
 def test_backup_expiry_alert_once_and_recovery_once():
     value = health()
     previous = evaluate_health(value, now=NOW)["next_state"]

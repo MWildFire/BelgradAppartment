@@ -472,11 +472,13 @@ def quota_estimates(
     *,
     now: datetime | None = None,
     measured_success_rates: Mapping[Platform, float] | None = None,
+    all_inventory_daily: bool = False,
 ) -> dict[str, dict[str, int | float | None]]:
     """Report actual freshness and theoretical daily capacity needs, never attainment.
 
     Public originals require daily success; other active listings supply the remainder of
     the 95%-within-seven-days target. Rate-adjusted attempt quotas require a measured rate.
+    All-inventory mode instead requires daily success for every scoped original.
     This is a capacity lower bound, not a promise that quotas overcome source failures.
     """
     now = utc(now or datetime.now(UTC))
@@ -496,21 +498,37 @@ def quota_estimates(
             and timedelta(0) <= now - utc(row.succeeded_at) <= timedelta(hours=24)
             for row in public
         )
-        target = math.ceil(len(active) * 0.95)
-        daily_successes = len(public) + math.ceil(max(0, target - public_active) / 7)
+        active_fresh_daily = sum(
+            row.succeeded_at is not None
+            and timedelta(0) <= now - utc(row.succeeded_at) <= timedelta(hours=24)
+            for row in active
+        )
+        target = len(active) if all_inventory_daily else math.ceil(len(active) * 0.95)
+        daily_successes = len(public) + math.ceil(
+            max(0, target - public_active) / (1 if all_inventory_daily else 7)
+        )
+        daily_plan = select_fair(
+            rows, limit=len(rows), now=now, due_only=False,
+            retry_backoff_cap=timedelta(hours=12),
+        ) if all_inventory_daily else None
         rate = (measured_success_rates or {}).get(platform)
         if rate is not None and (not math.isfinite(rate) or not 0 <= rate <= 1):
             raise ValueError("measured success rate must be between zero and one")
         output[platform.value] = {
             "active": len(active),
             "fresh_active_7d": active_fresh,
-            "active_target_deficit": max(0, target - active_fresh),
+            "fresh_active_24h": active_fresh_daily,
+            "active_target_deficit": max(
+                0, target - (active_fresh_daily if all_inventory_daily else active_fresh)
+            ),
             "public": len(public),
             "fresh_public_24h": public_fresh,
             "public_target_deficit": len(public) - public_fresh,
             "broken": sum(row.broken for row in rows),
-            "eligible_due": sum(is_due(row, now) for row in rows),
-            "retry_backoff": sum(
+            "eligible_due": (
+                daily_plan.eligible if daily_plan else sum(is_due(row, now) for row in rows)
+            ),
+            "retry_backoff": daily_plan.retry_deferred if daily_plan else sum(
                 row.next_retry_at is not None and utc(row.next_retry_at) > now for row in rows
             ),
             "minimum_daily_successes": daily_successes,

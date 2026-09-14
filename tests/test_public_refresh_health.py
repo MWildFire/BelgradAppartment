@@ -94,12 +94,21 @@ async def test_public_progress_and_main_refresh_checkpoint_remain_independent(db
 
 async def test_old_public_completion_exposes_missed_cadence(db, isolated):
     isolated.write_text(json.dumps(checkpoint(
-        checkpoint_at=(NOW - timedelta(hours=13, seconds=1)).isoformat(),
+        checkpoint_at=(NOW - timedelta(hours=14, seconds=1)).isoformat(),
     )))
     result = await report()
     assert result["public_refresh"]["status"] == "success"
     assert result["public_refresh"]["overdue"] is True
-    assert "public detail refresh has no checkpoint in 13 hours" in result["reasons"]
+    assert "public detail refresh has no checkpoint in 14 hours" in result["reasons"]
+
+
+async def test_overnight_public_gap_allows_jitter_and_service_window(db, isolated):
+    isolated.write_text(json.dumps(checkpoint(
+        checkpoint_at=(NOW - timedelta(hours=13, minutes=50)).isoformat(),
+    )))
+    result = await report()
+    assert result["public_refresh"]["overdue"] is False
+    assert not any("has no checkpoint" in reason for reason in result["reasons"])
 
 
 @pytest.mark.parametrize("value,status", [

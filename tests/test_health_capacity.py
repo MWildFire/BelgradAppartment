@@ -81,6 +81,72 @@ def test_zero_rate_and_unmeasured_source_never_produce_finite_capacity():
     assert capacity["estimated_daily_attempts"] is None
 
 
+def test_all_inventory_capacity_uses_daily_union_and_actual_retry_policy():
+    configured = settings(quota=0)
+    configured.nightly_detail_refresh_all = True
+    inventory = [
+        row(1, public=True, succeeded_at=NOW - timedelta(days=2)),
+        row(2, attempted_at=NOW - timedelta(hours=2),
+            succeeded_at=NOW - timedelta(hours=2) + timedelta(seconds=1)),
+        row(3, public=True, active=False, succeeded_at=NOW - timedelta(hours=20)),
+        row(4, attempted_at=NOW - timedelta(hours=13), failure_count=8,
+            next_retry_at=NOW + timedelta(hours=10)),
+        row(5, attempted_at=NOW - timedelta(hours=1), failure_count=8,
+            next_retry_at=NOW + timedelta(hours=23)),
+    ]
+    capacity = refresh_capacity(inventory, settings=configured, now=NOW)
+    source = capacity["sources"][Platform.NEKRETNINE.value]
+    assert capacity["selection_mode"] == "all_inventory"
+    assert capacity["numeric_limit_applies"] is False
+    assert capacity["minimum_daily_successes"] == capacity["configured_daily_attempts"] == 5
+    assert capacity["configured_heal_attempts"] == 0
+    assert capacity["eligible_now"] == 4 and capacity["retry_deferred"] == 1
+    assert source["fresh_active_7d"] == 2 and source["fresh_active_24h"] == 1
+    assert source["active_target_deficit"] == 3
+    assert capacity["active_freshness_hours"] == 24 and capacity["active_target_pct"] == 100
+    assert capacity["status"] == "insufficient_at_observed_rate"
+    assert capacity["attainment_confirmed"] is False
+
+
+async def test_all_inventory_health_and_ui_do_not_treat_two_day_old_data_as_fresh(
+    db, monkeypatch, tmp_path,
+):
+    configured = get_settings()
+    monkeypatch.setattr(configured, "data_dir", tmp_path)
+    monkeypatch.setattr(configured, "nightly_detail_refresh_all", True)
+    monkeypatch.setattr(configured, "nightly_detail_refresh", 0)
+    monkeypatch.setattr("src.admin.operational_health.schedules", lambda: {})
+    async with get_session() as session:
+        for identity, age in ((1, timedelta(days=2)), (2, timedelta(hours=1))):
+            session.add(Listing(
+                platform=Platform.NEKRETNINE, external_id=str(identity),
+                url=f"https://example.invalid/{identity}", is_active=True,
+                details_refreshed_at=NOW - age, details_succeeded_at=NOW - age,
+            ))
+    async with get_session() as session:
+        operations = await build_operations(session, now=NOW)
+    source = next(s for s in operations["sources"] if s["platform"] == "NEKRETNINE")
+    assert source["fresh_7d"] == 2 and source["fresh_for_target"] == 1
+    assert source["fresh_pct"] == 50 and source["fresh_target_pct"] == 100
+    assert any("24-hour freshness below 100%" in reason for reason in operations["reasons"])
+    assert not any("quota below" in reason for reason in operations["reasons"])
+    environment = Environment(
+        loader=FileSystemLoader(Path(__file__).parents[1] / "src/admin/templates"), autoescape=True,
+    )
+    rendered = environment.get_template("health.html").render(
+        report={"now": NOW, "operations": operations, "platforms": [],
+                "monitor": {"status": "warn", "last_inbound_at": None},
+                "fingerprint": {"present": False}},
+        request=SimpleNamespace(url=SimpleNamespace(path="/health"),
+                                state=SimpleNamespace(csrf_token="fixture")),
+    )
+    assert "Свежие данные ≤24 часов" in rendered
+    assert "количественный лимит не применяется" in rendered
+    assert "95% активных ≤7 дней" not in rendered
+    assert "Настроенный лимит регулярной очереди" not in rendered
+    assert "Проблемные карточки проверяются в общей ночной очереди" in rendered
+
+
 async def test_database_overlay_count_unique_public_originals_and_ui_are_read_only(
     db, monkeypatch, tmp_path
 ):

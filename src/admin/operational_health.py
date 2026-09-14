@@ -108,8 +108,8 @@ def public_refresh_checkpoint(path: Path, *, now: datetime) -> dict:
             "status": status, "run_id": run_id, "checkpoint_at": checked, "final": final,
             "stop_reason": stop,
             **counts, "source_errors": safe_sources, "source_error_count": len(source_errors),
-            # Longest scheduled gap is 12h05; allow the full 45-minute service window.
-            "overdue": now - checked > timedelta(hours=13),
+            # 19:00 -> 08:00 plus 5-minute jitter and a 45-minute service window.
+            "overdue": now - checked > timedelta(hours=14),
         }
     except FileNotFoundError:
         return unknown | {"status": "missing"}
@@ -146,7 +146,10 @@ def refresh_capacity(inventory: list[RefreshCandidate], *, settings, now: dateti
         for platform, sample in samples.items()
         if sample["succeeded"] + sample["failed"]
     }
-    estimates = quota_estimates(inventory, now=now, measured_success_rates=rates)
+    all_daily = bool(getattr(settings, "nightly_detail_refresh_all", False))
+    estimates = quota_estimates(
+        inventory, now=now, measured_success_rates=rates, all_inventory_daily=all_daily,
+    )
     for platform, sample in samples.items():
         estimates[platform.value]["latest_attempt_sample"] = sample
     minimum = sum(source["minimum_daily_successes"] for source in estimates.values())
@@ -156,7 +159,8 @@ def refresh_capacity(inventory: list[RefreshCandidate], *, settings, now: dateti
         if all(source["estimated_daily_attempts"] is not None for source in relevant)
         else None
     )
-    quota = max(0, settings.nightly_detail_refresh)
+    # In all-inventory mode this is one pass over the current scope, not a numeric cap.
+    quota = minimum if all_daily else max(0, settings.nightly_detail_refresh)
     if quota < minimum:
         status = "insufficient_even_at_full_success"
     elif any(source["measured_success_rate"] == 0 for source in relevant):
@@ -174,7 +178,13 @@ def refresh_capacity(inventory: list[RefreshCandidate], *, settings, now: dateti
         "public_originals": sum(source["public"] for source in estimates.values()),
         "minimum_daily_successes": minimum,
         "configured_daily_attempts": quota,
-        "configured_heal_attempts": max(0, settings.nightly_heal_limit),
+        "selection_mode": "all_inventory" if all_daily else "due",
+        "numeric_limit_applies": not all_daily,
+        "eligible_now": sum(source["eligible_due"] for source in estimates.values()),
+        "retry_deferred": sum(source["retry_backoff"] for source in estimates.values()),
+        "active_freshness_hours": 24 if all_daily else 168,
+        "active_target_pct": 100 if all_daily else 95,
+        "configured_heal_attempts": 0 if all_daily else max(0, settings.nightly_heal_limit),
         "shared_budget_sec": settings.nightly_refetch_budget_sec,
         "minimum_daily_shortfall": max(0, minimum - quota),
         "estimated_daily_attempts": estimated_attempts,
@@ -249,7 +259,7 @@ async def build_operations(session, *, now: datetime | None = None) -> dict:
           or public_refresh["source_error_count"]):
         reasons.append("public detail refresh reports errors or skipped work")
     if public_refresh["overdue"]:
-        reasons.append("public detail refresh has no checkpoint in 13 hours")
+        reasons.append("public detail refresh has no checkpoint in 14 hours")
     for platform in Platform:
         full_successes = [
             run
@@ -262,10 +272,12 @@ async def build_operations(session, *, now: datetime | None = None) -> dict:
             )
         ]
         last_full = max((_datetime(run["finished_at"]) for run in full_successes), default=None)
-        stale_full = last_full is None or now - last_full > timedelta(days=8)
+        all_daily = capacity["selection_mode"] == "all_inventory"
+        full_window = timedelta(hours=25) if all_daily else timedelta(days=8)
+        stale_full = last_full is None or now - last_full > full_window
         source_capacity = capacity["sources"].get(platform.value, {})
         active = source_capacity.get("active", 0)
-        fresh = source_capacity.get("fresh_active_7d", 0)
+        fresh = source_capacity.get("fresh_active_24h" if all_daily else "fresh_active_7d", 0)
         latest = next(
             (
                 source
@@ -277,14 +289,20 @@ async def build_operations(session, *, now: datetime | None = None) -> dict:
         )
         ratio = fresh / active if active else 0.0
         if stale_full:
-            reasons.append(f"{platform.value}: no verified full success in 8 days")
-        if active and ratio < 0.95:
-            reasons.append(f"{platform.value}: verified 7-day freshness below 95%")
+            window = "25 hours" if all_daily else "8 days"
+            reasons.append(f"{platform.value}: no verified full success in {window}")
+        if active and ratio < capacity["active_target_pct"] / 100:
+            target = "24-hour freshness below 100%" if all_daily else "7-day freshness below 95%"
+            reasons.append(f"{platform.value}: verified {target}")
         sources.append(
             {
                 "platform": platform.value,
                 "active": active,
-                "fresh_7d": fresh,
+                "fresh_7d": source_capacity.get("fresh_active_7d", 0),
+                "fresh_24h": source_capacity.get("fresh_active_24h", 0),
+                "fresh_for_target": fresh,
+                "fresh_target_hours": capacity["active_freshness_hours"],
+                "fresh_target_pct": capacity["active_target_pct"],
                 "fresh_pct": round(100 * ratio, 1),
                 "last_full_success": last_full,
                 "full_overdue": stale_full,

@@ -22,14 +22,16 @@
 
 <h2>Качество автоматических обновлений</h2>
 {% set ops = report.operations %}
+{% set capacity = ops.refresh_capacity %}
+{% set all_daily = capacity.selection_mode == 'all_inventory' %}
 <p><strong>{{ ops.status }}</strong> · Последний запуск:
   {{ ops.latest_run.get('status', 'нет проверенной истории') }}
   {{ ops.latest_run.get('finished_at') or ops.latest_run.get('started_at', '') }}</p>
 <table>
-  <thead><tr><th>Источник</th><th>Полный подтверждённый успех</th><th>Свежие данные ≤7 дней</th><th>Последний обход</th><th>Причины запрета снятия</th></tr></thead>
+  <thead><tr><th>Источник</th><th>Полный подтверждённый успех</th><th>Свежие данные {{ '≤24 часов' if all_daily else '≤7 дней' }}</th><th>Последний обход</th><th>Причины запрета снятия</th></tr></thead>
   <tbody>{% for p in ops.sources %}<tr>
     <td>{{ p.platform }}</td><td>{{ p.last_full_success or 'не подтверждён' }}</td>
-    <td>{{ p.fresh_7d }} / {{ p.active }} ({{ p.fresh_pct }}%)</td>
+    <td>{{ p.fresh_for_target if p.fresh_for_target is defined else p.fresh_7d }} / {{ p.active }} ({{ p.fresh_pct }}%)</td>
     <td>{{ p.outcome }}; {{ p.observed }} / {{ p.total }}; ошибок {{ p.errors }}</td>
     <td>{{ p.blocked | join(', ') }}</td>
   </tr>{% endfor %}</tbody>
@@ -49,23 +51,33 @@
   ошибок источников {{ public_run.source_error_count }}.
   {% if not public_run.final %}Завершение не подтверждено.{% endif %}
   {% if public_run.stop_reason == 'budget_exhausted' %}Исчерпан бюджет времени.{% endif %}
-  {% if public_run.overdue %}Нет новой записи более 13 часов.{% endif %}</p>
+  {% if public_run.overdue %}Нет новой записи более 14 часов.{% endif %}</p>
 {% if public_run.source_errors %}<ul>
   {% for source, code in public_run.source_errors.items() %}<li>{{ source }}: {{ code }}</li>{% endfor %}
 </ul>{% endif %}
 {% endif %}
-{% set capacity = ops.refresh_capacity %}
 <h3>Хватает ли мощности обновлений</h3>
 <p>Сейчас {{ capacity.active }} активных объявлений и {{ ops.public_overlays }} публичных публикаций
   ({{ capacity.public_originals }} уникальных исходников).
+  {% if all_daily %}
+  Цель — подтверждённые данные каждой квартиры не старше 24 часов:
+  <strong>{{ capacity.minimum_daily_successes }} успешных обновлений в сутки</strong>.
+  В ночную очередь включена вся база; количественный лимит не применяется.
+  Сейчас готовы к проверке {{ capacity.eligible_now }}, после недавних ошибок временно отложены {{ capacity.retry_deferred }}.
+  {% else %}
   Для целей «публичные ≤24 часов, 95% активных ≤7 дней» требуется как минимум
   <strong>{{ capacity.minimum_daily_successes }} успешных обновлений в сутки</strong>.
-  Настроенный лимит регулярной очереди — <strong>{{ capacity.configured_daily_attempts }} попыток в сутки</strong>.</p>
+  Настроенный лимит регулярной очереди — <strong>{{ capacity.configured_daily_attempts }} попыток в сутки</strong>.
+  {% endif %}</p>
 {% if capacity.status == 'insufficient_even_at_full_success' %}
 <p class="badge badge-red">Лимита недостаточно даже при 100% успехе:
   не хватает как минимум {{ capacity.minimum_daily_shortfall }} успешных обновлений в сутки.</p>
 {% elif capacity.status == 'insufficient_at_observed_rate' %}
+{% if all_daily %}
+<p class="badge badge-red">При наблюдаемой доле ошибок одного прохода недостаточно для полного подтверждения базы:
+{% else %}
 <p class="badge badge-red">Лимит ниже оценки по наблюдаемой доле успеха:
+{% endif %}
   около {{ capacity.estimated_daily_attempts }} попыток в сутки.</p>
 {% elif capacity.status == 'no_observed_success' %}
 <p class="badge badge-red">В выборке одного из источников нет успешных попыток.
@@ -73,7 +85,7 @@
 {% elif capacity.status == 'unverified' %}
 <p class="badge badge-yellow">Недостаточно подтверждённых попыток для оценки рабочего лимита.</p>
 {% else %}
-<p>Лимит не ниже расчётной оценки. Достижение целей проверяется по фактической свежести выше.</p>
+<p>{{ 'Вся база включена в ночную очередь.' if all_daily else 'Лимит не ниже расчётной оценки.' }} Достижение целей проверяется по фактической свежести выше.</p>
 {% endif %}
 <table>
   <thead><tr><th>Источник</th><th>Активных / публичных исходников</th><th>Минимум успехов в сутки</th><th>Последние попытки за 7 дней</th><th>Оценка попыток в сутки</th></tr></thead>
@@ -90,8 +102,9 @@
 <p class="muted">Доля успеха — выборка только последней попытки каждого исходника за 7 дней,
   а не число всех попыток или производительность запуска. Старые отметки попыток без доказанного результата исключены.
   Поля и полный комплект фотографий должны быть подтверждены вместе. Оценка — нижняя граница, а не обещание сроков.
-  Дополнительно настроено до {{ capacity.configured_heal_attempts }} попыток ремонта;
-  они не считаются гарантированным покрытием регулярной очереди.
+  {% if all_daily %}Проблемные карточки проверяются в общей ночной очереди.
+  {% else %}Дополнительно настроено до {{ capacity.configured_heal_attempts }} попыток ремонта;
+  они не считаются гарантированным покрытием регулярной очереди.{% endif %}
   Общий бюджет обслуживания деталей и проверки ссылок — {{ capacity.shared_budget_sec }} секунд за запуск;
   ограничение времени и ошибки источников могут уменьшить фактически выполненное число.</p>
 <p>Восстановление внешней копии: {{ 'подтверждено' if ops.backup_verified else 'требует проверки' }}.
