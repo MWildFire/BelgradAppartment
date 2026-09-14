@@ -1554,7 +1554,7 @@ async def rolling_detail_refresh(
         # Relative cost observed in the 2026-09-14 sustained probes, with room for
         # local photo validation. Weight the actual queue, never equal-size quotas.
         cost = {Platform.CETIRI_ZIDA: 2, Platform.CITYEXPERT: 1,
-                Platform.HALOOGLASI: 1, Platform.NEKRETNINE: 3}
+                Platform.HALOOGLASI: 1, Platform.NEKRETNINE: 4}
         weights: dict[Platform, float] = {}
         for row in plan.rows:
             weights[row.platform] = weights.get(row.platform, 0) + cost.get(row.platform, 1)
