@@ -103,3 +103,27 @@ cooperatively cancelled: terminal14:36:46UTC,6safety checks pass, no residuals o
 SIGKILL,5timers restored. Monitor active,NRestarts0. No full-detail result on this
 revision yet. No purchases/cancellations/test messages. Resume only on user request.
 See [pause checkpoint](2026-09-15-resume-checkpoint.md) for exact gates and next steps.
+
+## Resumed15Sep15:16UTC
+
+User explicitly returned. Production8681742 and ordinary timers/monitor verified;
+no new nightly run after the pause. Automatic offhost backup20260915-150857-e60adda9
+started independently at15:08UTC and is still hashing the source, not accepted yet.
+New full pass awaits fresh verified backup and matching public canary.
+
+Authenticated IPRoyal order80643004 at15:23UTC:176.63GB remaining, reset25Sep,
+final price$6.00. Other order80647128 earlier today:195.22GB,$8.10. Separate pools,
+no purchase/cancellation. Before-pass usage baseline saved privately.
+
+Additional bounded read-only probe on8681742: four last challenge-failed Nekretnine
+URLs from the automatic-night log, on each existing ISP:16/16 complete with matching
+identity, no source failures or poisoned slots. All16 HTTP403s recovered through
+the browser; one additional initial browser retry recovered. No DB/photo/message
+writes. This supports transient access/session failure, not permanent bad URLs;
+it does not yet prove sustained full-night access. Probe ended; public timer restored
+and no probe processes remain.
+
+Bot read-only health16:04UTC:monitoractive,NRestarts0; last300log lines0ERROR/0WARNING,
+logmtime16:03UTC. No inbound rows in last48h;22sent delivery rows remain, newest
+13Sep12:59UTC. This does not independently prove source-channel inactivity and
+is not a fresh end-to-end send test. No test messages sent.

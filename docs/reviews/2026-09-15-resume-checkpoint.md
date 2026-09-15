@@ -1,8 +1,40 @@
-# RentBelgrad pause checkpoint — 2026-09-15
+# RentBelgrad resume checkpoint — 2026-09-15
 
-User explicitly requested a short stop/save while moving to another apartment.
-Do not resume research or controlled crawls until the user returns. Keep ordinary
-Finder/site services and the existing nightly schedule running.
+User returned with “Продолжай работу”; work resumed15:16UTC. The pause evidence
+below is historical. Production8681742/monitoractive and all5timers verified; no
+new nightly run after the pause. Automatic backup20260915-150857-e60adda9 is
+already running, not accepted yet. Source snapshot completed;1097134files,
+2.797GBchanged/71.762GBunchanged. Local generation assembly in progress at15:51UTC.
+Read-only last-four-failed-card probe on all4ISP succeeded16/16; proof is private
+nekretnine-failed-routes-proof-8681742.json; no residuals, public timer restored.
+Wait for verified receipt before matching new
+canary/full pass. New full output suffix planned:8681742-resume1516.
+
+IPRoyal order80643004 checked15:23UTC:176.63GB remaining, reset25Sep, price$6.00.
+The first order had195.22GB remaining today. No purchase/cancellation.
+
+## Current continuation,16:18UTC
+
+Fresh automatic backup **20260915-150857-e60adda9** accepted: data/application/offhost/
+protected checks pass and published server receipt matches. Created15Sep15:09:26UTC,
+schema0014; offline restore catalog/apartment/photo200 and photo decoded.
+Root accepted receipt: `/opt/otz/data/research/acceptance-20260915/accepted-backup-resume1516.json`.
+SHA256 `b4b87df38b3a78b219597646e5e01e41174f244da72f53b75f2f52e1ec2a4c29`.
+Manifest SHA `cab9c75c7c21bc1e0d65316fb8e716491e6a7d991d2092819da73cfba62ae470`.
+New canary unit `rentbelgrad-public-canary-8681742-resume1516`, output same suffix
+under acceptance-20260915. Public timer pause is recorded in
+`resume1516-public-timer-before.json`; restore it after clean canary completion,
+then full supervisor owns its own timer pause. Canary passed16:20:27UTC:20/20,
+275photo hashes,8checks,clean cleanup; resultSHA
+`80cb741afa0bc8a03a6c0d38db5eb0fbd7366ebaf45bde7ef6fab8d336d3c067`.
+Public timer restored before full launch. **Full running since16:21:57UTC**,
+journal`eacfb60645004cf0bd9c19d4ca874bc6`, unit`rentbelgrad-full-refresh-8681742-resume1516`.
+Output`/opt/otz/data/research/acceptance-20260915/full-refresh-8681742-resume1516`.
+Companion`rentbelgrad-full-terminal-8681742-resume1516`. New units use KillMode=mixed
+and SendSIGKILL=no; full36,000sec bound,180secstop. Status helper
+`/usr/local/lib/rentbelgrad-recovery/full_refresh_status_8681742_resume1516.py`
+takes this exact journal ID. Do not start competing maintenance while running.
+Monitoractive/NRestarts0. Full acceptance remains pending.
 
 ## First actions on resume
 
