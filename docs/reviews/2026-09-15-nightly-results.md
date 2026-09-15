@@ -93,3 +93,13 @@ signals and content preservation. Full suite/browser checks and release pending.
 Current controlled c4a1454 run may be cooperatively stopped before deployment of this
 additional correction; preserve its actual terminal result and timer restoration.
 Do not claim this intermediate run achieved the nightly objective.
+
+## User-requested pause,15Sep14:36UTC
+
+8681742 installed after CI34981550799 succeeded;1596unit and54browser checks pass.
+Production canary20/20verified,300photo hashes,8safety checks pass, no residuals.
+User requested a short stop while moving apartments. Controlled full8681742 was
+cooperatively cancelled: terminal14:36:46UTC,6safety checks pass, no residuals or
+SIGKILL,5timers restored. Monitor active,NRestarts0. No full-detail result on this
+revision yet. No purchases/cancellations/test messages. Resume only on user request.
+See [pause checkpoint](2026-09-15-resume-checkpoint.md) for exact gates and next steps.
