@@ -36,7 +36,7 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 from typing import Any, ClassVar
-from urllib.parse import unquote, urljoin, urlparse
+from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -48,6 +48,22 @@ from src.scrapers.proxy_pool import NoProxyAvailableError, ProxyCandidate, Proxy
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://www.nekretnine.rs"
+
+
+def _newest_first_url(url: str) -> str:
+    """Use publication order unless the configured search explicitly chooses another sort.
+
+    The site's unqualified search defaults to relevance, which can put known ads ahead of
+    new ones and trigger the incremental known-page stop before reaching fresh listings.
+    These parameters are the site's own "Najnovije objavljeno" search option.
+    """
+    parts = urlparse(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)
+    if any(key in {"criterio", "ordine"} for key, _ in query):
+        return url
+    query.extend((("criterio", "data"), ("ordine", "desc")))
+    return urlunparse(parts._replace(query=urlencode(query)))
+
 
 # Tolerate extra/reordered <script> attributes (e.g. a CSP `nonce`) — matching the resilient
 # pattern the 4zida scraper uses. The downstream json.loads + isinstance guards catch a bad capture.
@@ -102,7 +118,7 @@ class NekretnineScraper(Scraper):
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)  # type: ignore[arg-type]
-        self.list_url = get_settings().nekretnine_list_url
+        self.list_url = _newest_first_url(get_settings().nekretnine_list_url)
         # Pages we couldn't fetch and skipped past — surfaced via ScrapeResult so a partial
         # under-run doesn't masquerade as a healthy walk.
         self._skipped_pages = 0

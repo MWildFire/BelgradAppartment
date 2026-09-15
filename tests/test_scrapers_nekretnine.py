@@ -395,6 +395,7 @@ async def test_list_recent_segments_by_price_when_capped() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         p = request.url.params
+        assert p.get("criterio") == "data" and p.get("ordine") == "desc"
         page = int(p.get("pag", "1"))
         if "prezzoMinimo" in p:
             band_requests.append(f"{p.get('prezzoMinimo')}-{p.get('prezzoMassimo', 'inf')}")
