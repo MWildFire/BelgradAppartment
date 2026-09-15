@@ -213,6 +213,30 @@ async def test_first_hanging_item_respects_other_sources_reserved_time():
     assert result.elapsed_sec < 0.5
 
 
+async def test_exhausted_proxy_pool_skips_remaining_source_without_false_attempts():
+    from src.scrapers.proxy_pool import NoProxyAvailableError
+
+    rows = [candidate(i, PLATFORMS[0]) for i in range(1, 4)]
+    rows += [candidate(4, PLATFORMS[1])]
+    plan = select_fair(rows, limit=4, now=NOW)
+    visited = []
+
+    async def callback(row, _context):
+        visited.append(row.id)
+        if row.platform == PLATFORMS[0]:
+            raise NoProxyAvailableError("all configured routes exhausted")
+        return CallbackResult(complete())
+
+    result = await run_fair_refresh(plan, callback, budget_sec=1, item_timeout_sec=0.5)
+    assert len(visited) == 2 and 4 in visited
+    assert result.attempted == 2 and result.succeeded == 1
+    assert result.source_errors == {PLATFORMS[0].value: "NoProxyAvailableError"}
+    skipped = [item for item in result.items if not item.attempted]
+    assert len(skipped) == 2
+    assert all(item.attempted_at is None for item in skipped)
+    assert all(item.evidence.reason == "NoProxyAvailableError" for item in skipped)
+
+
 async def test_inventory_weight_reserves_time_for_large_source_and_later_source():
     plan = select_fair([candidate(1, PLATFORMS[0]), candidate(2, PLATFORMS[1])],
                        limit=2, now=NOW)

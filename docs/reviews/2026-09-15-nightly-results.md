@@ -1,0 +1,70 @@
+# RentBelgrad: full-refresh results and remaining repairs, 2026-09-15
+
+## Result recovered from the saved terminal evidence
+
+Production827b904, controlled run b9f3f0e55db646a688fb0a45767c20e8:
+14Sep14:00–21:08UTC, source quality degraded. 16050selected /16179inventory /
+129retry-deferred;10511verified,1835errors,3704not attempted,358confirmed
+source removals recorded during details,2310photos downloaded. Detail counters
+were independently reconciled against the coherent after snapshot:
+
+| Source | Attempted | Verified | Failed |
+|---|---:|---:|---:|
+| 4zida |5680|4440|1240|
+| Halooglasi |1313|1097|216|
+| Nekretnine |4480|4101|379|
+| CityExpert |873|873|0|
+
+Halo exhausted its source time allocation, leaving3704selected rows unattempted.
+All five maintenance timers restored. The following automatic nightly run started
+21:09UTC; its separate final counters were7789verified/4633errors/3386skipped,
+15808selected,190retry-deferred. Do not confuse these later checkpoints with the
+controlled run. The saved terminal copies and detail-audit preserve the first run.
+
+Finder monitor active with0restarts;22sent delivery rows remain, latest13Sep12:59UTC.
+This is service/ledger evidence, not a new delivery test. No messages sent by probes.
+
+## Safety review of the failed supervisor invariant
+
+Rights, overlays, inbound originals and changed public media passed. No listing
+removed and id/platform/external_id remain unchanged. Only derived grouping changed:
+1468dup_group_id and989is_primary fields. The existing dedup job deliberately
+recomputes these after refreshing photographs. Independent after-snapshot review:
+3600active groups; no singleton, wrong minimum-ID group key, missing/duplicate
+primary, wrong primary rank (photo count, coordinates, lower ID), or ungrouped
+nonprimary row. The old receipt remains failed; do not silently rewrite it as success.
+Source quality remains degraded independently of this expected derived-field change.
+
+## Confirmed Halo root cause and candidate correction
+
+The remaining slow failures were HTTP400, not the earlier narrow print404 redirects.
+27URLs recovered from the controlled log: fresh requests15Sep returned26detail
+payloads and1catalogue redirect. Cookies reveal ViewedAds_YYYYMMDD grows by about
+14bytes per distinct viewed ad. Controlled same-session proof:
+
+- baseline HTTP200, detail marker present;
+- tracking history18262cookie bytes: HTTP400, explicit request-header-size error;
+- remove only viewed history: HTTP200,42cookie bytes, detail marker present.
+
+Candidate discards only Halo ViewedAds_YYYYMMDD cookies before print requests,
+preserving ASP.NET session, other cookies, proxy route and existing UNKNOWN logic.
+Exact candidate file tested on VPS with initially oversized history:26/26available
+cards parsed with price/area/photos,1UNKNOWN,30HTTP requests,max cookie header42bytes;
+no browser, DB, photos or message writes. SHA5d142973d4fff081572416cd0e974a59f8600513997a48100b9fa99dca8b4a36.
+
+## Exhausted proxy accounting
+
+Automatic nightly logs show all Nekretnine slots exhausted around23:26UTC. The old
+fair executor kept invoking the failed context, recording thousands of listing
+errors/backoffs without further HTTP requests. Candidate stops that source on
+NoProxyAvailableError, records its explicit source error and leaves remaining rows
+unattempted; later sources continue. It does not reset failed proxy slots or override
+upstream errors. A fresh four-ISP probe is running to distinguish current route
+availability from the previous long-run exhaustion. First probe had no browser
+operations because the root process lacked its browser-cache path; invalid as a
+proxy availability test. V2 explicitly uses the installed browser cache.
+
+Local candidate checks:1575unit passed/1skipped (126.61s),54browser passed(59.88s).
+Release and a new production full pass remain pending. No new spending or subscription
+cancellations. Private evidence: `/opt/otz/data/research/acceptance-20260915` and
+`/Users/mvstrike/Backups/RentBelgrad/2026-09-15/`.

@@ -157,6 +157,38 @@ async def test_print_catalogue_redirect_stays_unknown_without_browser_retry() ->
 
 
 @pytest.mark.asyncio
+async def test_long_print_walk_does_not_accumulate_view_history_or_discard_session() -> None:
+    seen_sizes: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cookies = request.headers.get("cookie", "")
+        seen_sizes.append(len(cookies))
+        assert "ASP.NET_SessionId=session" in cookies
+        assert "preferences=keep" in cookies
+        assert "ViewedAds_20260915" not in cookies
+        return httpx.Response(200, text=GOOD_DETAIL_HTML, headers={
+            "set-cookie": "ViewedAds_20260915=" + "1234567890123," * 1300 + "; Path=/",
+        })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client.cookies.set("ASP.NET_SessionId", "session", domain="smsprint.halooglasi.com")
+    client.cookies.set("preferences", "keep", domain=".halooglasi.com")
+    client.cookies.set("ViewedAds_20260914", "old", domain=".halooglasi.com")
+    client.cookies.set("ViewedAds_20260915", "unrelated", domain="example.com")
+    scraper = HalooglasiScraper(client=client)
+    try:
+        for _ in range(10):
+            assert _DETAIL_VAR in await scraper._fetch_via_smsprint(
+                _DETAIL_URL, ready_marker=_DETAIL_VAR,
+            )
+        assert max(seen_sizes) < 100
+        assert client.cookies.get("ViewedAds_20260915", domain="example.com") == "unrelated"
+    finally:
+        await scraper.aclose()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_print_error_redirect_records_unknown_without_browser_or_dead_evidence() -> None:
     from src.scrapers.halooglasi import _MarkerMissing
 

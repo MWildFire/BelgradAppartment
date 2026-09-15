@@ -21,6 +21,7 @@ from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.db.models import Listing, Match, Platform, SiteListing
+from src.scrapers.proxy_pool import NoProxyAvailableError
 
 
 @dataclass(frozen=True)
@@ -438,6 +439,11 @@ async def run_fair_refresh(
                             ):
                                 raise TypeError("callback must return CallbackResult with evidence")
                             evidence, payload = result.evidence, result.payload
+                        except NoProxyAvailableError:
+                            # No route remains for this source context. Continuing would
+                            # record thousands of failed listings without another request
+                            # and unnecessarily put every remaining row into backoff.
+                            raise
                         except Exception as error:
                             evidence, payload = RefreshEvidence.failed(type(error).__name__), None
                         items.append(

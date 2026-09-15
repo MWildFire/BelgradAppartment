@@ -367,6 +367,17 @@ class HalooglasiScraper(Scraper):
         mirror_url = self._smsprint_url(url)
         if mirror_url is None:
             return ""
+        # The print site appends every visited ad to ViewedAds_YYYYMMDD. Unlike a
+        # browser, httpx retains this cookie beyond the browser's size limit; a
+        # long crawl eventually sends >16 KB and IIS rejects every request with
+        # HTTP 400. Viewing history is not needed to read public listing payloads.
+        # Keep the ASP.NET session and all unrelated cookies intact.
+        for cookie in list(self._client.cookies.jar):
+            if (
+                re.fullmatch(r"ViewedAds_\d{8}", cookie.name)
+                and cookie.domain.lstrip(".") in {"halooglasi.com", "smsprint.halooglasi.com"}
+            ):
+                self._client.cookies.delete(cookie.name, domain=cookie.domain, path=cookie.path)
         try:
             response = await self._client.get(mirror_url)
             if (
