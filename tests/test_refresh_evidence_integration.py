@@ -448,12 +448,13 @@ async def test_cancel_during_failed_acceptance_still_cancels_remaining_work(db, 
     assert stored.detail_failure_count == 1
 
 
-async def test_explicit_source_removal_preserves_last_content_and_success(db):
+@pytest.mark.parametrize("platform", [Platform.CETIRI_ZIDA, Platform.HALOOGLASI])
+async def test_explicit_source_removal_preserves_last_content_and_success(db, platform):
     from datetime import UTC, datetime
 
     from src.scrapers.base import SourceListingRemovedError
     previous = datetime(2026, 8, 1, tzinfo=UTC)
-    row = await seed(platform=Platform.CETIRI_ZIDA, price_eur=650, area_m2=45,
+    row = await seed(platform=platform, price_eur=650, area_m2=45,
                      photo_urls=['https://img.test/old.jpg'], photo_phashes=['ff00ff00ff00ff00'],
                      details_succeeded_at=previous)
     class Removed(scraper_for(detail(row))):

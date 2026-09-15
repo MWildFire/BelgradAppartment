@@ -1,6 +1,6 @@
 # RentBelgrad resume checkpoint — 2026-09-15
 
-## Current18:57UTC — 025cfaf full RUNNING
+## Current19:56UTC — 025cfaf full RUNNING; Halo candidate LOCAL
 
 Production025cfafaf624d38072b0eb58db8617e12924462c, schema0014.
 Dedup recovery terminal18:55:44.745127UTC VERIFIED,198.856s child; all7checksPASS,
@@ -17,6 +17,26 @@ Await genuine terminal, fresh detailqueue counters, per-source verified/removed/
 cleanup, media/manualrights/inbound checks and restoredtimers before accepting fullnightlygoal.
 Public19UTC andnight21UTC timers can be overdue at restoration; inspect before any nextmaintenance.
 User-requested stop: SIGTERM main supervisor only, then awaitcleanup/receipt/restore. NoSIGKILL.
+
+Progress19:56UTC: all4catalogues terminal,0failedpages/0detailerrors,27newdetailsOK.
+Nek4147unique/314pages,4zida4315/402,Halo3266/168,City648/54.
+OnlyCitycomplete; other3source_total_changed remain explicitly incomplete.
+Rollingrun657c172e0b8a4dfe9f6ad605379eaf47:16364selected/16405inventory,
+41retrydeferred,0quotadeferred;2208verified/272errors/0deactivated at19:55:54UTC.
+No acceptance until terminal/current-windowaudit/restored5timers.
+
+LocalHalo2-orderaudit COMPLETE: default3345raw/3266unique,oldest3348raw/3269unique,
+79duplicateIDs ineach;union3270. Only4extraoldestIDs whiletotalgrew3; no loosenedcoveragegate.
+Privatehalo-local-default-1931.json,halo-local-oldest-1931.json,halo-local-comparison-1931.json.
+CityIDs11830/42458 have3API-supplied imageURLs returning404 atboth1920x/470x;
+corefieldsavailable; completeness remains correctlyunverified. Privatecityexpert-missing-photos-1942.json.
+
+Halo candidateLOCAL: exactsingle301 fromcanonicalrental13digitID (queryempty/kid=4)
+toprintcategory?referrer=oglas,HTTP200,validAdslist,exactsourceexpirednotice,
+nochallenge/detailpayload => SourceListingRemovedError. Genericredirects/print404remainUNKNOWN.
+9livecontrolsPASS (3removed,3healthy,3healthywrongslug302),74targetedtestsPASS.
+Fullunit1640passed/1skipped, browser54passed, lint0new; allfinished. Privatehalo-candidate-live-proof-1956.json.
+CandidateNOTinstalled. Do notactivate/deploywhile025fullruns.
 
 ## Historical18:52UTC — 025cfaf installed; canary PASS; dedup recovery RUNNING
 

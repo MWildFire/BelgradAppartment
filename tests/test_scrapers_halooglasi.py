@@ -248,6 +248,102 @@ async def test_print_slug_redirect_preserves_payload_or_browser_fallback(body: s
         await scraper.aclose()
 
 
+_REMOVED_HTML = (
+    '<div class="info-box-expired info-box-expired-full">'
+    '<div class="glyphicon glyphicon-exclamation-sign"></div>\n'
+    'Nažalost, oglas nije pronađen. Oglas je obrisan ili ste pronašli neispravan link. '
+    'Pogledajte druge oglase u ovoj kategoriji.\n</div>'
+    '<script>QuidditaEnvironment.serverListData = {"Ads": []};</script>'
+)
+_REMOVED_DEST = "/nekretnine/izdavanje-stanova?referrer=oglas"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["", "?kid=4"])
+async def test_explicit_print_removal_is_propagated_without_browser(query: str) -> None:
+    from src.scrapers.base import SourceListingRemovedError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.query != b"referrer=oglas":
+            return httpx.Response(301, headers={"location": _REMOVED_DEST})
+        return httpx.Response(200, text=_REMOVED_HTML)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()
+    try:
+        with pytest.raises(SourceListingRemovedError):
+            await scraper.fetch_detail(_DETAIL_URL.split("?")[0] + query)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
+
+
+@pytest.mark.parametrize("case", [
+    "no_history", "extra_hop", "302", "different_origin", "post", "absolute_location",
+    "other_host", "http", "port", "fragment", "wrong_id", "wrong_path", "extra_query",
+    "duplicate_query", "final_host", "final_query", "final_fragment", "status",
+    "no_notice", "wrong_notice", "duplicate_notice", "text_only", "no_payload",
+    "bad_payload", "bad_ads", "detail_payload", "challenge",
+])
+def test_ambiguous_print_signals_never_prove_removal(case: str) -> None:
+    from src.scrapers.halooglasi import _explicit_print_not_found
+
+    url = _DETAIL_URL
+    replacements = {
+        "other_host": ("www.halooglasi.com", "example.com"),
+        "http": ("https:", "http:"),
+        "port": (".com/", ".com:8443/"),
+        "fragment": ("?kid=4", "?kid=4#fragment"),
+        "wrong_id": ("5425647413192", "123"),
+        "wrong_path": ("izdavanje-stanova", "prodaja-stanova"),
+        "extra_query": ("kid=4", "kid=4&x=1"),
+        "duplicate_query": ("kid=4", "kid=4&kid=4"),
+    }
+    if case in replacements:
+        url = url.replace(*replacements[case])
+    origin = HalooglasiScraper._smsprint_url(url) or url
+    if case == "different_origin":
+        origin = origin.replace("5425647413192", "5425647413193")
+    destination = "https://smsprint.halooglasi.com" + _REMOVED_DEST
+    if case == "final_host":
+        destination = destination.replace("smsprint.halooglasi.com", "example.com")
+    if case == "final_query":
+        destination += "&other=1"
+    if case == "final_fragment":
+        destination += "#fragment"
+    redirect = httpx.Response(
+        302 if case == "302" else 301,
+        request=httpx.Request("POST" if case == "post" else "GET", origin),
+        headers={"location": destination if case == "absolute_location" else _REMOVED_DEST},
+    )
+    history = [] if case == "no_history" else [redirect, redirect] if case == "extra_hop" else [redirect]
+    body = _REMOVED_HTML
+    if case == "no_notice":
+        body = body.replace("info-box-expired-full", "other")
+    elif case == "wrong_notice":
+        body = body.replace("obrisan", "dostupan")
+    elif case == "duplicate_notice":
+        body += _REMOVED_HTML
+    elif case == "text_only":
+        body = body.replace('<div class="info-box-expired info-box-expired-full">', "<span>")
+    elif case == "no_payload":
+        body = body.split("<script>")[0]
+    elif case == "bad_payload":
+        body = body.replace('{"Ads": []}', '{invalid}')
+    elif case == "bad_ads":
+        body = body.replace('{"Ads": []}', '{"Ads": null}')
+    elif case == "detail_payload":
+        body += GOOD_DETAIL_HTML
+    elif case == "challenge":
+        body += CHALLENGE_HTML
+    response = httpx.Response(
+        503 if case == "status" else 200, text=body, history=history,
+        request=httpx.Request("GET", destination),
+    )
+    assert not _explicit_print_not_found(url, response)
+
+
 class _FakePage:
     """Playwright-Page stand-in: serves `sequence[n]` for the n-th navigation (goto, then reloads)."""
 

@@ -22,10 +22,11 @@ from typing import Any, ClassVar
 from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import httpx
+from selectolax.parser import HTMLParser
 
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.base import ListingDetail, ListingPreview, Scraper, SourceListingRemovedError
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,11 @@ IMG_BASE = "https://img.halooglasi.com"
 
 _LIST_VAR = "QuidditaEnvironment.serverListData"
 _DETAIL_VAR = "QuidditaEnvironment.CurrentClassified"
+_RENTAL_PATH = "/nekretnine/izdavanje-stanova"
+_REMOVED_NOTICE = (
+    "Nažalost, oglas nije pronađen. Oglas je obrisan ili ste pronašli neispravan link. "
+    "Pogledajte druge oglase u ovoj kategoriji."
+)
 
 # Cloudflare interstitial fingerprints. 'Sačekajte trenutak' is the Serbian 'Just a moment' — the
 # context runs at locale sr-RS, so that is the title the site actually serves us; matching only the
@@ -403,6 +409,8 @@ class HalooglasiScraper(Scraper):
         if ready_marker in response.text:
             logger.debug("[halooglasi] loaded %s via smsprint", url)
             return response.text
+        if ready_marker == _DETAIL_VAR and _explicit_print_not_found(url, response):
+            raise SourceListingRemovedError()
         if (
             ready_marker == _DETAIL_VAR
             and response.history
@@ -598,6 +606,45 @@ class HalooglasiScraper(Scraper):
 
 
 # --- helpers ---
+
+
+def _explicit_print_not_found(url: str, response: httpx.Response) -> bool:
+    """Recognize the source's explicit removal notice, never a bare mirror redirect.
+
+    Observed removed listings return one 301 to the rental catalogue with this
+    notice. A healthy listing with an outdated slug instead returns a 302 to its
+    current detail URL. Keep every other redirect/error in the UNKNOWN path.
+    """
+    original = urlsplit(url)
+    destination = _RENTAL_PATH + "?referrer=oglas"
+    if (
+        original.scheme != "https"
+        or original.netloc not in {"www.halooglasi.com", "halooglasi.com"}
+        or original.fragment
+        or original.query not in {"", "kid=4"}
+        or re.fullmatch(_RENTAL_PATH + r"/[a-z0-9-]+/[0-9]{13}", original.path) is None
+        or response.status_code != 200
+        or str(response.url) != SMSPRINT_BASE_URL + destination
+        or len(response.history) != 1
+        or _DETAIL_VAR in response.text
+        or _is_challenge(response.text)
+    ):
+        return False
+    redirect = response.history[0]
+    if (
+        redirect.status_code != 301
+        or redirect.request.method != "GET"
+        or str(redirect.url) != HalooglasiScraper._smsprint_url(url)
+        or redirect.headers.get("location") != destination
+    ):
+        return False
+    payload = _extract_json_var(response.text, _LIST_VAR)
+    if not isinstance(payload, dict) or not isinstance(payload.get("Ads"), list):
+        return False
+    notices = HTMLParser(response.text).css(
+        "div.info-box-expired.info-box-expired-full"
+    )
+    return len(notices) == 1 and " ".join(notices[0].text().split()) == _REMOVED_NOTICE
 
 
 def _extract_json_var(html: str, var_path: str) -> Any:
