@@ -308,7 +308,9 @@ class CityExpertScraper(Scraper):
         if not identity_matches:
             raise ValueError("cityexpert_detail_identity_unconfirmed")
         status = data.get("status")
-        if status in ("FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT"):
+        if status in (
+            "FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT", "PUBLISH-PAUSED-OVERLOADED",
+        ):
             # Each exact status is independently confirmed by the source UI's disabled
             # "Nije u ponudi" action. Temporary reservations can reappear in later lists.
             raise SourceListingInactiveError("cityexpert_listing_not_offered")

@@ -293,7 +293,7 @@ async def test_fetch_detail_hits_property_view_api(cityexpert_detail_json: str) 
     assert detail.url == DETAIL_URL  # stored URL stays the browsable public one
 
 
-@pytest.mark.parametrize("status", ["FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT"])
+@pytest.mark.parametrize("status", ["FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT", "PUBLISH-PAUSED-OVERLOADED"])
 def test_retained_unavailable_detail_is_not_active(cityexpert_detail_json, status):
     from src.scrapers.base import SourceListingInactiveError
 
@@ -342,7 +342,7 @@ def test_inactive_signal_requires_canonical_rental_context(cityexpert_detail_jso
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT"])
+@pytest.mark.parametrize("status", ["FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT", "PUBLISH-PAUSED-OVERLOADED"])
 async def test_fetch_inactive_api_propagates_without_retry(cityexpert_detail_json, status):
     from src.scrapers.base import SourceListingInactiveError
 

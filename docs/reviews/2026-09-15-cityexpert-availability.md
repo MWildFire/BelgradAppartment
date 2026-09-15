@@ -21,7 +21,15 @@ Canonical Chrome pages independently confirmed:
 | 10093 | FINISHED | “Nekretnina više nije u ponudi”; disabled “Nije u ponudi” |
 | 67521 | NOT-AVAILABLE | “Nekretnina trenutno nije dostupna za gledanje”; disabled “Nije u ponudi” |
 | 55091 | KAPARISANA-RENT | “STATUS-KAPARISANA-RENT”; disabled “Nije u ponudi” |
+| 80063 | PUBLISH-PAUSED-OVERLOADED | viewing temporarily unavailable due to high demand; disabled “Nije u ponudi” |
 | 10180 | PUBLISHED | enabled “Zakažite gledanje” |
+
+A bounded read-only audit of stored statuses across all 882 pre-full active City IDs
+found 206 FINISHED, 18 NOT-AVAILABLE, 24 KAPARISANA-RENT, one
+PUBLISH-PAUSED-OVERLOADED and 633 PUBLISHED. All 249 unavailable statuses were
+incorrectly counted as successful in the current detail window. These are stored
+responses from that window, not a claim that every status remains unchanged now.
+The additional paused status was independently confirmed on its canonical page.
 
 Reservation and temporary unavailability mean unavailable **now**, not permanent
 removal of the stored record. A later genuine listing can reactivate it through the
@@ -31,7 +39,7 @@ existing ingestion path. No absence-based sweep or manual publication change is 
 
 Before accepting detail fields, require an exact canonical HTTPS CityExpert Belgrade
 rental URL, matching integer `propId`, integer `cityId=1`, and `rentOrSale=r`.
-The three explicitly confirmed unavailable statuses raise `SourceListingInactiveError`.
+The four explicitly confirmed unavailable statuses raise `SourceListingInactiveError`.
 Only `PUBLISHED` can proceed as available. Unknown states and mismatched identity
 fail conservatively; they cannot advance the successful-refresh timestamp.
 
@@ -41,9 +49,9 @@ inactive rows. No messages or manual website publication changes are made by the
 
 ## Verification and remaining work
 
-- 87 focused parser, evidence-preservation and link-probe tests passed.
-- 11 live read-only controls passed: 8 unavailable and 3 published with complete fields.
-- Full unit suite: 1,717 passed / 1 skipped (126.82 s); browser: 54 passed (51.43 s).
+- 89 focused parser, evidence-preservation and link-probe tests passed.
+- Final 12 live controls passed: 9 unavailable and 3 published with complete fields.
+- Final full unit suite: 1,719 passed / 1 skipped (119.56 s); browser: 54 passed (52.46 s).
   Changed-code lint, shell syntax and whitespace checks passed.
 - Production remains 025cfaf. Do not install the Halo-only 8bf56ff packet as the final fix.
 - Wait for the existing full run to terminate and preserve its audit/cleanup receipts.
@@ -51,7 +59,7 @@ inactive rows. No messages or manual website publication changes are made by the
   CityExpert** availability checks and standard dedup under the guarded supervisor.
 
 Private evidence: `city-availability-audit-2147.json`, `city-availability-ui-proof.json`,
-`city-candidate-live-2150.json` in `/Users/mvstrike/Backups/RentBelgrad/2026-09-15/`.
+`city-candidate-live-final.json` in `/Users/mvstrike/Backups/RentBelgrad/2026-09-15/`.
 The earlier `city-off-catalogue-sample-2145.json` explicitly records its rejected method:
 `last_seen_at` also changes during detail refresh, so it cannot identify catalogue
 membership after that phase. The independent Search walk replaces that method.

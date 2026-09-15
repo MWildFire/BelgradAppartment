@@ -1,15 +1,20 @@
 # RentBelgrad resume checkpoint — 2026-09-15
 
-## Current 21:54 UTC — CityExpert availability fix in working tree; 025 full still running
+## Current 22:03 UTC — combined City/Halo candidate final-tested; 025 full still running
 
 A second retained-inactive bug was confirmed in CityExpert. HTTP200 full photo/price
 payloads with FINISHED/NOT-AVAILABLE/KAPARISANA-RENT were counted successful by025.
 Canonical Chrome independently confirmed all3 as unavailable; PUBLISHED control has
 an enabled viewing action. 647unique live Search results;251of882pre-full active IDs
 absent;8stratified absent controls explicitly unavailable. Absence alone is not removal.
-New strict URL/propId/cityId/rental-context/status checks are in the working tree.
-87focused tests and11live controls passed. Fullunit1717passed/1skip126.82s;
-browser54passed51.43s;lint/shell/diffPASS. Bothsessions72758/76533finished.
+New strict URL/propId/cityId/rental-context/status checks include fourth confirmed state
+PUBLISH-PAUSED-OVERLOADED (80063canonicalUI: no viewing, disabled Nijeuponudi).
+882storedstatuses:206FINISHED/18NOT-AVAILABLE/24KAPARISANA/1PAUSED/633PUBLISHED.
+All249unavailable were counted successful by025; these are storedresponses, notfresh
+networkproof for all249. 89focusedtests and12livecontrolsPASS.
+Finalunit1719passed/1skip119.56s;browser54passed52.46s;lint/shell/diffPASS.
+Alllocaltest/probe sessions finished. 578d24f was earlier combined candidate, now
+superseded by fourth-status addition; final new revision pending commit/CI.
 Do not install8bfHalo-only packet as final. Need combined revision and correction of
 BOTH Halo and CityExpert after025terminal, with fresh healthy source-verified canary.
 Private8bfHalo-only correction helpers are prepared/tested but must be superseded for
@@ -18,7 +23,9 @@ Current old success counters for BOTH sources overstate truthful availability.
 Watcher42424 is now consumed by functions.exec cell482; do NOT poll42424 concurrently.
 Use functions.wait(cell_id=482,yield_time_ms<=60000); it emits500verified/50error milestones.
 Latest21:49:18UTC:7506nominalverified,486errors,119deactivated,0skippedsofar. StillNek.
-Cityprobe51224/62960finished. Browser cityStatusTab currently onhealthy10180; closewhenfinished.
+Cityprobes51224/62960/97201finished. Cityresearchtabs closed.
+Combined578privatehelpers prepared:90guardtests+28correctiontestsPASS, notinstalled.
+Rebind them to finalrevision; 8bfHalo-only helpers are obsolete.
 No production mutations, purchases or messages during this continuation.
 
 ## Historical 21:27 UTC — Halo-only candidate (superseded by combined City work)
