@@ -18,6 +18,13 @@ from src.scrapers.crawl_evidence import CrawlEvidence
 # bundled Playwright version and become an anti-bot fingerprint.
 _DEFAULT_PROXY = object()
 
+
+class SourceListingRemovedError(Exception):
+    """An exact source-specific not-found signal, even when HTTP status is 200."""
+
+    reason = "source_not_found_redirect"
+
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"

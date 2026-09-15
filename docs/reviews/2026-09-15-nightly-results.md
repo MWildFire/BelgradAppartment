@@ -59,12 +59,37 @@ fair executor kept invoking the failed context, recording thousands of listing
 errors/backoffs without further HTTP requests. Candidate stops that source on
 NoProxyAvailableError, records its explicit source error and leaves remaining rows
 unattempted; later sources continue. It does not reset failed proxy slots or override
-upstream errors. A fresh four-ISP probe is running to distinguish current route
-availability from the previous long-run exhaustion. First probe had no browser
+upstream errors. A fresh four-ISP probe completed:3/3previously verified cards on each route,12/12complete. This confirms current availability, not thousands-of-cards stability. First probe had no browser
 operations because the root process lacked its browser-cache path; invalid as a
 proxy availability test. V2 explicitly uses the installed browser cache.
 
 Local candidate checks:1575unit passed/1skipped (126.61s),54browser passed(59.88s).
-Release and a new production full pass remain pending. No new spending or subscription
+Release c4a1454 installed; readiness200, monitor/site/admin active. GitHubCI34978620056 both jobs successful. Production canary20/20verified,0errors/skips,8safety checks pass and no residuals. Full run380cc7394a7e49229f58a8746f3c9086 started15Sep14:13:54UTC and is still running. No new spending or subscription
 cancellations. Private evidence: `/opt/otz/data/research/acceptance-20260915` and
 `/Users/mvstrike/Backups/RentBelgrad/2026-09-15/`.
+
+## 4zida HTTP200 not-found response, subsequent candidate
+
+The previous full had1240failed4zida detail attempts, mostly still-active old rows.
+Direct read-only stratified sample20:18HTTP200 shells with no listing payload,
+2real advertisements with price/area but no photographs. Three shells inspected in
+detail contain duplicated Next.js meta redirects to the exact requested parent
+category with `?redirection=not-found`, although the wire response remains200.
+
+Candidate recognizes only canonical HTTPS www.4zida.rs rental detail URLs with a
+24hex ID, unchanged response URL, HTTP200, absence of Apartment/Offer/RealEstateListing
+JSON-LD, and every refresh meta tag carrying the exact observed source marker and
+parent-category target. Generic empty pages, challenge/errors, wrong hosts/categories,
+redirected responses and conflicting listing payloads remain unconfirmed. It raises
+a distinct source-removal exception; no fabricated HTTP404. Detail refresh and link
+probe recognize this explicit evidence, preserve old content/photos/success timestamps,
+and mark the source listing DEAD. Public overlays/automatic-hide settings are unchanged.
+
+Exact candidate SHA7a556ddc3848c2962e84343a3e1f3dd2e749b6e8085574ea1e19e6d9ca030791
+read-only on server:18/20explicit source removals,2parsed without photos;5/5healthy
+public controls remain complete.64targeted tests pass including ambiguous/contradictory
+signals and content preservation. Full suite/browser checks and release pending.
+
+Current controlled c4a1454 run may be cooperatively stopped before deployment of this
+additional correction; preserve its actual terminal result and timer restoration.
+Do not claim this intermediate run achieved the nightly objective.

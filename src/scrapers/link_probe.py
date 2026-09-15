@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 
 from src.db.models import Platform
+from src.scrapers.base import SourceListingRemovedError
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,8 @@ class SourceProbeSession:
         try:
             async with asyncio.timeout(self.timeout_seconds):
                 detail = await self.scraper.fetch_detail(url)
+        except SourceListingRemovedError as exc:
+            return LinkObservation("DEAD", False, exc.reason)
         except Exception as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             if status in {404, 410}:

@@ -14,13 +14,13 @@ import json
 import logging
 import re
 from typing import Any, ClassVar
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from selectolax.parser import HTMLParser
 
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.base import ListingDetail, ListingPreview, Scraper, SourceListingRemovedError
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +280,8 @@ class CetiriZidaScraper(Scraper):
     async def fetch_detail(self, url: str) -> ListingDetail:
         resp = await self._client.get(url)
         resp.raise_for_status()
+        if resp.status_code == 200 and str(resp.url) == url and _explicit_not_found(url, resp.text):
+            raise SourceListingRemovedError()
         return self.parse_detail(url, resp.text)
 
     async def _fetch_page(self, url: str) -> str | None:
@@ -434,6 +436,33 @@ class CetiriZidaScraper(Scraper):
 
 
 # ---- shared utilities ----
+
+
+def _explicit_not_found(url: str, html: str) -> bool:
+    """Match the observed Next.js removal redirect, not a generic empty/challenge page.
+
+    4zida streams a 200 shell for removed ads with a meta redirect to that exact
+    URL's parent category and redirection=not-found. Duplicate identical tags are
+    emitted by the source. Any conflicting detail payload or redirect stays unknown.
+    """
+    parsed = urlsplit(url)
+    if (parsed.scheme != "https" or parsed.netloc != "www.4zida.rs"
+            or parsed.query or parsed.fragment
+            or not re.fullmatch(r"/izdavanje-stanova/[^/]+/[^/]+/[0-9a-f]{24}", parsed.path)):
+        return False
+    for block in _extract_json_ld(html):
+        kinds = block.get("@type", [])
+        kinds = [kinds] if isinstance(kinds, str) else kinds
+        if not isinstance(kinds, list) or any(
+            kind in ("Apartment", "RealEstateListing", "Offer") for kind in kinds
+        ):
+            return False
+    redirects = HTMLParser(html).css('meta[http-equiv="refresh"]')
+    expected = f"1;url={parsed.path.rsplit('/', 1)[0]}?redirection=not-found"
+    return bool(redirects) and all(
+        node.attributes.get("id") == "__next-page-redirect"
+        and node.attributes.get("content") == expected for node in redirects
+    )
 
 
 def _extract_json_ld(html: str) -> list[dict[str, Any]]:

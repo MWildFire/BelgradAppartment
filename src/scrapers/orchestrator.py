@@ -34,7 +34,7 @@ from src.config import get_settings
 from src.db import Listing, get_session
 from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
 from src.matching.phash import download_and_hash
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.base import ListingDetail, ListingPreview, Scraper, SourceListingRemovedError
 from src.scrapers.crawl_evidence import source_total_report
 from src.scrapers.freshness import (
     CallbackResult,
@@ -1257,7 +1257,7 @@ async def refetch_listing_details(
             status = getattr(getattr(error, "response", None), "status_code", None)
             try:
                 async with get_session() as session:
-                    if status in (404, 410):
+                    if status in (404, 410) or isinstance(error, SourceListingRemovedError):
                         now = datetime.now(UTC)
                         await session.execute(update(Listing).where(Listing.id == row.id).values(
                             is_active=False, deactivated_at=now, link_status="DEAD",

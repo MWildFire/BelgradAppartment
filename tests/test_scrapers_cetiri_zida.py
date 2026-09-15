@@ -221,3 +221,67 @@ async def test_split_counter_bounds_walk_without_false_empty_page_failure() -> N
     assert requested == [1, 2, 3]
     assert len(previews) == scraper._site_total == 6
     assert scraper._pages_failed == scraper._skipped_pages == 0
+
+
+def _not_found_meta(url=DETAIL_URL):
+    from urllib.parse import urlsplit
+
+    parent = urlsplit(url).path.rsplit('/', 1)[0]
+    return (f'<meta id="__next-page-redirect" http-equiv="refresh" '
+            f'content="1;url={parent}?redirection=not-found">')
+
+
+@pytest.mark.asyncio
+async def test_explicit_200_not_found_is_source_removal():
+    from src.scrapers.base import SourceListingRemovedError
+    async with httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, text=_not_found_meta() * 2)
+    )) as client:
+        scraper = CetiriZidaScraper(client=client)
+        with pytest.raises(SourceListingRemovedError):
+            await scraper.fetch_detail(DETAIL_URL)
+
+
+@pytest.mark.parametrize('html', [
+    '', '<h1>404</h1>', '<p>redirection=not-found</p>',
+    '<!-- ' + _not_found_meta() + ' -->',
+    _not_found_meta().replace('not-found', 'challenge'),
+    _not_found_meta().replace('blok-61', 'different'),
+    _not_found_meta().replace('__next-page-redirect', 'unrelated'),
+    _not_found_meta().replace('1;url=', '1;url=https://elsewhere.test'),
+    _not_found_meta().replace('?redirection=not-found', '?redirection=not-found&other=1'),
+    _not_found_meta() + _not_found_meta().replace('not-found', 'challenge'),
+    _not_found_meta() + '<script type="application/ld+json">{"@type":"Apartment"}</script>',
+    _not_found_meta() + '<script type="application/ld+json">{"@type":"Offer"}</script>',
+])
+def test_ambiguous_or_conflicting_not_found_remains_unknown(html):
+    from src.scrapers.cetiri_zida import _explicit_not_found
+    assert not _explicit_not_found(DETAIL_URL, html)
+
+
+@pytest.mark.parametrize('url', [
+    DETAIL_URL.replace('www.4zida.rs', 'elsewhere.test'),
+    DETAIL_URL.replace('https:', 'http:'),
+    DETAIL_URL + '?next=1', DETAIL_URL + '#section',
+    DETAIL_URL.rsplit('/', 1)[0],
+])
+def test_not_found_signal_must_belong_to_canonical_listing(url):
+    from src.scrapers.cetiri_zida import _explicit_not_found
+    assert not _explicit_not_found(url, _not_found_meta(url))
+
+
+@pytest.mark.asyncio
+async def test_redirected_or_error_response_cannot_become_soft_removal():
+    for status in (403, 503):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda request, status=status: httpx.Response(status, text=_not_found_meta())
+        )) as client:
+            with pytest.raises(httpx.HTTPStatusError):
+                await CetiriZidaScraper(client=client).fetch_detail(DETAIL_URL)
+    def redirect(request):
+        if request.url.path.endswith('650ae06563090cbb0c0c11e7'):
+            return httpx.Response(302, headers={'Location':'/challenge'})
+        return httpx.Response(200, text=_not_found_meta())
+    async with httpx.AsyncClient(transport=httpx.MockTransport(redirect), follow_redirects=True) as client:
+        detail = await CetiriZidaScraper(client=client).fetch_detail(DETAIL_URL)
+        assert detail.price_eur is None

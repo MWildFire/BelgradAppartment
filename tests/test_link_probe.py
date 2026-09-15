@@ -69,3 +69,16 @@ async def test_successful_http_shell_and_timeout_are_unknown():
         ) as session:
             result = await session.probe("https://example.test/1")
         assert result.status == "INCONCLUSIVE" and result.errored
+
+
+async def test_explicit_source_removal_is_dead_without_fabricated_http_status():
+    from src.scrapers.base import SourceListingRemovedError
+    class Removed(FakeSource):
+        async def fetch_detail(self, url):
+            raise SourceListingRemovedError()
+    source = Removed()
+    async with SourceProbeSession(Platform.CETIRI_ZIDA, factory=lambda: source) as session:
+        result = await session.probe('https://www.4zida.rs/listing')
+    assert result.status == 'DEAD' and not result.errored
+    assert result.reason == 'source_not_found_redirect'
+    assert source.closed
