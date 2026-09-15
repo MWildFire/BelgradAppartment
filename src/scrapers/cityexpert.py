@@ -45,11 +45,11 @@ import logging
 import re
 import unicodedata
 from typing import Any, ClassVar
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.base import ListingDetail, ListingPreview, Scraper, SourceListingInactiveError
 
 logger = logging.getLogger(__name__)
 
@@ -292,9 +292,28 @@ class CityExpertScraper(Scraper):
             logger.warning("[cityexpert] detail %s: no PropertyView payload", url)
             return ListingDetail(platform=Platform.CITYEXPERT, external_id=external_id, url=url)
 
+        # PropertyView retains full prices/photos after a rental is no longer offered.
+        # HTTP 200 and a complete photo album are not evidence of availability.
+        parsed = urlsplit(url)
         prop_id = data.get("propId")
-        if prop_id is not None:
-            external_id = str(prop_id)
+        identity_matches = (
+            parsed.scheme == "https"
+            and parsed.netloc == "cityexpert.rs"
+            and not parsed.query and not parsed.fragment
+            and re.fullmatch(r"/izdavanje-nekretnina/beograd/[1-9][0-9]*(?:/[^/]+)?/?", parsed.path)
+            and type(prop_id) is int and str(prop_id) == external_id
+            and type(data.get("cityId")) is int and data["cityId"] == 1
+            and data.get("rentOrSale") == "r"
+        )
+        if not identity_matches:
+            raise ValueError("cityexpert_detail_identity_unconfirmed")
+        status = data.get("status")
+        if status in ("FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT"):
+            # Each exact status is independently confirmed by the source UI's disabled
+            # "Nije u ponudi" action. Temporary reservations can reappear in later lists.
+            raise SourceListingInactiveError("cityexpert_listing_not_offered")
+        if status != "PUBLISHED":
+            raise ValueError("cityexpert_availability_unconfirmed")
 
         price_eur = _safe_int(data.get("price"))
         area_m2 = _safe_float(data.get("size"))

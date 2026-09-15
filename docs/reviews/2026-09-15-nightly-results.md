@@ -1,6 +1,6 @@
 # RentBelgrad: full-refresh results and remaining repairs, 2026-09-15
 
-## Current controlled verification — 20:22 UTC
+## Current controlled verification — 21:35 UTC
 
 Production is025cfaf (exact indexed dedup); parser fixes and all-inventory nightly schedule
 are installed. CI,1610unit/54browser, full local dedup equivalence,20-card public canary
@@ -21,14 +21,35 @@ Catalogue Nek proxy counters:636operations,316HTTP403 recovered by browser,
 4browser errors recovered,3session recycles, no failed slots or exhausted pool.
 These are catalogue results only; long detail verification is not yet accepted.
 
-Queue16364selected/16405inventory,41retry-deferred,0quota-deferred. At20:22:27UTC:
-4711verified,294errors,0skipped so far,790photos. Do not read nonterminal skipped0
-as proof that the complete queue will fit. No CLIP embedding failures in the run log
-as checked20:09UTC. No fresh outbound Telegram test was sent.
+Queue16364selected/16405inventory,41retry-deferred,0quota-deferred. At21:34:14UTC:
+7110nominalverified,461errors,94deactivated,0skipped so far,992photos.
+**Halo nominal successes are not final availability evidence:** retained inactive Halo
+pages return HTTP200 with full price/photo JSON. Their explicit StateId and visible
+source notice were not checked by025cfaf. The Halo source must be corrected again.
+No CLIP embedding failures were found in the run log as checked20:09UTC. No fresh
+outbound Telegram test was sent. Nonterminal skipped0 is not a full coverage proof.
 
-Candidatece8c9df (explicit Halo removal) is committed/pushed and prepared locally:
-1640unit/1skip,54browser,9live controls, GitHubCI35016688841 all passed.
-It is NOT installed while025cfaf is running. See [evidence](2026-09-15-halo-explicit-removal.md).
+Candidate8bf56fff73c26d2c7d5de508b63506a2c146797d supersedes ce8c9df anddb0a7c4:
+1675unit/1skip,54browser,11live controls, GitHubCI35024569633 all passed.
+It recognizes exact retained-inactive105/111/112 signals;101isactive;106andambiguous
+responses remainUNKNOWN. Existing print404/generic redirects remain conservative.
+It is NOT installed while025cfaf runs. Packet446files SHA
+0acd4059dd39a3bf7195eb3ef528adbe99cbad5fc113e0a6436a9880c4566182.
+See [evidence](2026-09-15-halo-explicit-removal.md).
+
+A private correction child and receipt-gated supervisor are prepared locally, not installed:
+all active Halo cards through the shared refresh core, then standard exact dedup;
+all5timers owned/restored, before/after identity/media/manual-rights checks, unrelated
+source rows unchanged except derived duplicate fields, removed content preserved,
+selected/verified/error/deactivated/unattempted counters reconciled.26new supervisor
+checks plus90existing revision-bound guard tests passed. A fresh8bfcanary is mandatory.
+Healthy canary selection still requires live preflight because old Halo success flags
+can describe inactive pages. No authority/threshold was weakened to force a green result.
+
+IPRoyal20:54UTC:175.25GB/195.21GBremaining in the existing two2-IPorders, reset25Sep.
+Delta1.38GB/0.01GBsince17:52 spansmultiplecataloguepasses andpartialdetails; it is not
+one-night consumption. No purchases/cancellations. Current period order amounts total
+$14.10; this is not a guaranteed renewal quotation or the account's complete charges.
 
 Prior df3a88b run was interrupted by my separate otz-user diagnostic triggering its
 strict guard; cleanup and timer restoration completed, and all derived-group

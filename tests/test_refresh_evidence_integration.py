@@ -450,6 +450,7 @@ async def test_cancel_during_failed_acceptance_still_cancels_remaining_work(db, 
 
 @pytest.mark.parametrize("platform,inactive", [
     (Platform.CETIRI_ZIDA, False), (Platform.HALOOGLASI, False), (Platform.HALOOGLASI, True),
+    (Platform.CITYEXPERT, True),
 ])
 async def test_explicit_source_removal_preserves_last_content_and_success(db, platform, inactive):
     from datetime import UTC, datetime

@@ -1,6 +1,27 @@
 # RentBelgrad resume checkpoint — 2026-09-15
 
-## Current21:14UTC — 025cfaf full RUNNING; NEW retained-inactive Halo fix in working tree
+## Current 21:54 UTC — CityExpert availability fix in working tree; 025 full still running
+
+A second retained-inactive bug was confirmed in CityExpert. HTTP200 full photo/price
+payloads with FINISHED/NOT-AVAILABLE/KAPARISANA-RENT were counted successful by025.
+Canonical Chrome independently confirmed all3 as unavailable; PUBLISHED control has
+an enabled viewing action. 647unique live Search results;251of882pre-full active IDs
+absent;8stratified absent controls explicitly unavailable. Absence alone is not removal.
+New strict URL/propId/cityId/rental-context/status checks are in the working tree.
+87focused tests and11live controls passed. Fullunit1717passed/1skip126.82s;
+browser54passed51.43s;lint/shell/diffPASS. Bothsessions72758/76533finished.
+Do not install8bfHalo-only packet as final. Need combined revision and correction of
+BOTH Halo and CityExpert after025terminal, with fresh healthy source-verified canary.
+Private8bfHalo-only correction helpers are prepared/tested but must be superseded for
+combined scope/revision. Details:2026-09-15-cityexpert-availability.md.
+Current old success counters for BOTH sources overstate truthful availability.
+Watcher42424 is now consumed by functions.exec cell482; do NOT poll42424 concurrently.
+Use functions.wait(cell_id=482,yield_time_ms<=60000); it emits500verified/50error milestones.
+Latest21:49:18UTC:7506nominalverified,486errors,119deactivated,0skippedsofar. StillNek.
+Cityprobe51224/62960finished. Browser cityStatusTab currently onhealthy10180; closewhenfinished.
+No production mutations, purchases or messages during this continuation.
+
+## Historical 21:27 UTC — Halo-only candidate (superseded by combined City work)
 
 CRITICAL NEW FINDING: Halo retained HTTP200 detail pages can be INACTIVE despite full
 price/photos/JSON. Current025full Halo success counts are NOT final truthful availability.
@@ -15,7 +36,14 @@ Preserveoldphotos/content/success;browserinactiveexceptions donotretry/recycle.
 109targetedtestsPASS,11live(8inactive+3healthy)PASS;final1675unit/1skip(212.22s),54browser(63.70s),lint0new.
 Alllocaltests/probesfinished;onlywatcher42424running.
 Firstfullpreformat1671unitPASS;finalincludes4additional hidden/contradictoryvisibilitycases.
-DO NOT deploy db0a7c4 or ce8c9df: superseded by this new uncommitted correctness fix.
+DO NOT deploy db0a7c4 or ce8c9df: superseded by 8bf56fff73c26d2c7d5de508b63506a2c146797d.
+GitHub CI35024569633 SUCCESS (unit5m34s/browser1m54s), exact local receipts saved.
+Packetrelease-8bf56ff.tar.gz446files SHA0acd4059dd39a3bf7195eb3ef528adbe99cbad5fc113e0a6436a9880c4566182.
+NOT installed. Progress21:24UTC:6864nominalverified/419errors/52deactivated; Halo successes need correction.
+IPRoyal20:54UTC:175.25GB/195.21GB remaining; delta1.38GB/0.01GB since17:52 spans multiple passes, not one-night cost.
+Private8bfcanary/fullhost clones passed90guardtests. NewHalo corrective child+runner
+preparedLOCALONLY;26counter/scope/lifecycle/restore testsPASS. Requiresfresh8bfcanary;
+healthy sample needs fresh source preflight due falselyhealthy oldHalo rows.
 After current025terminal, install finaltestedrevision and reconcile Halo again; do not
 accept currentHalo nominalverifiedcounts. KeepcurrentlongNek/4zidaverification running.
 Privateproofs halo-off-catalogue-sample.json,halo-off-catalogue-metadata-2100.json,
@@ -62,7 +90,7 @@ Additionalobservedkid=1/kid=3 variants nowcovered:20livecontrolsPASS,1643unit/1s
 SourceSHA27e0746fe584c180ca834cbf43565b7199db6a2a6b8277dbb78df4054c101476.
 NEWrevisiondb0a7c429f23c56ac45f4e71ac4f97f4ebb3e4f4 pushed, CI35020881966SUCCESS.
 Packetrelease-db0a7c4.tar.gz446files SHA0559f1ca83e1b06241202fea3a0ca599f70886c91a7070faf49b024c13ff060b.
-Use this candidate, notce8c9df. Source025stillunchanged.
+Historical candidate only; superseded by8bf56ff. Source025stillunchanged.
 Newcanaryrunnerdb0a7c4 preparedonly,35testsPASS, SHA ff9fd9ce89e9e4f1dc12ed142b66daf10d11a20f6b6ef36c77d026eeed0ea8f3.
 Healthy20cardCLI SHA unchangedb1bd18905c340d21e8cb652af765368d403d7e5cb7f6e9daf0c4ddff6efb0bb5.
 Halo detailphaseendedaround20:34UTC;Nek detailphase nowrunning. HTTP400count0 incurrentlog.
