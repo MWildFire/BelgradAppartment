@@ -18,13 +18,14 @@ tiebreak). All members get `dup_group_id` = min listing id in the group; the pri
 `is_primary=True`, the rest are demoted to False. Singletons stay ungrouped (dup_group_id NULL,
 is_primary True).
 
-The O(N²) pHash comparison is pure CPU and runs via `asyncio.to_thread`, exactly like the
-matcher's scan stages, so the event loop stays responsive.
+An exact Hamming index limits photo comparisons to possible matches. Grouping remains
+pure CPU and runs via `asyncio.to_thread`, keeping the event loop responsive.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections import Counter, defaultdict
 import logging
 from dataclasses import dataclass
 
@@ -112,7 +113,7 @@ class _UnionFind:
         self.size[ra] += self.size[rb]
 
 
-def _group_rows(
+def _group_rows_quadratic(
     rows: list[DedupRow], max_hamming: int, min_shared: int
 ) -> list[list[DedupRow]]:
     """Connected components of the same-apartment relation. Pure CPU (O(N²) over rows × photos).
@@ -140,6 +141,70 @@ def _group_rows(
     for idx, row in enumerate(rows):
         buckets.setdefault(uf.find(idx), []).append(row)
     return [members for members in buckets.values() if len(members) >= 2]
+
+
+
+def _group_rows(
+    rows: list[DedupRow], max_hamming: int, min_shared: int
+) -> list[list[DedupRow]]:
+    """Find the same connected components using an exact photo candidate index.
+
+    Split 64 bits into h+1 disjoint chunks. Two hashes at distance <=h must share
+    at least one whole chunk, so candidate retrieval cannot discard a matching
+    photo. Every candidate still receives the original XOR/popcount check.
+    """
+    if (
+        not 0 <= max_hamming <= 8
+        or min_shared <= 0
+        or any(h < 0 or h >= 1 << 64 for row in rows for h in row.phash_ints)
+    ):
+        # Preserve the existing semantics for unusual configurations or malformed ints.
+        return _group_rows_quadratic(rows, max_hamming, min_shared)
+
+    owners: dict[int, set[int]] = defaultdict(set)
+    for i, row in enumerate(rows):
+        for h in row.phash_ints:
+            owners[h].add(i)
+
+    parts = max_hamming + 1
+    slices = [
+        (64 * i // parts, (1 << (64 * (i + 1) // parts - 64 * i // parts)) - 1)
+        for i in range(parts)
+    ]
+    buckets: list[dict[int, list[int]]] = [defaultdict(list) for _ in slices]
+    for h in owners:
+        for index, (shift, mask) in zip(buckets, slices, strict=True):
+            index[(h >> shift) & mask].append(h)
+
+    targets_by_hash: dict[int, tuple[int, ...]] = {}
+    uf = _UnionFind(len(rows))
+    for i, row in enumerate(rows):
+        if len(row.phash_ints) < min_shared:
+            continue
+        matched: dict[int, int] = defaultdict(int)
+        for h, multiplicity in Counter(row.phash_ints).items():
+            if h not in targets_by_hash:
+                candidates: set[int] = set()
+                for index, (shift, mask) in zip(buckets, slices, strict=True):
+                    candidates.update(index[(h >> shift) & mask])
+                targets: set[int] = set()
+                for candidate in candidates:
+                    if (h ^ candidate).bit_count() <= max_hamming:
+                        targets.update(owners[candidate])
+                targets_by_hash[h] = tuple(targets)
+            for j in targets_by_hash[h]:
+                if i == j or uf.find(i) == uf.find(j):
+                    continue
+                # Count matching photos of this listing, even when several match
+                # the same photo on the other listing, exactly as the original scan.
+                matched[j] += multiplicity
+                if matched[j] >= min_shared:
+                    uf.union(i, j)
+
+    groups: dict[int, list[DedupRow]] = defaultdict(list)
+    for i, row in enumerate(rows):
+        groups[uf.find(i)].append(row)
+    return [members for members in groups.values() if len(members) >= 2]
 
 
 def _pick_primary(members: list[DedupRow]) -> DedupRow:
@@ -216,7 +281,7 @@ async def find_cross_platform_dupes(
             for r in db_rows
         ]
 
-        # Heavy O(N²) comparison off the event loop (same pattern as matcher scan stages).
+        # CPU-bound photo comparison stays off the event loop.
         assignments, groups, demoted = await asyncio.to_thread(
             _compute_assignments, rows, max_h, min_shared
         )
