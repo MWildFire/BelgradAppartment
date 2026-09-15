@@ -26,7 +26,7 @@ render, delivery and DB behavior retain their existing checks.
 unequal-photo-count, transitive, threshold and invalid-hash cases.
 -Exact full group equality on16101active rows /3664groups, using the unchanged
 quadratic implementation as independent oracle.
--Local wall time:1317.793s quadratic vs34.997s index (37.65x). Peak RSS90.96MB vs185.02MB.
+-Local wall time:1317.793s quadratic vs34.433s exact candidate (38.27x). Peak RSS90.96MB vs179.90MB.
 -This timing is a local benchmark, not a measured production runtime guarantee.
 -The redundant parallel oracle was stopped after the original full oracle completed.
 
@@ -35,6 +35,9 @@ InputSHA25614c13f4b310bddfbbb4c99444162aa3b81b4282f5611105fe86d0224f222fbf2.
 Proofdedup-full-equivalence.json, logsunit-dedup-index-v2.log andbrowser-dedup-index.log.
 Input contains IDs/photo hashes/counts/coordinate-presence only; no message or URL payload.
 
-Production remainsdf3a88b while full journal39b141eaa5e4418ea9ec3115b421fb94 runs.
-Do not activate this candidate while its supervisor owns release lock/timer pause.
-A new release needs its own pinned canary and live acceptance after current full terminates.
+CI35007981132 passed. Production025cfaf activated after previous full terminated cleanly.
+Revision-pinned canary passed18:51UTC:20/20details,283photo hashes,8invariant checks.
+Supervised production dedup reconciliation finished18:55:44UTC:198.856s including DBwrite,
+all7checksPASS, onlyderivedlistingfields changed, no survivors/SIGKILL,all5timersrestored.
+New full journal038a7a8a0f1e499196fa6b8358dd7857 started18:56:53UTC; full nightly acceptance
+remains pending its actual terminal receipt and source outcomes.

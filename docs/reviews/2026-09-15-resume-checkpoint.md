@@ -1,5 +1,152 @@
 # RentBelgrad resume checkpoint — 2026-09-15
 
+## Current18:57UTC — 025cfaf full RUNNING
+
+Production025cfafaf624d38072b0eb58db8617e12924462c, schema0014.
+Dedup recovery terminal18:55:44.745127UTC VERIFIED,198.856s child; all7checksPASS,
+onlyderivedfields changed, noresiduals/noSIGKILL,all5timersrestored. Private/localreceipt:
+dedup-reconcile-025cfaf-1852-runner-result.json. This is production timing including DBwrite.
+Full unitrentbelgrad-full-refresh-025cfaf-resume1737, journal038a7a8a0f1e499196fa6b8358dd7857,
+started18:56:53.392062UTC. Outputacceptance-20260915/full-refresh-025cfaf-resume1737.
+Companionrentbelgrad-full-terminal-025cfaf-resume1737; livewatcher localexec42424.
+Rootstatushelperfull_refresh_status_025cfaf_resume1737.py with exactjournalID.
+All5timerpause/restoration nowownedbyfullsupervisor; monitoractive/NRestarts0.
+DO NOT launch any additional otz-user process, app probe/import/restart/deployment while it runs.
+Root-only read-only status/file/SQL checks are permitted; no extra source browser profiles/leases.
+Await genuine terminal, fresh detailqueue counters, per-source verified/removed/unknown/unattempted,
+cleanup, media/manualrights/inbound checks and restoredtimers before accepting fullnightlygoal.
+Public19UTC andnight21UTC timers can be overdue at restoration; inspect before any nextmaintenance.
+User-requested stop: SIGTERM main supervisor only, then awaitcleanup/receipt/restore. NoSIGKILL.
+
+## Historical18:52UTC — 025cfaf installed; canary PASS; dedup recovery RUNNING
+
+Production025cfafaf624d38072b0eb58db8617e12924462c, schema0014.
+Activationhealthz/readyz200,13attempts/11.24sec. Newcanaryterminal18:51:09UTC:
+20/20verified,283photo hashes,8checksPASS,noresiduals/noSIGKILL.
+ReceiptSHAa6bad41dd4a12fb766f0f21699fc1d60c9fc9e89dced5976bdb272846e5ec850;
+root public-canary-025cfaf-resume1737,localcopyverified. Publictimerrestored/readbackreceipt.
+Standarddedup with newexactindex now supervised by rentbelgrad-dedup-reconcile-025cfaf-1852,
+outputdedup-reconcile-025cfaf-1852. It ownsrelease lock/all5timerpause. Need actualterminaland7checks.
+NO new otz-user processes while supervisor runs. No diagnostics/imports/probes/restarts.
+Root-only bounded read-only status is safe. Next full025requires successfulreconcilecleanup.
+All six025canary/full/audit/status helpers installedroot644 and contentverified.
+
+## Historical18:49UTC — df3a88b full CANCELLED by diagnostic collision;025activationrunning
+
+IMPORTANT: at18:44:56UTC the supervisor correctly detected a new unrelated otz-user
+Python process from my read-only Telegram getChat diagnostic and stopped the owned full child.
+This was an agent orchestration error, NOT a source/proxy failure or a user pause.
+NO new otz-user processes of any kind during a controlled supervisor run. Use root-only
+read-only status helpers, or wait until terminal. Do not weaken this guard.
+Terminal18:46:08UTC full_refresh_failed/full_invariants_require_review,0survivors/noSIGKILL,
+all5timersrestored. Publicrights/media/overlays/inbound/identities checks allPASS;
+derived duplicate consistency false for8existing groups after interrupted catalogue changes.
+Full rolling details never started. Watcher86515finished. Receipt copiedlocalmode600.
+Telegram getChat succeeded, exact source peer matches DB; this does not prove latest history.
+
+025activation nowrunning localexec24175; logactivation-025cfaf.log. Beforestart public/night/weekly
+servicesnotrunning. Packet previouslypassed1610unit/54browser/fulloracle/CI35007981132.
+Afteractivation: install prepared025helpers, freshpubliccanary, supervised standarddedupreconcile
+using newexactindex, then full025. Do not claim reconciliation/fullaccepted until actualreceipts.
+New helperuploadexec39304 inprogress. Old fullcompanion mayfaildetailaudit because rollingnotreached.
+
+## Historical18:42UTC — df3a88b full RUNNING
+
+Production **df3a88b54dedd07ff16064bbebe6b68dec619319**, schema0014.
+Canary passed18:02:13UTC:20/20cards,359photo hashes,8checks,noresiduals.
+ReceiptSHA cb9d763652786e406ba558ab66ad1be1ee4117a14588d1cd3397888f4daa465b.
+Publictimer restored with receipt before handoff to full supervisor.
+Full unit **rentbelgrad-full-refresh-df3a88b-resume1737**, journal
+**39b141eaa5e4418ea9ec3115b421fb94**, started18:03:11.847812UTC.
+Output `/opt/otz/data/research/acceptance-20260915/full-refresh-df3a88b-resume1737`.
+Companion `rentbelgrad-full-terminal-df3a88b-resume1737`. Supervisor owns5timerpause;
+DO NOT deploy or run other maintenance while it owns release lock. Monitoractive.
+Status helper `/usr/local/lib/rentbelgrad-recovery/full_refresh_status_df3a88b_resume1737.py`
+argument exact journalID. Cooperative user-requestedstop only:
+`sudo systemctl kill --kill-whom=main --signal=SIGTERM rentbelgrad-full-refresh-df3a88b-resume1737.service`.
+Then verify receipt cleanup and all5timer restoration; no SIGKILL.
+
+Primary recovery verified17:58UTC: all7checksPASS, no survivors/SIGKILL,5timersrestored.
+Only primaryflags changed68827→71626. Receipt primary-reconcile-1756-runner-result.json private/local.
+Release readiness /healthz and /readyz200, monitor/siteactive,NRestarts0.
+Candidate **025cfafaf624d38072b0eb58db8617e12924462c** committed/pushed, NOT activated.
+Exact dedup equality on16101active rows/3664groups: old1317.793s, candidate34.433s,
+all group members identical. Candidate179.90MBpeakRSS vs original90.96MB (local benchmark).
+1610unitpassed/1skip,54browserpassed,0newlint. CI35007981132 SUCCESS (unit5m30/browser1m51),
+checked18:42UTC through authenticated GitHub UI; private ci-025cfaf.json saved.
+Original quadratic oracle preserved; baseline manifest unchanged; AST gate protects remaining module.
+Private full-equivalence receipts and input hash are recorded later in this checkpoint.
+Packet release-025cfaf.tar.gz SHAe464246ae823a41a4c79da41b255cdf8e93cdbc210a8a6b4d826089ae25e3c22
+is staged at /tmp/otz-release.LfvAcg0j, not activated. New025helpers prepared locally,90testsPASS;
+not uploaded/installed. Require current full terminal/cleanup/idle before deployment and newcanary.
+Watch persistent overdue timers when full restores them; do not race a newly started writer.
+Main read-only fullrunwatcher exec86515; production full remainsdf3a88b.
+
+At18:40UTC: Nekretnine catalogue4148/4151,314pages,0failedpages,10new/details10OK;
+4zida4324unique,404pages,0failedpages,46new/details46OK, source total changed.
+Halo3273unique/168pages,0failedpages,processing newdetails59/59OK,notfinished.
+CityExpert and full rolling details have not yet reached current-run checkpoints.
+Coverage flags remain degraded honestly; catalogue counts are NOT all-inventory detail verification.
+Bot monitor active,NRestarts0. Telegram DBsourcewatermark17575/Sep13;
+public t.me preview exposes an older feed, cannot verify current authenticated source freshness.
+
+## Resumed17:37UTC — historical work
+
+User returned with «Продолжай». Bot and5timers live-active before recovery.
+Paused-run audit:3628groups before/after, only group68827fails primary ranking.
+Nekretnine71626reactivated (13photos), prior primary68827has12photos; full was
+cancelled before nightly dedup step. No missing identities/overlays/media/rights.
+Standard `dupes-report --write` was supervised by unitrentbelgrad-dedup-reconcile-1737,
+outputacceptance-20260915/dedup-reconcile-1737. Release lock and5timer pause owned
+until terminalreceipt. It exceeded720s childbudget and cleaned up17:56:04UTC, no survivors/SIGKILL,5timers restored. No success claimed.
+New narrower recovery: unitrentbelgrad-primary-reconcile-1756, outputprimary-reconcile-1756.
+Private child rechecks exact3members via standard photo grouping and only updates is_primary;
+SQLite transaction asserts allotherfields unchanged, primary expected71626. Local valid/changed-scope
+fixtures pass. Supervisor has before/after snapshots and7checks; wait for terminalreceipt before deploy.
+Slow all-pairs dedup is a remaining nightly-runtime concern, not a reason to relax its semantics.
+
+Candidate **df3a88b54dedd07ff16064bbebe6b68dec619319** committed/pushed.
+1600unit/1skip,54browser (57.39s),lint0new,shellPASS; CI35002729471PASS.
+Exact candidate sourceSHAe201dbacbef04fe1129c715d5edeb916294b5d2ffd09ba3aada967cd5afe264a
+read-only server probe3/3passed17:39:34UTC: page1/page2/priceband sortednewest,
+noDB/photo/messagewrites,allHTTP403browserrecovered,nofailedISPslots.
+Three catalogue research proofs copied to private localbackup folder.
+Releasepacket release-df3a88b.tar.gz SHA59133f845b81c45d9d3ff89a9dc125a75c9099c58b2c4fd168c83d0463ac1e34,
+tests-df3a88b.json. Production remains8681742 pending dedup and releaseactivation.
+New canary/full/audit helpers cloned revision-pinned df3a88b,90supervisor testsPASS.
+Full output planned full-refresh-df3a88b-resume1737; notstarted.
+
+## Latest pause — 2026-09-15 16:57 UTC
+
+User: «Остановись не надолго. Мне надо перейти в другое место». Work paused;
+SIGTERM sent only to main supervisor of full-refresh-8681742-resume1516.
+Journal eacfb60645004cf0bd9c19d4ca874bc6 cancelled16:57:21UTC (CancelledError).
+Terminal receipt16:58:48UTC: no survivors/no SIGKILL, all5timers restored, no restore error.
+Result full_refresh_failed / full_invariants_require_review: derived_duplicate_groups_consistent=false;
+other5safety checks PASS. Investigate this FIRST on resume, without weakening checks.
+Receipt saved privately as full-refresh-8681742-resume1516-runner-result.json.
+No further probes or deployment until user returns.
+
+Progress before requested stop: Nekretnine4153previewed,102new/102detailsOK,
+314pages,0failedpages; site total changed4158, coverage remains degraded.
+4zida4315previewed,401pages/1failed,55new/55detailsOK; interrupted during ingest.
+Halo/City and rolling detail queue were not reached. Do not reuse old counters.
+
+Local uncommitted candidate: explicit Nekretnine newest-first default
+criterio=data&ordine=desc, preserving explicit configured sort/filters.
+Official UI and3read-only server requests confirm default relevance differs
+from newest.1600unit passed/1skip; lint0newdiagnostics; not deployed.
+Changed files: src/scrapers/nekretnine.py, tests/test_crawl_completeness.py,
+tests/test_scrapers_nekretnine.py. Exact candidate probe NOT run yet;
+local candidate_nekretnine_newest.py and nekretnine_newest_candidate_probe.py
+under /Users/mvstrike/Backups/RentBelgrad/2026-09-15/; verify remote/tmp upload
+before resuming, install only recovery helper copy, not app source.
+Unit log: unit-newest-sort.log. Proofs nekretnine-sort-probe.json and
+halo-catalogue-reverse-count-probe.json still need copy from root acceptance folder.
+Next: verify clean terminal receipt and5timer restoration; preserve receipts;
+finish candidate proof/release checks, then fresh revision-matched canary/full.
+Fresh accepted backup and canary details below remain valid subject to age gate.
+
 User returned with “Продолжай работу”; work resumed15:16UTC. The pause evidence
 below is historical. Production8681742/monitoractive and all5timers verified; no
 new nightly run after the pause. Automatic backup20260915-150857-e60adda9 is
@@ -155,3 +302,29 @@ rejecting earlier rolling cursors: this run was cancelled before rolling details
 so no fresh full-detail result exists. Both controlled supervisors and companions
 are stopped. Ordinary app timers remain enabled. Canonical checkpoint saved locally;
 resume work only after the user returns.
+
+Release df3a88b staged at `/tmp/otz-release.2mRwVQ0j`; not activated. Pinned uv `/opt/otz/tools/uv-venv/bin/uv` version0.8.22 verified. IPRoyal17:52UTC displays unchanged176.63/195.22GB; no reliable per-pass traffic delta, possible delayed metering. New helper files uploaded/tmp, notinstalledexcept primary recovery.
+
+## Candidate025cfaf — local verified; DO NOT interrupt current full to install
+
+Commit025cfafaf624d38072b0eb58db8617e12924462c pushed.1610unit/1skip,54browser,
+lint0new,shellPASS. Full immutable quadratic oracle completed1317.793s vsprototype34.997s,
+all16101rows/3664groups EXACTLY equal. Exact committed candidate separately34.433s,
+179.9MBpeakRSS, identicalfullgroups. Proofdedup-candidate-full-equivalence.json.
+Original singleprocess exec29391 completed. Redundant parallel oracle exec26605 cancelled
+cleanly by its parent after full equality; its30smallcase checks passed, no resultclaimed.
+Candidate sourceSHA32db436992b53071b2bcc1acd8690c55a42f776aa99a24f9278f66c1cbcfb7d0.
+Release/tests privatefiles release-025cfaf.tar.gz,tests-025cfaf.json. CI check pending.
+
+Current full Nex catalogue terminal18:18:20UTC:4148/4151,314pages,10new/detailsOK,
+0failedpages/errors/failedslots;324HTTP403allrecovered,328browserattempts,4recoverederrors,
+3recycles. Coverage incomplete by3ads remains honestdegraded.
+4zida18:30UTC:4324previewed,404pages,0failedpages; firstsite_total4112changed,
+ingestunderway. Halo/City/rolling stillpending at this observation.
+
+Read-only3page priceproof18:21UTC:unfiltered4151 vsmin0/min1both4145.
+Unpriced exclusion is plausible coverage gap; not individually proven. UIconfirmed price
+sortcriterio=prezzo&ordine=asc/desc. Subsequent firstpagespriceasc/pricedesc/oldest all4152,
+25numericprices each; no hidden-price ad found in those samples. Bothprivateproofs copiedlocal.
+Stored DBprice missing15of4148exactseen rows is NOT currentrawpriceproof (oldfieldspossible).
+No extra long sourceprobe while current full is working. No new spending/cancellations.

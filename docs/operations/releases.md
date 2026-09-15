@@ -92,24 +92,26 @@ Activation currently supports `/opt/otz` and its canonical systemd topology only
    saves `/opt/otz/release.json`, then resumes prior timers. Chromium must launch and close
    under the actual `otz` account before any app service is stopped.
 
-Nightly runs Monday–Saturday at 03:00 UTC (+0–15 minutes). Sunday is handled by the
-weekly full refresh at 02:00 UTC (+0–15 minutes), which includes the same maintenance
-queues. Parser smoke runs at 00:30 and 12:30 UTC (+0–5 minutes). Public-only detail refresh
-runs at 11:30, 17:30 and 23:30 UTC (+0–5 minutes), with a 40-minute work budget and a
-45-minute service timeout. Including jitter, the weekly main process ends by 11:15 and
-the adjacent public main processes end by 12:20/00:20, before smoke at 12:30/00:30.
-Per-source leases serialize unexpected overlap with manual or resumed persistent jobs.
-These are main-process scheduling bounds; failed cleanup, delayed dispatch and legacy
-post-run notification work require separate operational checks. All timers are persistent.
-The public-only unit has no message or publication path. Existing nightly/weekly/smoke
-`ship-log` and failure notification paths remain.
+Current schedule (verified 15 September 2026): nightly refresh runs Monday–Saturday
+at 21:00 UTC (+0–15 minutes); Sunday's weekly unit runs the same full command at
+21:00 UTC (+0–15 minutes). The full nightly inventory policy has no 3,000-row quota
+or seven-day selection cutoff. The configured full work budget is 34,200 seconds;
+the service's outer timeout is 10 hours. Completion still requires measured source
+coverage, detail outcomes and cleanup receipts.
 
-Public originals become due after 10 hours, subject to retry backoff. The public schedule
-has at most a 12-hour gap plus 5 minutes of jitter. With a successful complete queue inside
-its 40-minute budget, selection and work therefore fit within a conservative 22h45 age
-bound even when nightly completion times change. This calculation does not establish the
-24-hour freshness target in production: verify actual timer execution, per-source success,
-queue capacity and measured public ages before claiming attainment.
+Public-only detail refresh runs at 08:00, 14:00 and 19:00 UTC (+0–5 minutes), with
+a 40-minute work budget and a 45-minute service timeout. Smoke runs at 12:00 and
+20:00 UTC (+0–5 minutes); daily summary runs at 07:00 UTC. Timers are persistent,
+so restoring them after a controlled maintenance window can dispatch an overdue
+run. Preserve the completed run's terminal evidence before timer restoration and
+recheck active writers before any further deployment or maintenance.
+
+Public originals become due after 10 hours, subject to retry backoff. The public
+schedule's longest nominal gap is 13 hours plus 5 minutes of jitter. A successful
+complete public queue within its 40-minute budget gives a conservative 23h45 age
+bound. This calculation does not establish actual 24-hour freshness: verify timer
+execution, per-source success, queue capacity and measured public ages. Existing
+nightly/weekly/smoke log-delivery and failure-notification paths remain active.
 
 **Do not use these legacy scheduled units as a no-notify canary.** Use the separately
 implemented CLI evaluation/no-notify interface and prove no external sends there.

@@ -1,5 +1,23 @@
 # RentBelgrad: full-refresh results and remaining repairs, 2026-09-15
 
+## Current controlled verification — 19:00 UTC
+
+Production is025cfaf (exact indexed dedup); parser fixes and all-inventory nightly schedule
+are installed. CI,1610unit/54browser, full local dedup equivalence,20-card public canary
+and guarded production dedup reconciliation passed. Production dedup including DBwrite
+completed198.856s; all7preservation checks passed.
+
+Current full journal038a7a8a0f1e499196fa6b8358dd7857 started18:56:53UTC and is RUNNING.
+It has not reached full detail verification yet. Prior df3a88b run was interrupted by my
+separate otz-user diagnostic triggering its strict guard; cleanup and timer restoration
+completed, and all derived-group inconsistencies were then repaired by standard dedup.
+Never launch extra otz-user processes during a controlled run; preserve the guard.
+
+Read-only19:00UTC baseline active /verified24h:4zida5844/4591,City882/880,
+Halo5281/1643,Nek4321/1140. These are inventory/freshness measures, not current site totals
+or the outcome of the new full run. Latest state and exact restart details are in the
+[resume checkpoint](2026-09-15-resume-checkpoint.md).
+
 ## Result recovered from the saved terminal evidence
 
 Production827b904, controlled run b9f3f0e55db646a688fb0a45767c20e8:
