@@ -259,7 +259,7 @@ _REMOVED_DEST = "/nekretnine/izdavanje-stanova?referrer=oglas"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("query", ["", "?kid=4"])
+@pytest.mark.parametrize("query", ["", "?kid=1", "?kid=3", "?kid=4"])
 async def test_explicit_print_removal_is_propagated_without_browser(query: str) -> None:
     from src.scrapers.base import SourceListingRemovedError
 
@@ -282,7 +282,7 @@ async def test_explicit_print_removal_is_propagated_without_browser(query: str) 
 @pytest.mark.parametrize("case", [
     "no_history", "extra_hop", "302", "different_origin", "post", "absolute_location",
     "other_host", "http", "port", "fragment", "wrong_id", "wrong_path", "extra_query",
-    "duplicate_query", "final_host", "final_query", "final_fragment", "status",
+    "duplicate_query", "unknown_query", "final_host", "final_query", "final_fragment", "status",
     "no_notice", "wrong_notice", "duplicate_notice", "text_only", "no_payload",
     "bad_payload", "bad_ads", "detail_payload", "challenge",
 ])
@@ -299,6 +299,7 @@ def test_ambiguous_print_signals_never_prove_removal(case: str) -> None:
         "wrong_path": ("izdavanje-stanova", "prodaja-stanova"),
         "extra_query": ("kid=4", "kid=4&x=1"),
         "duplicate_query": ("kid=4", "kid=4&kid=4"),
+        "unknown_query": ("kid=4", "kid=999"),
     }
     if case in replacements:
         url = url.replace(*replacements[case])

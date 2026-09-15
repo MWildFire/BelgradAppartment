@@ -1,6 +1,6 @@
 # RentBelgrad resume checkpoint — 2026-09-15
 
-## Current19:56UTC — 025cfaf full RUNNING; Halo candidate LOCAL
+## Current20:38UTC — 025cfaf full RUNNING; expanded Halo candidate ready locally
 
 Production025cfafaf624d38072b0eb58db8617e12924462c, schema0014.
 Dedup recovery terminal18:55:44.745127UTC VERIFIED,198.856s child; all7checksPASS,
@@ -36,7 +36,19 @@ toprintcategory?referrer=oglas,HTTP200,validAdslist,exactsourceexpirednotice,
 nochallenge/detailpayload => SourceListingRemovedError. Genericredirects/print404remainUNKNOWN.
 9livecontrolsPASS (3removed,3healthy,3healthywrongslug302),74targetedtestsPASS.
 Fullunit1640passed/1skipped, browser54passed, lint0new; allfinished. Privatehalo-candidate-live-proof-1956.json.
+Historicalcandidatece8c9df9bbd6302b9370a7d0b8601c00d3cf28b4 committed/pushed. CI35016688841SUCCESS.
+Packetrelease-ce8c9df.tar.gz (446files), SHA893b5325502afb162765ec1c43b9236aad23ad5e68cd96e2be5ce6a03d88fd2d.
 CandidateNOTinstalled. Do notactivate/deploywhile025fullruns.
+Additionalobservedkid=1/kid=3 variants nowcovered:20livecontrolsPASS,1643unit/1skip,54browserPASS,lint0new.
+SourceSHA27e0746fe584c180ca834cbf43565b7199db6a2a6b8277dbb78df4054c101476.
+Use NEWrevision/packetafterthischange, notce8c9df. Source025stillunchanged.
+Halo detailphaseendedaround20:34UTC;Nek detailphase nowrunning. HTTP400count0 incurrentlog.
+Alllocalv2tests/probecompleted; theirsessions95923/64225/14530 needfinalpollcleanupifstilllisted.
+Progress20:25:28UTC:5011verified/295errors/0skippedsofar/790photos,stillrunning.
+NewdailySept16 createdfromtemplate. Localce8canaryrunner prepared+35testsPASS,NOTinstalled:
+rentbelgrad-public-canary-runner-ce8c9df.py SHA0618cf11e6bbd9645d5f28d21fd5ebe279fe9bc3858844e7d86c020cb7b87b18;
+public_preventive_canary_ce8c9df.py SHAb1bd18905c340d21e8cb652af765368d403d7e5cb7f6e9daf0c4ddff6efb0bb5.
+Onlylocalwatcher42424 remainsrunning. Browserresearchtabsclosed; userIPRoyaltabuntouched.
 
 ## Historical18:52UTC — 025cfaf installed; canary PASS; dedup recovery RUNNING
 

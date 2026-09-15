@@ -1,6 +1,6 @@
 # RentBelgrad: full-refresh results and remaining repairs, 2026-09-15
 
-## Current controlled verification — 19:00 UTC
+## Current controlled verification — 20:22 UTC
 
 Production is025cfaf (exact indexed dedup); parser fixes and all-inventory nightly schedule
 are installed. CI,1610unit/54browser, full local dedup equivalence,20-card public canary
@@ -8,14 +8,32 @@ and guarded production dedup reconciliation passed. Production dedup including D
 completed198.856s; all7preservation checks passed.
 
 Current full journal038a7a8a0f1e499196fa6b8358dd7857 started18:56:53UTC and is RUNNING.
-It has not reached full detail verification yet. Prior df3a88b run was interrupted by my
-separate otz-user diagnostic triggering its strict guard; cleanup and timer restoration
-completed, and all derived-group inconsistencies were then repaired by standard dedup.
-Never launch extra otz-user processes during a controlled run; preserve the guard.
+All catalogues have finished; rolling details are still running:
 
-Read-only19:00UTC baseline active /verified24h:4zida5844/4591,City882/880,
-Halo5281/1643,Nek4321/1140. These are inventory/freshness measures, not current site totals
-or the outcome of the new full run. Latest state and exact restart details are in the
+| Source | Unique catalogue cards | Pages | New details | Failed pages | Coverage flag |
+|---|---:|---:|---:|---:|---|
+| Nekretnine |4147|314|2/2|0|source_total_changed|
+| 4zida |4315|402|4/4|0|source_total_changed|
+| Halooglasi |3266|168|5/5|0|source_total_changed|
+| CityExpert |648|54|16/16|0|complete|
+
+Catalogue Nek proxy counters:636operations,316HTTP403 recovered by browser,
+4browser errors recovered,3session recycles, no failed slots or exhausted pool.
+These are catalogue results only; long detail verification is not yet accepted.
+
+Queue16364selected/16405inventory,41retry-deferred,0quota-deferred. At20:22:27UTC:
+4711verified,294errors,0skipped so far,790photos. Do not read nonterminal skipped0
+as proof that the complete queue will fit. No CLIP embedding failures in the run log
+as checked20:09UTC. No fresh outbound Telegram test was sent.
+
+Candidatece8c9df (explicit Halo removal) is committed/pushed and prepared locally:
+1640unit/1skip,54browser,9live controls, GitHubCI35016688841 all passed.
+It is NOT installed while025cfaf is running. See [evidence](2026-09-15-halo-explicit-removal.md).
+
+Prior df3a88b run was interrupted by my separate otz-user diagnostic triggering its
+strict guard; cleanup and timer restoration completed, and all derived-group
+inconsistencies were repaired by standard dedup. Never launch extra otz-user processes
+during a controlled run. Latest state and exact restart gates are in the
 [resume checkpoint](2026-09-15-resume-checkpoint.md).
 
 ## Result recovered from the saved terminal evidence

@@ -621,7 +621,7 @@ def _explicit_print_not_found(url: str, response: httpx.Response) -> bool:
         original.scheme != "https"
         or original.netloc not in {"www.halooglasi.com", "halooglasi.com"}
         or original.fragment
-        or original.query not in {"", "kid=4"}
+        or original.query not in {"", "kid=1", "kid=3", "kid=4"}
         or re.fullmatch(_RENTAL_PATH + r"/[a-z0-9-]+/[0-9]{13}", original.path) is None
         or response.status_code != 200
         or str(response.url) != SMSPRINT_BASE_URL + destination
