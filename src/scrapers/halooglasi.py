@@ -26,7 +26,13 @@ from selectolax.parser import HTMLParser
 
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper, SourceListingRemovedError
+from src.scrapers.base import (
+    ListingDetail,
+    ListingPreview,
+    Scraper,
+    SourceListingInactiveError,
+    SourceListingRemovedError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +50,13 @@ _REMOVED_NOTICE = (
     "Nažalost, oglas nije pronađen. Oglas je obrisan ili ste pronašli neispravan link. "
     "Pogledajte druge oglase u ovoj kategoriji."
 )
+_INACTIVE_NOTICE = "Žao nam je, predmet vašeg interesovanja više nije u ponudi"
+_INACTIVE_VISIBILITY = """
+if (classified.StateId == '101' || classified.StateId == '106')
+    document.getElementById('divExpired1').parentNode.removeChild(document.getElementById('divExpired1'));
+else
+    document.getElementById('divExpired1inner').style.display = 'block';
+"""
 
 # Cloudflare interstitial fingerprints. 'Sačekajte trenutak' is the Serbian 'Just a moment' — the
 # context runs at locale sr-RS, so that is the title the site actually serves us; matching only the
@@ -329,6 +342,8 @@ class HalooglasiScraper(Scraper):
                         "detail data marker missing (challenge or soft error page)"
                     )
                 return self.parse_detail(url, html)
+            except SourceListingRemovedError:
+                raise
             except _MarkerMissing as e:
                 # Deliberately NO _recycle_browser() here. A challenged attempt leaves the
                 # profile holding the cf_clearance Cloudflare just granted, and the next navigation
@@ -544,6 +559,17 @@ class HalooglasiScraper(Scraper):
                 url=url,
             )
 
+        # The source keeps full JSON/photos on expired or withdrawn HTTP200 pages.
+        # Its own banner visibility depends on StateId; the mere presence of the
+        # banner text is insufficient because healthy raw HTML includes it hidden.
+        state = ad.get("StateId")
+        if type(state) is not int or state != 101:
+            if _explicit_inactive_detail(url, html, ad):
+                raise SourceListingInactiveError()
+            raise _MarkerMissing(
+                "detail source state is not confirmed active; availability unknown"
+            )
+
         external_id = str(ad.get("Id") or _external_id_from_url(url))
         other: dict[str, Any] = ad.get("OtherFields") or {}
 
@@ -606,6 +632,57 @@ class HalooglasiScraper(Scraper):
 
 
 # --- helpers ---
+
+
+def _explicit_inactive_detail(url: str, html: str, ad: dict[str, Any]) -> bool:
+    parts = urlsplit(url)
+    match = re.fullmatch(_RENTAL_PATH + r"/[a-z0-9-]+/([0-9]{13})", parts.path)
+    if (
+        parts.scheme != "https"
+        or parts.netloc not in {"www.halooglasi.com", "halooglasi.com"}
+        or parts.fragment
+        or parts.query not in {"", "kid=1", "kid=3", "kid=4"}
+        or match is None
+        or str(ad.get("Id")) != match.group(1)
+        or type(ad.get("StateId")) is not int
+        or ad["StateId"] not in {105, 111, 112}
+        or _is_challenge(html)
+    ):
+        return False
+    doc = HTMLParser(html)
+    notices = doc.css("div#divExpired1 div#divExpired1inner.info-box-expired")
+    if len(notices) != 1:
+        return False
+    node = notices[0]
+    while node is not None:
+        attrs = node.attributes
+        style = dict(
+            (key.strip().lower(), value.strip().lower())
+            for item in attrs.get("style", "").split(";")
+            for key, separator, value in [item.partition(":")] if separator
+        )
+        if "hidden" in attrs or attrs.get("aria-hidden") == "true":
+            return False
+        if node != notices[0] and (
+            style.get("display") == "none" or style.get("visibility") == "hidden"
+        ):
+            return False
+        node = node.parent
+    titles = notices[0].css(".expired-text > span.title")
+    if len(titles) != 1 or " ".join(titles[0].text().split()) != _INACTIVE_NOTICE:
+        return False
+    # Raw print HTML still has the source's self-removing script. Rendered browser
+    # HTML instead retains the explicit style set by that same script.
+    display = None
+    for item in notices[0].attributes.get("style", "").split(";"):
+        key, separator, value = item.partition(":")
+        if separator and key.strip().lower() == "display":
+            display = value.strip().lower()
+    visible = display == "block"
+    binding = " ".join(_INACTIVE_VISIBILITY.split())
+    return visible or any(
+        binding in " ".join(script.text().split()) for script in doc.css("script")
+    )
 
 
 def _explicit_print_not_found(url: str, response: httpx.Response) -> bool:

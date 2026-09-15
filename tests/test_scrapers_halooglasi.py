@@ -30,7 +30,7 @@ CHALLENGE_HTML = (
 )
 GOOD_DETAIL_HTML = (
     "<html><body><script>QuidditaEnvironment.CurrentClassified = "
-    '{"Id":"5425647413192","Title":"Zemun"};</script></body></html>'
+    '{"Id":"5425647413192","StateId":101,"Title":"Zemun"};</script></body></html>'
 )
 
 
@@ -343,6 +343,128 @@ def test_ambiguous_print_signals_never_prove_removal(case: str) -> None:
         request=httpx.Request("GET", destination),
     )
     assert not _explicit_print_not_found(url, response)
+
+
+_OBSERVED_VISIBILITY_SCRIPT = """
+if (classified.StateId == '101' || classified.StateId == '106')
+    document.getElementById('divExpired1').parentNode.removeChild(document.getElementById('divExpired1'));
+else
+    document.getElementById('divExpired1inner').style.display = 'block';
+"""
+
+
+def _inactive_detail_html(state: object = 112, *, rendered: bool = False) -> str:
+    import json
+
+    ad = {"Id": "5425647413192", "StateId": state, "Title": "Still retained",
+          "OtherFields": {"cena_d": 600, "kvadratura_d": 40}, "ImageURLs": ["/slike/one.jpg"]}
+    style = ' style="display: block;"' if rendered else ""
+    binding = "" if rendered else "<script>" + _OBSERVED_VISIBILITY_SCRIPT + "</script>"
+    return (
+        '<script>QuidditaEnvironment.CurrentClassified = ' + json.dumps(ad) + ';</script>'
+        '<div id="divExpired1"><div id="divExpired1inner" class="info-box-expired row"' + style + '>'
+        '<div class="expired-text"><span class="title">'
+        'Žao nam je, predmet vašeg interesovanja više nije u ponudi</span></div>'
+        '</div></div>' + binding
+    )
+
+
+@pytest.mark.parametrize("state", [105, 111, 112])
+@pytest.mark.parametrize("rendered", [False, True])
+def test_retained_inactive_detail_is_not_an_active_listing(state: int, rendered: bool) -> None:
+    from src.scrapers.base import SourceListingInactiveError
+
+    with pytest.raises(SourceListingInactiveError):
+        HalooglasiScraper.parse_detail(_DETAIL_URL, _inactive_detail_html(state, rendered=rendered))
+
+
+def test_healthy_detail_with_hidden_expired_template_remains_healthy() -> None:
+    detail = HalooglasiScraper.parse_detail(_DETAIL_URL, _inactive_detail_html(101))
+    assert detail.price_eur == 600 and detail.area_m2 == 40 and len(detail.photo_urls) == 1
+
+
+@pytest.mark.parametrize("state", [None, 106, 999, "112", True])
+def test_waiting_or_unknown_detail_state_is_not_confirmed_active_or_dead(state: object) -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    with pytest.raises(_MarkerMissing, match="availability unknown"):
+        HalooglasiScraper.parse_detail(_DETAIL_URL, _inactive_detail_html(state))
+
+
+@pytest.mark.parametrize("case", [
+    "other_host", "http", "query", "fragment", "wrong_id", "wrong_path", "notice_text",
+    "notice_id", "no_visibility", "changed_binding", "duplicate_notice", "challenge",
+])
+def test_ambiguous_retained_state_never_proves_removal(case: str) -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    url, html = _DETAIL_URL, _inactive_detail_html()
+    replacements = {
+        "other_host": ("www.halooglasi.com", "example.com"),
+        "http": ("https:", "http:"), "query": ("kid=4", "unknown=1"),
+        "fragment": ("?kid=4", "?kid=4#fragment"),
+        "wrong_id": ("5425647413192", "5425647413193"),
+        "wrong_path": ("izdavanje-stanova", "prodaja-stanova"),
+    }
+    if case in replacements:
+        url = url.replace(*replacements[case])
+    elif case == "notice_text":
+        html = html.replace("više nije u ponudi", "u ponudi")
+    elif case == "notice_id":
+        html = html.replace('id="divExpired1inner"', 'id="other"')
+    elif case == "no_visibility":
+        html = html.replace(_OBSERVED_VISIBILITY_SCRIPT, "")
+    elif case == "changed_binding":
+        html = html.replace("StateId == '101'", "StateId == '112'")
+    elif case == "duplicate_notice":
+        html += _inactive_detail_html()
+    elif case == "challenge":
+        html += CHALLENGE_HTML
+    with pytest.raises(_MarkerMissing, match="availability unknown"):
+        HalooglasiScraper.parse_detail(url, html)
+
+
+@pytest.mark.asyncio
+async def test_browser_inactive_detail_does_not_retry_or_recycle() -> None:
+    from src.scrapers.base import SourceListingInactiveError
+
+    scraper = _scraper_with(_FakePage([_inactive_detail_html(rendered=True)]))
+    with pytest.raises(SourceListingInactiveError):
+        await scraper.fetch_detail(_DETAIL_URL)
+
+
+@pytest.mark.parametrize("case", ["last_display_none", "hidden", "hidden_parent", "aria_hidden"])
+def test_hidden_rendered_notice_is_not_removal_evidence(case: str) -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    html = _inactive_detail_html(rendered=True)
+    if case == "last_display_none":
+        html = html.replace("display: block;", "display: block; display: none;")
+    elif case == "hidden":
+        html = html.replace('id="divExpired1inner"', 'id="divExpired1inner" hidden')
+    elif case == "hidden_parent":
+        html = html.replace('id="divExpired1"', 'id="divExpired1" style="display: none;"')
+    else:
+        html = html.replace('id="divExpired1"', 'id="divExpired1" aria-hidden="true"')
+    with pytest.raises(_MarkerMissing, match="availability unknown"):
+        HalooglasiScraper.parse_detail(_DETAIL_URL, html)
+
+
+@pytest.mark.asyncio
+async def test_mirror_inactive_detail_never_falls_back_to_browser() -> None:
+    from src.scrapers.base import SourceListingInactiveError
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, text=_inactive_detail_html())
+    ))
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()
+    try:
+        with pytest.raises(SourceListingInactiveError):
+            await scraper.fetch_detail(_DETAIL_URL)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
 
 
 class _FakePage:

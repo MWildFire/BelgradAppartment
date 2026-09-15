@@ -25,6 +25,12 @@ class SourceListingRemovedError(Exception):
     reason = "source_not_found_redirect"
 
 
+class SourceListingInactiveError(SourceListingRemovedError):
+    """The source explicitly marks a retained detail page as no longer offered."""
+
+    reason = "source_listing_inactive"
+
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"

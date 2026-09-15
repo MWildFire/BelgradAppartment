@@ -448,18 +448,20 @@ async def test_cancel_during_failed_acceptance_still_cancels_remaining_work(db, 
     assert stored.detail_failure_count == 1
 
 
-@pytest.mark.parametrize("platform", [Platform.CETIRI_ZIDA, Platform.HALOOGLASI])
-async def test_explicit_source_removal_preserves_last_content_and_success(db, platform):
+@pytest.mark.parametrize("platform,inactive", [
+    (Platform.CETIRI_ZIDA, False), (Platform.HALOOGLASI, False), (Platform.HALOOGLASI, True),
+])
+async def test_explicit_source_removal_preserves_last_content_and_success(db, platform, inactive):
     from datetime import UTC, datetime
 
-    from src.scrapers.base import SourceListingRemovedError
+    from src.scrapers.base import SourceListingInactiveError, SourceListingRemovedError
     previous = datetime(2026, 8, 1, tzinfo=UTC)
     row = await seed(platform=platform, price_eur=650, area_m2=45,
                      photo_urls=['https://img.test/old.jpg'], photo_phashes=['ff00ff00ff00ff00'],
                      details_succeeded_at=previous)
     class Removed(scraper_for(detail(row))):
         async def fetch_detail(self, url):
-            raise SourceListingRemovedError()
+            raise SourceListingInactiveError() if inactive else SourceListingRemovedError()
     stats = await orch.refetch_listing_details(
         [row], sleep_between=0, scrapers={row.platform: Removed},
     )

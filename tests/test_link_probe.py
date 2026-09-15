@@ -61,6 +61,21 @@ async def test_source_probe_requires_valid_payload_and_handles_definitive_status
     assert source.closed
 
 
+async def test_retained_inactive_detail_is_dead_with_distinct_source_reason():
+    from src.scrapers.base import SourceListingInactiveError
+
+    class Inactive(FakeSource):
+        async def fetch_detail(self, url):
+            raise SourceListingInactiveError()
+
+    source = Inactive()
+    async with SourceProbeSession(Platform.HALOOGLASI, factory=lambda: source) as session:
+        result = await session.probe("https://www.halooglasi.com/listing")
+    assert result.status == "DEAD" and not result.errored
+    assert result.reason == "source_listing_inactive"
+    assert source.closed
+
+
 @pytest.mark.asyncio
 async def test_successful_http_shell_and_timeout_are_unknown():
     for source in (FakeSource(shell=True), FakeSource(hang=True)):

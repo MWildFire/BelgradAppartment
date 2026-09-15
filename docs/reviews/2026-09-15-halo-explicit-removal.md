@@ -1,5 +1,42 @@
 # Halooglasi explicit removal evidence — 2026-09-15
 
+## Retained inactive HTTP200 detail pages — additional correctness fix
+
+The existing parser also treated retained expired/withdrawn detail pages as active:
+they return200 and still contain a full CurrentClassified object, price and photographs.
+This inflates apparent verification success. In the running025cfaf log,5016distinct
+Halo detail URLs returned200;1762were absent from a contemporaneous catalogue pass.
+This count is a research population, NOT1762confirmed removals. Eight stratified
+samples all proved inactive; every affected row still requires a fresh source check.
+
+Canonical Chrome showed the source's "no longer offered" notice for sampled states
+105,111,112. An active101control did not show it. Raw print HTML includes the same
+hidden notice even on healthy pages, so text presence alone is explicitly insufficient.
+The source's own script removes this notice for101(active) and106(waiting verification),
+and otherwise displays it. Expiry timestamps alone are not used as availability evidence.
+
+The candidate confirms active only for integer101. For105/111/112, require matching
+canonical rental identity, exact notice in its source container, and the observed
+visibility binding or an explicitly visible rendered notice. Hidden ancestors,
+contradictory styles, challenges, unknown/missing states and106remain UNKNOWN.
+SourceListingInactiveError is handled by existing removal paths, with a distinct reason;
+old content/photos/success evidence are preserved. Browser fallback does not retry a
+confirmed inactive page. Manual publication rights and overlays are not changed.
+
+Final validation:109targeted tests;1675unit passed/1skipped(212.22s),54browser(63.70s),
+zero new lint diagnostics. Exact current source live proof:8inactive+3healthy outcomes,
+11/11PASS, privatehalo-inactive-candidate-proof-final.json, sourceSHA
+9fb96eef803ea4abd717be4fa6eb695ff3c2b71a64e87e74d6d9d6edf07a15fd.
+The earlier20-control redirect proof remains valid for that unchanged path.
+
+Production025cfaf is STILL running. Its Halo success counts must not be accepted as
+final availability evidence. After terminal capture/cleanup/timer restoration, install
+the final candidate with a fresh canary and repeat Halo availability verification.
+Do not deploy the superseded ce8c9df/db0a7c4 packages. Other source detail verification
+continues uninterrupted. No new purchases, outbound messages or proxy probes were added.
+
+## Exact catalogue redirect signal — preceding part of the same correction
+
 The running full refresh on025cfaf records old Halo cards as UNKNOWN when the print
 host redirects to the catalogue. A catalogue redirect alone remains insufficient
 removal evidence. This change recognizes the stronger, observed source response.

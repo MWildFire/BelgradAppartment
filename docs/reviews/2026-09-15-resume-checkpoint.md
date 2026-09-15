@@ -1,6 +1,25 @@
 # RentBelgrad resume checkpoint — 2026-09-15
 
-## Current20:38UTC — 025cfaf full RUNNING; expanded Halo candidate ready locally
+## Current21:14UTC — 025cfaf full RUNNING; NEW retained-inactive Halo fix in working tree
+
+CRITICAL NEW FINDING: Halo retained HTTP200 detail pages can be INACTIVE despite full
+price/photos/JSON. Current025full Halo success counts are NOT final truthful availability.
+5016unique detail HTTP200IDs inlog,1762absent fromlocaldefaultcatalogue;8stratified samples
+all carry StateId105/111/112 and source visible "no longer offered" notice.
+CanonicalChrome confirmed105/111/112 inactive,101healthy; rawHTMLalone containshidden
+expired templates evenwhenhealthy, so generic text matching is forbidden.
+SourceJS removes expired notice for101/106;106iswaitingmoderation,keepUNKNOWN.
+Newlocalfix: only101confirmedactive;105/111/112 +exactidentity+sourcebanner+visibility
+binding/renderedstyle =>SourceListingInactiveError;unknown/pending/ambiguous=>UNKNOWN.
+Preserveoldphotos/content/success;browserinactiveexceptions donotretry/recycle.
+109targetedtestsPASS,11live(8inactive+3healthy)PASS;final1675unit/1skip(212.22s),54browser(63.70s),lint0new.
+Alllocaltests/probesfinished;onlywatcher42424running.
+Firstfullpreformat1671unitPASS;finalincludes4additional hidden/contradictoryvisibilitycases.
+DO NOT deploy db0a7c4 or ce8c9df: superseded by this new uncommitted correctness fix.
+After current025terminal, install finaltestedrevision and reconcile Halo again; do not
+accept currentHalo nominalverifiedcounts. KeepcurrentlongNek/4zidaverification running.
+Privateproofs halo-off-catalogue-sample.json,halo-off-catalogue-metadata-2100.json,
+halo-inactive-canonical-ui-proof.json,halo-inactive-candidate-proof-final.json.
 
 Production025cfafaf624d38072b0eb58db8617e12924462c, schema0014.
 Dedup recovery terminal18:55:44.745127UTC VERIFIED,198.856s child; all7checksPASS,
@@ -41,9 +60,18 @@ Packetrelease-ce8c9df.tar.gz (446files), SHA893b5325502afb162765ec1c43b9236aad23
 CandidateNOTinstalled. Do notactivate/deploywhile025fullruns.
 Additionalobservedkid=1/kid=3 variants nowcovered:20livecontrolsPASS,1643unit/1skip,54browserPASS,lint0new.
 SourceSHA27e0746fe584c180ca834cbf43565b7199db6a2a6b8277dbb78df4054c101476.
-Use NEWrevision/packetafterthischange, notce8c9df. Source025stillunchanged.
+NEWrevisiondb0a7c429f23c56ac45f4e71ac4f97f4ebb3e4f4 pushed, CI35020881966SUCCESS.
+Packetrelease-db0a7c4.tar.gz446files SHA0559f1ca83e1b06241202fea3a0ca599f70886c91a7070faf49b024c13ff060b.
+Use this candidate, notce8c9df. Source025stillunchanged.
+Newcanaryrunnerdb0a7c4 preparedonly,35testsPASS, SHA ff9fd9ce89e9e4f1dc12ed142b66daf10d11a20f6b6ef36c77d026eeed0ea8f3.
+Healthy20cardCLI SHA unchangedb1bd18905c340d21e8cb652af765368d403d7e5cb7f6e9daf0c4ddff6efb0bb5.
 Halo detailphaseendedaround20:34UTC;Nek detailphase nowrunning. HTTP400count0 incurrentlog.
-Alllocalv2tests/probecompleted; theirsessions95923/64225/14530 needfinalpollcleanupifstilllisted.
+Alllocalv2tests/probecompletedandpolled. Onlywatcher42424running.
+Nek no-photo controls1078887/1196683/1241803: sourceChromeexplicitOglasbezfotografije,
+DBprice/areaequalUI,0photos/0hashes. Private nekretnine-no-photo-controls-2040.json.
+Nek last80requestintervals20:40:09–20:44:40: median3s,mean3.39s,p904s.
+This is a short throughput sample, not fullnightprediction; budget tuning maybe needed afteractualterminal.
+Do not enable snapshot-active: existing fullshadow gates remain unmet; no bypass/newproxyprobesduringfull.
 Progress20:25:28UTC:5011verified/295errors/0skippedsofar/790photos,stillrunning.
 NewdailySept16 createdfromtemplate. Localce8canaryrunner prepared+35testsPASS,NOTinstalled:
 rentbelgrad-public-canary-runner-ce8c9df.py SHA0618cf11e6bbd9645d5f28d21fd5ebe279fe9bc3858844e7d86c020cb7b87b18;
@@ -360,3 +388,16 @@ sortcriterio=prezzo&ordine=asc/desc. Subsequent firstpagespriceasc/pricedesc/old
 25numericprices each; no hidden-price ad found in those samples. Bothprivateproofs copiedlocal.
 Stored DBprice missing15of4148exactseen rows is NOT currentrawpriceproof (oldfieldspossible).
 No extra long sourceprobe while current full is working. No new spending/cancellations.
+
+## Additional observation20:54UTC
+
+IPRoyal authenticated meters now175.25GB/order80643004 ($6.00) and195.21GB/order80647128
+($8.10), resetSep25. Previous17:52meters176.63/195.22;delta1.38/0.01GB includesmultiple
+controlledcataloguepasses/partialdetails, NOT a single-night cost. No purchase/cancel.
+Privateiproyal-traffic-2054.json. HTTPlog midrun audit20:56:20UTC:rollingNek381HTTP403,
+4browserchallengereloadannouncements, no rotation/failureannouncements; HTTPstatuses
+arenotallbrowserrequests. Halo264301+10print404, detailsandcataloguesshownseparately.
+Preparedlocalfull_http_log_audit_025cfaf.py andmidrun-http-audit-025cfaf.json;rootread-only,
+noDBwrites. Runatgenuineterminalagainwithnewreceiptname.
+Optionaluserquestionpending: desiredmorningfinishBelgrade09:00/07:00/nofixeddeadline.
+Noanswerreceived;do nottreatsilenceasapproval. Budgetchangesnotmade.
