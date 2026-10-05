@@ -180,7 +180,11 @@ def test_old_schema_backup_cannot_unlock_retry_after_additive_migration(tmp_path
     monkeypatch.setattr(release, "require", isolated_require)
     monkeypatch.setattr(release.os, "geteuid", lambda: 0)
     monkeypatch.setattr(release, "validate_backup", lambda _receipt: None)
-    monkeypatch.setattr(release, "unpack_packet", lambda *_args: {"revision": "a" * 40})
+    monkeypatch.setattr(release, "unpack_packet", lambda *_args: {
+        "revision": "a" * 40,
+        "tests": {"revision": "a" * 40, "result": "passed",
+                  "checks": dict.fromkeys(release.CHECKS, "passed")},
+    })
     monkeypatch.setattr(release, "current_revisions", lambda _path: ["0013"])
     monkeypatch.setattr(release, "run", lambda *_args, **_kwargs: pytest.fail("host command ran"))
     with pytest.raises(release.ReleaseError, match="live schema no longer matches"):

@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from release import ReleaseError, require, unpack_packet, validate_backup
+from release import CHECKS, ReleaseError, require, unpack_packet, validate_backup, validate_tests
 
 
 def main():
@@ -19,6 +19,8 @@ def main():
     parser.add_argument("--target", required=True, help="explicit user@host; no legacy default")
     parser.add_argument("--remote-root", required=True, choices=["/opt/otz"])
     parser.add_argument("--packet", type=Path, required=True)
+    parser.add_argument("--fallback-packet", type=Path,
+                        help="separately tested compatible runtime for first schema transition")
     parser.add_argument("--backup-receipt", type=Path, required=True)
     parser.add_argument("--uv-bin", required=True, help="absolute remote pinned uv binary")
     parser.add_argument("--ssh-key", type=Path)
@@ -30,12 +32,19 @@ def main():
     require(re.fullmatch(r"[A-Za-z0-9_.-]+@[A-Za-z0-9_.:-]+", args.target), "invalid SSH target")
     require(Path(args.uv_bin).is_absolute(), "absolute uv binary path required")
     validate_backup(json.loads(args.backup_receipt.read_text()))
-    options = ["-o", "BatchMode=yes"]
+    options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
     if args.ssh_key:
         options.extend(["-i", str(args.ssh_key)])
     with tempfile.TemporaryDirectory(prefix="otz-release-check-") as temp:
         local = Path(temp)
         manifest = unpack_packet(args.packet, local)
+        validate_tests(manifest["tests"], manifest["revision"], CHECKS)
+        fallback = None
+        if args.fallback_packet:
+            fallback = unpack_packet(args.fallback_packet, local / "fallback-check")
+            validate_tests(fallback["tests"], fallback["revision"], CHECKS)
+            require(fallback["revision"] != manifest["revision"],
+                    "fallback must be a distinct revision")
         staging = subprocess.run(
             ["ssh", *options, args.target, "umask 077 && mktemp -d /tmp/otz-release.XXXXXXXX"],
             capture_output=True,
@@ -45,11 +54,14 @@ def main():
         require(
             re.fullmatch(r"/tmp/otz-release\.[A-Za-z0-9]+", staging), "invalid remote staging path"
         )
-        for source, target in (
+        uploads = [
             (args.packet, "packet.tar.gz"),
             (args.backup_receipt, "backup.json"),
             (local / "code/scripts/release.py", "release.py"),
-        ):
+        ]
+        if args.fallback_packet:
+            uploads.append((args.fallback_packet, "fallback.tar.gz"))
+        for source, target in uploads:
             subprocess.run(
                 ["scp", *options, str(source), f"{args.target}:{staging}/{target}"], check=True
             )
@@ -66,12 +78,15 @@ def main():
             "--uv-bin",
             args.uv_bin,
         ]
+        if args.fallback_packet:
+            command.extend(["--fallback-packet", staging + "/fallback.tar.gz"])
         if args.activate:
             subprocess.run(["ssh", *options, args.target, shlex.join(command)], check=True)
         print(
             json.dumps(
                 {
                     "revision": manifest["revision"],
+                    "fallback_revision": fallback["revision"] if fallback else None,
                     "target": args.target,
                     "staging": staging,
                     "result": "activation_finished" if args.activate else "staged_not_activated",

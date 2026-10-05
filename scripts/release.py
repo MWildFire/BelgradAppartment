@@ -25,6 +25,7 @@ from urllib.parse import quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ("src", "alembic", "scripts", "deploy", "pyproject.toml", "uv.lock", "alembic.ini")
+SYSTEMD_UNITS = Path("/etc/systemd/system")
 SERVICES = ("otz-monitor", "otz-site", "otz-admin", "otz-subscription-bot")
 JOBS = (
     "otz-nightly-refresh", "otz-weekly-full-refresh", "otz-scrape-smoke",
@@ -122,8 +123,23 @@ def read_json(path):
 
 
 def write_json(path, value):
-    Path(path).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
-    Path(path).chmod(0o600)
+    path = Path(path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(value, indent=2, sort_keys=True) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def validate_tests(receipt, revision, checks):
@@ -524,6 +540,40 @@ def swap_path(source, target, previous):
         raise
 
 
+def journal_swap(root, release, state, relative, source):
+    target = root / relative
+    state["swap_intent"] = {
+        "path": relative, "had_previous": target.exists() or target.is_symlink(),
+    }
+    write_json(release / "activation.json", state)
+    swap_path(source, target, release / "rollback" / relative)
+    state["swapped"].append(relative)
+    state.pop("swap_intent")
+    write_json(release / "activation.json", state)
+
+
+def reconcile_swap_intent(root, release, state):
+    intent = state.get("swap_intent")
+    if not intent:
+        return
+    relative = intent["path"]
+    require(relative in (*RUNTIME, "data/districts.yaml", ".venv", "release.json"),
+            "invalid interrupted swap path")
+    target, prior = root / relative, release / "rollback" / relative
+    source = release / ({".venv": "new-venv-link", "release.json": "new-release.json"}
+                        .get(relative, "code/" + relative))
+    prior_exists = prior.exists() or prior.is_symlink()
+    target_exists = target.exists() or target.is_symlink()
+    source_exists = source.exists() or source.is_symlink()
+    moved = prior_exists or (not intent["had_previous"] and not source_exists and target_exists)
+    require(not intent["had_previous"] or prior_exists or target_exists,
+            "interrupted swap lost its previous runtime path")
+    if moved and relative not in state["swapped"]:
+        state["swapped"].append(relative)
+    state.pop("swap_intent")
+    write_json(release / "activation.json", state)
+
+
 def restore_code(root, release):
     """Only application code/venv/units. New database rows and media are untouched."""
     state = read_json(release / "activation.json")
@@ -534,30 +584,65 @@ def restore_code(root, release):
         state["result"] = "rollback_blocked_maintenance"
         write_json(release / "activation.json", state)
         raise
-    try:
-        verify_rollback_compatibility(root, release, state, current_revisions(root / "data/otz.db"))
-    except Exception:
-        state["result"] = "rollback_blocked_incompatible"
-        write_json(release / "activation.json", state)
-        raise
     services = sorted(set(state["services"]) | {unit for unit in SERVICES if active(unit)})
     if services:
         run(["systemctl", "stop", *services], timeout=60)
+    try:
+        reconcile_swap_intent(root, release, state)
+        revisions = current_revisions(root / "data/otz.db")
+        if state.get("fallback_revision") and not legacy_schema(revisions):
+            fallback = release / "fallback"
+            manifest = read_json(fallback / "release.json")
+            require(manifest["revision"] == state["fallback_revision"]
+                    and hash_bytes((fallback / "release.json").read_bytes())
+                    == state["fallback_manifest_sha256"], "staged fallback identity changed")
+            validate_tests(manifest["tests"], manifest["revision"], CHECKS)
+            verify_rollback_compatibility(
+                fallback / "code", fallback, {"swapped": []}, revisions, manifest=manifest,
+            )
+            return restore_fallback(root, release, state, manifest, revisions, services)
+        verify_rollback_compatibility(root, release, state, revisions)
+    except Exception:
+        if state.get("result") != "rollback_fallback_failed":
+            state["result"] = "rollback_blocked_incompatible"
+        write_json(release / "activation.json", state)
+        raise
     rejected = release / "rejected"
     rejected.mkdir(exist_ok=True)
+    state.setdefault("legacy_restored", [])
     for relative in reversed(state["swapped"]):
+        if relative in state["legacy_restored"]:
+            continue
         target = root / relative
-        if target.exists() or target.is_symlink():
-            destination = rejected / relative
+        prior = release / "rollback" / relative
+        destination = rejected / relative
+        prior_exists = prior.exists() or prior.is_symlink()
+        target_exists = target.exists() or target.is_symlink()
+        intent = state.get("legacy_restore_intent")
+        if intent and intent["path"] == relative and intent["prior_present"] and not prior_exists:
+            # The previous path moved back before the completion journal. A rejected
+            # candidate need not exist if activation stopped after its first rename.
+            require(target_exists, "interrupted legacy restore lost its previous path")
+            state["legacy_restored"].append(relative)
+            state.pop("legacy_restore_intent")
+            write_json(release / "activation.json", state)
+            continue
+        state["legacy_restore_intent"] = {"path": relative, "prior_present": prior_exists}
+        write_json(release / "activation.json", state)
+        destination_exists = destination.exists() or destination.is_symlink()
+        # A prior retry may already have restored this path before its journal write.
+        if not destination_exists and (target.exists() or target.is_symlink()):
             destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(target, destination)
-        prior = release / "rollback" / relative
         if prior.exists() or prior.is_symlink():
             target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(prior, target)
+        state["legacy_restored"].append(relative)
+        state.pop("legacy_restore_intent")
+        write_json(release / "activation.json", state)
     for name in state["units"]:
         prior = release / "rollback-units" / name
-        target = Path("/etc/systemd/system") / name
+        target = SYSTEMD_UNITS / name
         if prior.exists():
             shutil.copy2(prior, target)
         elif target.exists():
@@ -569,6 +654,118 @@ def restore_code(root, release):
     return state
 
 
+def legacy_schema(revisions):
+    return bool(revisions) and all(
+        re.fullmatch(r"00(?:0[1-9]|1[0-4])(?:_[a-z0-9_]+)?", r) for r in revisions
+    )
+
+
+def restore_fallback(root, release, state, manifest, revisions, services):
+    """Resume a copy/swap from the immutable queue-aware fallback; never restore data."""
+    fallback = release / "fallback"
+    rejected = release / "fallback-rejected"
+    staged = release / "fallback-install"
+    staged.mkdir(exist_ok=True)
+    state["result"] = "rollback_fallback_in_progress"
+    state.setdefault("fallback_swapped", [])
+    write_json(release / "activation.json", state)
+
+    def matches(relative):
+        target = root / relative
+        if relative == ".venv":
+            return target.is_symlink() and target.resolve() == (fallback / "venv").resolve()
+        if relative == "release.json":
+            return target.is_file() and target.read_bytes() == (fallback / relative).read_bytes()
+        files = {name: digest for name, digest in manifest["files"].items()
+                 if name == relative or name.startswith(relative + "/")}
+        if target.is_dir():
+            actual = {str(p.relative_to(root)) for p in target.rglob("*")
+                      if p.is_file() and "__pycache__" not in p.parts}
+            if actual != set(files):
+                return False
+        return bool(files) and all((root / name).is_file()
+            and hash_bytes((root / name).read_bytes()) == digest for name, digest in files.items())
+
+    try:
+        # Independently exercise the fallback environment, not the rejected candidate's.
+        run([str(fallback / "venv/bin/python"), "-c",
+             "import sqlalchemy,playwright,torch,open_clip,fastapi"], timeout=60)
+        for relative in (*RUNTIME, "data/districts.yaml", ".venv", "release.json"):
+            if matches(relative):
+                # Also handles process death after rename but before journal write.
+                if relative not in state["fallback_swapped"]:
+                    state["fallback_swapped"].append(relative)
+                    write_json(release / "activation.json", state)
+                continue
+            source = staged / relative
+            source.parent.mkdir(parents=True, exist_ok=True)
+            if source.is_symlink() or source.is_file():
+                source.unlink()
+            elif source.is_dir():
+                shutil.rmtree(source)
+            if relative == ".venv":
+                source.symlink_to(fallback / "venv", target_is_directory=True)
+            else:
+                origin = fallback / (relative if relative == "release.json" else "code/" + relative)
+                require(origin.exists(), f"fallback runtime path missing: {relative}")
+                if origin.is_dir():
+                    shutil.copytree(origin, source)
+                else:
+                    shutil.copy2(origin, source)
+            # A prior interruption may have moved current code aside. Never overwrite
+            # either that archive or the original legacy rollback tree.
+            target = root / relative
+            prior = rejected / relative
+            require(not prior.exists() or not (target.exists() or target.is_symlink()),
+                    f"fallback target changed after interrupted swap: {relative}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            swap_path(source, target, prior)
+            state["fallback_swapped"].append(relative)
+            write_json(release / "activation.json", state)
+        run(["chown", "-hR", "otz:otz", *(str(root / name) for name in RUNTIME[:4])])
+        desired = {p.name: p for p in (root / "deploy").glob("otz-*")
+                   if p.suffix in {".service", ".timer"}}
+        state["fallback_units"] = sorted(
+            set(state.get("fallback_units", [])) | set(state["units"]) | set(desired)
+        )
+        write_json(release / "activation.json", state)
+        for name in state["fallback_units"]:
+            require(re.fullmatch(r"otz-[a-z0-9-]+\.(service|timer)", name),
+                    "invalid fallback unit name")
+            target = SYSTEMD_UNITS / name
+            if name in desired:
+                shutil.copy2(desired[name], target)
+            elif target.exists():
+                target.unlink()
+            state.setdefault("fallback_units_installed", [])
+            if name not in state["fallback_units_installed"]:
+                state["fallback_units_installed"].append(name)
+            write_json(release / "activation.json", state)
+        run(["systemctl", "daemon-reload"])
+        verify_rollback_compatibility(
+            root, release, {"swapped": []}, revisions, manifest=manifest,
+        )
+        require(current_revisions(root / "data/otz.db") == revisions,
+                "schema changed during fallback")
+        state["fallback_effective_units"] = effective_units(root / "deploy")
+        restart_services(state)
+        state["fallback_http_readiness"] = wait_for_http_health(
+            "http://127.0.0.1:8001/healthz", "http://127.0.0.1:8001/readyz",
+        )
+        restart_timers(state)
+        state["result"] = "rolled_back_to_compatible_fallback"
+        write_json(release / "activation.json", state)
+        return state
+    except BaseException:
+        # No schedules run against a partially installed/unhealthy fallback.
+        pause_timers(state)
+        if services:
+            run(["systemctl", "stop", *services], timeout=60)
+        state["result"] = "rollback_fallback_failed"
+        write_json(release / "activation.json", state)
+        raise
+
+
 def verify_rollback_compatibility(root, release, state, revisions, *, manifest=None):
     """Additive SQL is insufficient: the prior runtime must understand durable work.
 
@@ -577,7 +774,7 @@ def verify_rollback_compatibility(root, release, state, revisions, *, manifest=N
     This is a compatibility declaration tested in CI, not a proof of model quality.
     """
     require(revisions, "cannot establish rollback schema compatibility")
-    if all(re.fullmatch(r"00(?:0[1-9]|1[0-4])(?:_[a-z0-9_]+)?", r) for r in revisions):
+    if legacy_schema(revisions):
         return  # Before durable validation/identity tables existed.
 
     def prior(relative):
@@ -599,7 +796,7 @@ def verify_rollback_compatibility(root, release, state, revisions, *, manifest=N
     for relative, digest in files.items():
         require(allowed_path(relative), "unsafe prior release manifest path")
         # Runtime only: docs/tests need not exist in the activated application directory.
-        if PurePosixPath(relative).parts[0] not in RUNTIME:
+        if PurePosixPath(relative).parts[0] not in RUNTIME and relative != "data/districts.yaml":
             continue
         candidate = prior(relative)
         require(candidate.is_file() and hash_bytes(candidate.read_bytes()) == digest,
@@ -610,6 +807,180 @@ def verify_rollback_compatibility(root, release, state, revisions, *, manifest=N
             "prior runtime is incompatible with current schema")
     require({"fail_closed_validation", "durable_digest", "identity_edges"}
             <= set(contract.get("semantics", [])), "prior runtime lacks durable-work semantics")
+
+
+def stage_runtime_environment(release, uv_bin):
+    """Install and smoke-test one isolated packet environment before stopping writers."""
+    env = os.environ.copy()
+    env["UV_PROJECT_ENVIRONMENT"] = str(release / "venv")
+    # New environment only: failure cannot break the currently running services.
+    run(
+        [
+            str(uv_bin),
+            "sync",
+            "--project",
+            str(release / "code"),
+            "--frozen",
+            "--no-dev",
+            "--no-editable",
+            "--extra",
+            "clip",
+            "--python",
+            "/usr/bin/python3",
+        ],
+        env=env,
+    )
+    new_python = release / "venv/bin/python"
+    run([str(new_python), "-c", "import sqlalchemy,playwright,torch,open_clip,fastapi"])
+    # Install under the actual service account/home, not root's cache or an assumed home.
+    # Existing service environment overrides remain an operator configuration gate.
+    import pwd
+
+    service_home = pwd.getpwnam("otz").pw_dir
+    run(["chown", "-hR", "otz:otz", str(release / "venv")])
+    browser_env = {**os.environ, "HOME": service_home}
+    browser_env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+    run(
+        [
+            "runuser",
+            "-u",
+            "otz",
+            "--",
+            str(release / "venv/bin/playwright"),
+            "install",
+            "chromium",
+        ],
+        env=browser_env,
+    )
+    # A downloaded executable is insufficient: prove Linux shared-library/cache access
+    # under the same account and HOME before touching the currently running release.
+    browser_smoke = (
+        "import asyncio\n"
+        "from playwright.async_api import async_playwright\n"
+        "async def check():\n"
+        "    async with async_playwright() as playwright:\n"
+        "        browser = await playwright.chromium.launch(headless=True, timeout=30000)\n"
+        "        await browser.close()\n"
+        "asyncio.run(check())\n"
+    )
+    run(
+        ["runuser", "-u", "otz", "--", str(new_python), "-c", browser_smoke],
+        env=browser_env,
+        timeout=45,
+    )
+    return new_python
+
+
+def staged_heads(new_python, code):
+    """Inspect actual Alembic revisions without connecting to a database."""
+    head_probe = (
+        "import json,sys; from alembic.config import Config; "
+        "from alembic.script import ScriptDirectory; cfg=Config(); "
+        "cfg.set_main_option('script_location',sys.argv[1]); "
+        "print(json.dumps(ScriptDirectory.from_config(cfg).get_heads()))"
+    )
+    target_heads = json.loads(run(
+        [str(new_python), "-c", head_probe, str(code / "alembic")],
+        capture=True, timeout=30,
+    ))
+    require(isinstance(target_heads, list) and target_heads
+            and all(isinstance(head, str) for head in target_heads),
+            "cannot establish staged migration heads")
+    return target_heads
+
+
+def stage_fallback(packet, release, candidate_revision, target_heads, uv_bin):
+    """Prepare a separately tested runtime; no service or live database operations."""
+    fallback = release / "fallback"
+    with tempfile.TemporaryDirectory(prefix="otz-fallback-") as temporary:
+        unpacked = Path(temporary)
+        manifest = unpack_packet(packet, unpacked)
+        validate_tests(manifest["tests"], manifest["revision"], CHECKS)
+        require(manifest["revision"] != candidate_revision, "fallback must be a distinct revision")
+        for relative in (*RUNTIME, "data/districts.yaml"):
+            require((unpacked / "code" / relative).exists(), f"incomplete fallback: {relative}")
+        verify_rollback_compatibility(
+            unpacked / "code", unpacked, {"swapped": []}, target_heads, manifest=manifest,
+        )
+        fallback.mkdir(mode=0o750)
+        fallback.chmod(0o750)
+        run(["chown", "root:otz", str(fallback)])
+        shutil.copytree(unpacked / "code", fallback / "code")
+        write_json(fallback / "release.json", manifest)
+    python = stage_runtime_environment(fallback, uv_bin)
+    heads = staged_heads(python, fallback / "code")
+    contract = read_json(fallback / "code/scripts/runtime_contract.json")
+    require(sorted(heads) == sorted(target_heads)
+            == sorted(contract.get("migration_heads", [])), "fallback migration heads mismatch")
+    return {"fallback_revision": manifest["revision"],
+            "fallback_manifest_sha256": hash_bytes((fallback / "release.json").read_bytes()),
+            "fallback_packet_sha256": hash_bytes(packet.read_bytes())}
+
+
+def fallback_marker_gap(root, release, state):
+    """Prove interrupted marker replacement without accepting an unrelated release."""
+    if state.get("result") not in {"rollback_fallback_in_progress", "rollback_fallback_failed"}:
+        return False
+    if not state.get("fallback_revision") or (root / "release.json").exists():
+        return False
+    archived = release / "fallback-rejected/release.json"
+    if not archived.is_file() or read_json(archived).get("revision") not in {
+        state["revision"], state.get("previous_revision"),
+    }:
+        return False
+    fallback = release / "fallback"
+    if not (root / ".venv").is_symlink() or (root / ".venv").resolve() != fallback / "venv":
+        return False
+    marker = fallback / "release.json"
+    require(hash_bytes(marker.read_bytes()) == state["fallback_manifest_sha256"],
+            "staged fallback identity changed")
+    manifest = read_json(marker)
+    require(manifest["revision"] == state["fallback_revision"], "fallback revision changed")
+    # The marker is swapped last: all runtime hashes must already match the fallback.
+    verify_rollback_compatibility(
+        root, release, {"swapped": []}, current_revisions(root / "data/otz.db"),
+        manifest=manifest,
+    )
+    return True
+
+
+def activation_marker_gap(root, release, state):
+    """Prove an interruption between the final candidate marker's two renames."""
+    if state.get("result") not in {"activating", "activated_manual_verification_pending"}:
+        return False
+    archived = release / "rollback/release.json"
+    if (root / "release.json").exists() or not archived.is_file():
+        return False
+    if read_json(archived).get("revision") != state.get("previous_revision"):
+        return False
+    if not (root / ".venv").is_symlink() or (root / ".venv").resolve() != release / "venv":
+        return False
+    manifest = read_json(release / "release.json")
+    require(manifest["revision"] == state["revision"], "candidate revision changed")
+    validate_tests(manifest["tests"], state["revision"], CHECKS)
+    verify_rollback_compatibility(
+        root, release, {"swapped": []}, current_revisions(root / "data/otz.db"),
+        manifest=manifest,
+    )
+    return True
+
+
+def stage_release_control(root, release, manifest):
+    """Keep the verified recovery controller outside runtime swaps (including scripts)."""
+    source = release / "code/scripts/release.py"
+    digest = manifest["files"].get("scripts/release.py")
+    require(source.is_file() and hash_bytes(source.read_bytes()) == digest,
+            "release controller missing from verified packet")
+    control = release / "control"
+    control.mkdir(mode=0o700)
+    destination = control / "release.py"
+    shutil.copy2(source, destination)
+    destination.chmod(0o600)
+    return {
+        "control_sha256": digest,
+        "rollback_command": ["/usr/bin/python3", str(destination), "rollback",
+                             "--remote-root", str(root), "--revision", manifest["revision"]],
+    }
 
 
 def activate(args):
@@ -629,6 +1000,7 @@ def activate(args):
         with tempfile.TemporaryDirectory(prefix="otz-packet-") as temporary:
             unpacked = Path(temporary)
             manifest = unpack_packet(args.packet, unpacked)
+            validate_tests(manifest["tests"], manifest["revision"], CHECKS)
             require(
                 current_revisions(root / "data/otz.db") == sorted(backup["database"]["revisions"]),
                 "live schema no longer matches the verified backup",
@@ -644,65 +1016,10 @@ def activate(args):
             shutil.copytree(unpacked / "code", release / "code")
             write_json(release / "release.json", manifest)
             write_json(release / "backup-receipt.json", backup)
-        env = os.environ.copy()
-        env["UV_PROJECT_ENVIRONMENT"] = str(release / "venv")
-        # New environment only: failure cannot break the currently running services.
-        run(
-            [
-                str(args.uv_bin),
-                "sync",
-                "--project",
-                str(release / "code"),
-                "--frozen",
-                "--no-dev",
-                "--no-editable",
-                "--extra",
-                "clip",
-                "--python",
-                "/usr/bin/python3",
-            ],
-            env=env,
-        )
-        new_python = release / "venv/bin/python"
-        run([str(new_python), "-c", "import sqlalchemy,playwright,torch,open_clip,fastapi"])
-        # Install under the actual service account/home, not root's cache or an assumed home.
-        # Existing service environment overrides remain an operator configuration gate.
-        import pwd
-
-        service_home = pwd.getpwnam("otz").pw_dir
-        run(["chown", "-hR", "otz:otz", str(release / "venv")])
-        browser_env = {**os.environ, "HOME": service_home}
-        browser_env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
-        run(
-            [
-                "runuser",
-                "-u",
-                "otz",
-                "--",
-                str(release / "venv/bin/playwright"),
-                "install",
-                "chromium",
-            ],
-            env=browser_env,
-        )
-        # A downloaded executable is insufficient: prove Linux shared-library/cache access
-        # under the same account and HOME before touching the currently running release.
-        browser_smoke = (
-            "import asyncio\n"
-            "from playwright.async_api import async_playwright\n"
-            "async def check():\n"
-            "    async with async_playwright() as playwright:\n"
-            "        browser = await playwright.chromium.launch(headless=True, timeout=30000)\n"
-            "        await browser.close()\n"
-            "asyncio.run(check())\n"
-        )
-        run(
-            ["runuser", "-u", "otz", "--", str(new_python), "-c", browser_smoke],
-            env=browser_env,
-            timeout=45,
-        )
+        new_python = stage_runtime_environment(release, args.uv_bin)
         state = service_state()
         state.update(revision=manifest["revision"], result="activating", swapped=[], units=[])
+        state.update(stage_release_control(root, release, manifest))
         state["previous_revision"] = (
             read_json(root / "release.json")["revision"]
             if (root / "release.json").exists()
@@ -714,19 +1031,7 @@ def activate(args):
         live_revisions = current_revisions(root / "data/otz.db")
         # Derive the migration destination from the checked artifact itself. A stale
         # declaration must not bypass compatibility checks before `upgrade head`.
-        head_probe = (
-            "import json,sys; from alembic.config import Config; "
-            "from alembic.script import ScriptDirectory; cfg=Config(); "
-            "cfg.set_main_option('script_location',sys.argv[1]); "
-            "print(json.dumps(ScriptDirectory.from_config(cfg).get_heads()))"
-        )
-        target_heads = json.loads(run(
-            [str(new_python), "-c", head_probe, str(release / "code/alembic")],
-            capture=True, timeout=30,
-        ))
-        require(isinstance(target_heads, list) and target_heads
-                and all(isinstance(head, str) for head in target_heads),
-                "cannot establish staged migration heads")
+        target_heads = staged_heads(new_python, release / "code")
         if target_contract.is_file():
             require(
                 sorted(read_json(target_contract).get("migration_heads", []))
@@ -739,7 +1044,13 @@ def activate(args):
             verify_rollback_compatibility(
                 release / "code", release, {"swapped": []}, revisions, manifest=manifest,
             )
-        verify_rollback_compatibility(root, release, state, target_heads)
+        fallback_packet = getattr(args, "fallback_packet", None)
+        if fallback_packet is not None:
+            state.update(stage_fallback(
+                fallback_packet, release, manifest["revision"], target_heads, args.uv_bin,
+            ))
+        else:
+            verify_rollback_compatibility(root, release, state, target_heads)
         write_json(release / "activation.json", state)
         try:
             stop_units(state)
@@ -747,14 +1058,10 @@ def activate(args):
             for relative in (*RUNTIME, "data/districts.yaml"):
                 staged = release / "code" / relative
                 require(staged.exists(), f"required runtime path missing: {relative}")
-                swap_path(staged, root / relative, release / "rollback" / relative)
-                state["swapped"].append(relative)
-                write_json(release / "activation.json", state)
+                journal_swap(root, release, state, relative, staged)
             link = release / "new-venv-link"
             link.symlink_to(release / "venv", target_is_directory=True)
-            swap_path(link, root / ".venv", release / "rollback/.venv")
-            state["swapped"].append(".venv")
-            write_json(release / "activation.json", state)
+            journal_swap(root, release, state, ".venv", link)
             # Files are from the verified exact-revision packet; secrets/data remain owned by otz.
             run(
                 [
@@ -778,7 +1085,7 @@ def activate(args):
             for unit in sorted((root / "deploy").glob("otz-*")):
                 if unit.suffix not in {".service", ".timer"}:
                     continue
-                target = Path("/etc/systemd/system") / unit.name
+                target = SYSTEMD_UNITS / unit.name
                 prior = release / "rollback-units" / unit.name
                 prior.parent.mkdir(exist_ok=True)
                 if target.exists():
@@ -804,13 +1111,7 @@ def activate(args):
                 schema=current_revisions(root / "data/otz.db"),
             )
             write_json(release / "new-release.json", manifest)
-            swap_path(
-                release / "new-release.json",
-                root / "release.json",
-                release / "rollback/release.json",
-            )
-            state["swapped"].append("release.json")
-            write_json(release / "activation.json", state)
+            journal_swap(root, release, state, "release.json", release / "new-release.json")
             # Persistent timers may catch up immediately. Resume only after application
             # health, content hashes and the active release marker have all been verified.
             restart_timers(state)
@@ -831,6 +1132,8 @@ def main():
     packet.add_argument("--required-check", choices=CHECKS, action="append")
     activation = commands.add_parser("activate")
     activation.add_argument("--packet", type=Path, required=True)
+    activation.add_argument("--fallback-packet", type=Path,
+                            help="Separately tested queue-aware fallback for the first migration")
     activation.add_argument("--remote-root", type=Path, required=True)
     activation.add_argument("--backup-receipt", type=Path, required=True)
     activation.add_argument("--uv-bin", type=Path, required=True)
@@ -849,7 +1152,9 @@ def main():
             require(root == Path("/opt/otz") and os.geteuid() == 0, "unsupported rollback target")
             release = root / ".releases" / args.revision
             saved = read_json(release / "activation.json")
-            require(saved["result"] != "rolled_back_code_only", "release already rolled back")
+            require(saved["result"] not in {
+                "rolled_back_code_only", "rolled_back_to_compatible_fallback",
+            }, "release already rolled back")
             import fcntl
 
             with (root / "data/state/release.lock").open("a+") as lock:
@@ -862,16 +1167,25 @@ def main():
                     if (root / "release.json").exists()
                     else None
                 )
+                if saved.get("control_sha256"):
+                    require(hash_bytes((release / "control/release.py").read_bytes())
+                            == saved["control_sha256"], "saved recovery controller changed")
                 require(
                     current == args.revision
                     or (
                         saved["result"] in {
+                            "activating",
                             "rollback_blocked_maintenance", "rollback_blocked_incompatible",
+                            "rollback_fallback_in_progress", "rollback_fallback_failed",
                         }
-                        and saved["swapped"]
+                        and (saved["swapped"] or saved.get("swap_intent"))
                         and "previous_revision" in saved
-                        and current == saved["previous_revision"]
-                    ),
+                        and current in {saved["previous_revision"], saved.get("fallback_revision")}
+                    )
+                    or (current is None and (
+                        fallback_marker_gap(root, release, saved)
+                        or activation_marker_gap(root, release, saved)
+                    )),
                     "requested rollback is not the active release",
                 )
                 result = restore_code(root, release)

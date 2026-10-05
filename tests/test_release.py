@@ -330,6 +330,7 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
             else:
                 (code / name).write_text("fixture")
         (code / "src/app.py").write_text("new")
+        (code / "scripts/release.py").write_text("# synthetic controller")
         (code / "data").mkdir()
         (code / "data/districts.yaml").write_text("fixture")
         if failure == "contract_heads":
@@ -338,7 +339,12 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
             })
         return {
             "revision": revision,
-            "files": {"src/app.py": release.hash_bytes(b"bad" if failure == "hash" else b"new")},
+            "tests": {"revision": revision, "result": "passed",
+                      "checks": dict.fromkeys(release.CHECKS, "passed")},
+            "files": {
+                "src/app.py": release.hash_bytes(b"bad" if failure == "hash" else b"new"),
+                "scripts/release.py": release.hash_bytes(b"# synthetic controller"),
+            },
         }
 
     def command(args, **kwargs):
