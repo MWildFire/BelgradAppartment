@@ -191,6 +191,10 @@ class Settings(BaseSettings):
     # LLM-based final validation through Claude API. Requires ANTHROPIC_API_KEY.
     enable_llm_validation: bool = True
     llm_validation_min_confidence: float = 0.7
+    llm_model: str = "claude-haiku-4-5"
+    llm_max_candidates: int = Field(default=3, ge=1, le=3)
+    llm_total_timeout_seconds: float = Field(default=45.0, gt=0, le=60)
+    llm_request_timeout_seconds: float = Field(default=20.0, gt=0, le=30)
     anthropic_api_key: str = ""
 
     # --- Public web catalog (Stage W) ---

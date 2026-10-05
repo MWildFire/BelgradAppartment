@@ -1,0 +1,84 @@
+{
+  "date": "2026-10-05",
+  "repo": "/Users/mvstrike/Projects/BelgradAppartment",
+  "local_revision": "5338a5e47b43422b6e7943c5af9eea75097152ac",
+  "existing_review_thread_id": "01a0f2be-7d58-7da3-a6f5-a3fdedadd0f6",
+  "source_thread_id": "01a0f19d-47be-7055-b975-55dfbd1580c0",
+  "file_sha256": {
+    "src/matching/matcher.py": "8471206d00dc4ec5175533653b74b39949c7a9d0cb2fa086b6114a9b347099e9",
+    "src/matching/llm_validator.py": "48fb0a3409ea71492826b4c6e9b6eaa10968e77e152f1723dd1c893e9ff2dee5",
+    "src/matching/dedup.py": "32db436992b53071b2bcc1acd8690c55a42f776aa99a24f9278f66c1cbcfb7d0",
+    "src/telegram/monitor.py": "49ca8a708537b5de72b8ea26758065dffc0bb825fbd77e79ad5a506aedbfe00d",
+    ".github/workflows/checks.yml": "bdea4c7d141cdae450612de01066be110068fd52ec7a68c041c27d69b5954e9e"
+  },
+  "matcher_validator_unchanged_since_2026_09_30": true,
+  "today": {
+    "focused_tests_passed": 67,
+    "duration_seconds": 3.19,
+    "synthetic_reproduction_groups": 5,
+    "network_blocked_during_tests": true,
+    "model_benchmark_executed": false,
+    "production_read": false,
+    "production_write": false,
+    "runtime_write": false,
+    "secret_files_read": false,
+    "external_messages_sent": false
+  },
+  "historical_2026_09_30_not_current_production": {
+    "production_revision": "4235abf9da9ea33d0c07aede0ae42f02dcdd1e7a",
+    "settings": {
+      "model": "claude-haiku-4-5",
+      "enable_llm_validation": true,
+      "llm_validation_min_confidence": 0.7,
+      "clip_similarity_threshold": 0.92,
+      "phash_max_hamming": 6,
+      "min_matched_photos": 2,
+      "tg_delivery_mode": "bot",
+      "auto_publish_on_send_effective": true,
+      "nightly_auto_publish_effective": true
+    },
+    "llm_logged_decisions": {
+      "all": 179,
+      "last30": 88,
+      "last30_true": 42,
+      "last30_false": 46,
+      "last30_positive_below_07": 0,
+      "last30_p50_ms": 3685,
+      "last30_p95_ms": 6281,
+      "last_ts_utc": "2026-09-30T03:02:34+0000",
+      "actual_cost_recorded": false,
+      "human_ground_truth_recorded": false
+    }
+  },
+  "focused_test_files": [
+    "tests/test_matcher_stages.py",
+    "tests/test_matcher_dedup_tiebreak.py",
+    "tests/test_llm_report.py",
+    "tests/test_dedup.py",
+    "tests/test_monitor_dedup.py",
+    "tests/test_digest_parser.py",
+    "tests/test_delivery_guard.py",
+    "tests/test_subscription_telegram.py"
+  ],
+  "local_ci_workflow_exists": true,
+  "remote_ci_run_verified": false,
+  "official_sources_checked_2026_10_05": [
+    "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+    "https://developers.openai.com/api/docs/pricing",
+    "https://platform.claude.com/docs/en/models/overview",
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://platform.claude.com/docs/en/build-with-claude/structured-outputs",
+    "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-lite",
+    "https://ai.google.dev/gemini-api/docs/pricing"
+  ],
+  "eval_case_count": 32,
+  "eval_manifest_is_acceptance_spec_not_completed_vision_dataset": true,
+  "deliverable": {
+    "pdf_pages": 14,
+    "visual_qa": "all_pages_checked; only changed pages 5 and 6 rechecked after final pagination adjustment",
+    "library_file_id": "libfile_04f951bfde888191825327813d51266d",
+    "library_filename": "RenFinderbot-plan-2026-10-05.pdf",
+    "pdf_sha256": "d9c670bb6cddf2df0bea641a787cc6bf28f1841a19dfe0b3167974fe90c0e08c"
+  }
+}

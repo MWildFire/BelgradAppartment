@@ -30,6 +30,7 @@ from uuid import uuid4
 import httpx
 from sqlalchemy import func, select, update
 
+from src.matching.photo_manifest import build_manifest
 from src.config import get_settings
 from src.db import Listing, get_session
 from src.db.models import DailyMetrics, Match, MatchStatus, Platform, PublishedPost, SiteListing
@@ -504,6 +505,7 @@ async def _process_one(
                 async with get_session() as session:
                     row = (await session.execute(select(Listing).where(Listing.id == existing.id))).scalar_one()
                     row.photo_urls = snapshot.photo_urls
+                    row.photo_evidence = build_manifest(photo_paths, photo_hashes, relative=True)
                     row.photo_phashes = photo_hashes
                     row.photo_embeddings = embeddings_blob
                 return False, len(photo_paths), False
@@ -558,6 +560,7 @@ async def _process_one(
             title=detail.title,
             description=detail.description,
             photo_urls=detail.photo_urls,
+            photo_evidence=build_manifest(photo_paths, photo_hashes, relative=True),
             photo_phashes=photo_hashes,
             photo_embeddings=embeddings_blob,
             raw_payload=detail.raw_payload,
@@ -1372,6 +1375,7 @@ async def _refetch_one_listing(
             if _usable_photo_count(expected, hashes) != len(detail.photo_urls):
                 raise RuntimeError("incomplete_photo_layout")
         evidence = assess_detail(detail, ready_photo_count=ready)
+        manifest = build_manifest(paths, hashes, relative=True) if need_photos else []
         async def accept() -> int | None:
             nonlocal promoted, committed
             async with get_session() as session:
@@ -1384,6 +1388,7 @@ async def _refetch_one_listing(
                     stage.rename(target)
                     promoted = True
                     listing.photo_urls = list(detail.photo_urls)
+                    listing.photo_evidence = manifest
                     listing.photo_phashes = hashes
                     listing.photo_embeddings = embeddings
                 # Partial upstream fields must not erase previously accepted content.

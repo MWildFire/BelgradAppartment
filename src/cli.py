@@ -582,6 +582,7 @@ async def _monitor(do_backfill_first: bool) -> None:
     # buffered into album groups instead of being silently dropped.
     register_live_handler(client, sources, on_inbound=on_inbound)
 
+    retry_task = None
     try:
         if do_backfill_first:
             for src in sources:
@@ -656,6 +657,9 @@ async def _monitor(do_backfill_first: bool) -> None:
                     logging.getLogger(__name__).exception("recovery summary delivery failed")
 
         click.echo("Live monitor running — Ctrl+C to stop.")
+        from src.jobs.validation_retry import retry_loop
+
+        retry_task = asyncio.create_task(retry_loop(on_inbound))
         await client.run_until_disconnected()
     except (UnauthorizedError, AuthKeyDuplicatedError):
         # Session revoked at RUNTIME (e.g. SessionRevokedError from GetDifferenceRequest).
@@ -669,7 +673,34 @@ async def _monitor(do_backfill_first: bool) -> None:
         await _alert_auth_lost()
         raise SystemExit(3)
     finally:
+        if retry_task is not None:
+            retry_task.cancel()
+            await asyncio.gather(retry_task, return_exceptions=True)
         await client.disconnect()
+
+
+@cli.command("validation-jobs")
+@click.option("--limit", default=50, type=click.IntRange(1, 500))
+def validation_jobs_report(limit: int) -> None:
+    """Read pending/review work without captions, photos, providers or delivery."""
+    import json
+
+    from src.matching.review_queue import pending_report
+
+    report = run_cooperatively(pending_report(limit))
+    click.echo(json.dumps(report, indent=2))
+
+
+@cli.command("retry-validation")
+@click.argument("inbound_id", type=int)
+def retry_validation(inbound_id: int) -> None:
+    """Requeue an unresolved inbound; refuse active leases and historical Match rows."""
+    from src.matching.review_queue import requeue_validation
+
+    changed = run_cooperatively(requeue_validation(inbound_id))
+    click.echo(
+        "Requeued for the next retry tick" if changed else "Not changed: leased, matched or absent"
+    )
 
 
 @cli.command("match")
@@ -755,6 +786,11 @@ async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
             click.echo("⚠️  --reset-published: wiping ALL matches including published history")
             await s.execute(delete(Match))
             await s.execute(update(InboundPost).values(status=InboundStatus.NEW))
+        from src.db.models import ValidationJob
+
+        await s.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(
+            select(InboundPost.id).where(InboundPost.status == InboundStatus.NEW),
+        )))
     click.echo("→ State reset. Running matcher...")
 
     import time as _time
@@ -766,7 +802,9 @@ async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
     results = await match_all_pending()
     elapsed = _time.monotonic() - started
     matched = sum(1 for r in results if r.status == "matched")
-    no_match = len(results) - matched
+    no_match = sum(r.status == "no_match" for r in results)
+    pending = sum(r.status == "validation_pending" for r in results)
+    click.echo(f"Validation pending: {pending}")
     click.echo(f"\n=== matched {matched} / {len(results)} ===")
     for r in results:
         marker = "✓" if r.status == "matched" else "·"
@@ -805,7 +843,9 @@ async def _match_all() -> None:
     results = await match_all_pending()
     elapsed = _time.monotonic() - started
     matched = sum(1 for r in results if r.status == "matched")
-    no_match = len(results) - matched
+    no_match = sum(r.status == "no_match" for r in results)
+    pending = sum(r.status == "validation_pending" for r in results)
+    click.echo(f"Validation pending: {pending}")
     click.echo(f"\n=== matched {matched} / {len(results)} ===")
     for r in results:
         marker = "✓" if r.status == "matched" else "·"
@@ -1271,6 +1311,9 @@ async def _test_batch(n: int, from_id: int | None) -> None:
             .where(InboundPost.id.in_(inbound_ids))
             .values(status=InboundStatus.NEW)
         )
+        from src.db.models import ValidationJob
+
+        await s.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(inbound_ids)))
     click.echo(f"  reset: dropped {len(match_ids)} prior matches")
 
     # Open a Telethon client only if we need it (legacy userbot mode).
@@ -2133,7 +2176,9 @@ LLM_REPORT_THRESHOLDS = (0.6, 0.65, 0.7)
 LLM_BORDERLINE_RANGE = (0.55, 0.75)
 
 
-def _load_llm_decisions(path: Any, *, days: int) -> list[dict[str, Any]]:
+def _load_llm_decisions(
+    path: Any, *, days: int, include_failures: bool = False,
+) -> list[dict[str, Any]]:
     """Parse llm_decisions.jsonl entries newer than `days`; garbage lines are skipped."""
     import json
     from datetime import UTC, timedelta
@@ -2157,7 +2202,9 @@ def _load_llm_decisions(path: Any, *, days: int) -> list[dict[str, Any]]:
                 ts = datetime.strptime(entry["ts"], LLM_DECISIONS_TS_FMT)
             except (KeyError, TypeError, ValueError):
                 continue
-            if ts < cutoff or not isinstance(entry.get("confidence"), (int, float)):
+            if ts < cutoff or (
+                not include_failures and not isinstance(entry.get("confidence"), (int, float))
+            ):
                 continue
             entries.append(entry)
     return entries
@@ -2172,7 +2219,9 @@ def _llm_threshold_counts(
     Mirrors the matcher gate: pass = is_same_apartment AND confidence ≥ threshold.
     """
     return {
-        t: sum(1 for e in entries if e.get("verdict") and e["confidence"] >= t)
+        t: sum(1 for e in entries if e.get("verdict")
+               and e.get("outcome") not in {"uncertain", "unavailable", "invalid_evidence"}
+               and e["confidence"] >= t)
         for t in thresholds
     }
 
@@ -2282,7 +2331,12 @@ async def _llm_report(days: int) -> None:
     from src.matching.llm_validator import _decisions_log_path
 
     settings = get_settings()
-    entries = _load_llm_decisions(_decisions_log_path(), days=days)
+    all_entries = _load_llm_decisions(_decisions_log_path(), days=days, include_failures=True)
+    uncertain = sum(e.get("outcome") == "uncertain" for e in all_entries)
+    failed = sum(e.get("outcome") in {"unavailable", "invalid_evidence"} for e in all_entries)
+    entries = [e for e in all_entries if isinstance(e.get("confidence"), (int, float))
+               and e.get("outcome") not in {"uncertain", "unavailable", "invalid_evidence"}]
+    click.echo(f"Deferred: uncertain={uncertain}, unavailable/invalid={failed}")
     click.echo(f"=== LLM validator — последние {days} дн ===")
     if not entries:
         click.echo("(нет записей — лог пишется с момента деплоя W3-G1)")
@@ -3262,12 +3316,15 @@ async def _purge_inactive(*, older_than_days: int, dry_run: bool) -> PurgeInacti
 
     from sqlalchemy import delete, func
 
-    from src.db.models import Match, SiteListing
+    from src.db.models import ApartmentIdentity, ListingIdentityEdge, Match, SiteListing
     from src.db.session import get_session
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
     age_where = (Listing.is_active.is_(False), Listing.last_seen_at < cutoff)
-    referenced = select(Match.listing_id)  # listings pinned by match history
+    referenced = select(Match.listing_id).union(
+        select(ApartmentIdentity.anchor_listing_id), select(ListingIdentityEdge.left_id),
+        select(ListingIdentityEdge.right_id),
+    )  # delivery history, identity anchors, and revoked-edge tombstones are protected
 
     archive_bytes = 0
     purged_ids: list[int] = []
@@ -3358,7 +3415,7 @@ async def _purge_inactive(*, older_than_days: int, dry_run: bool) -> PurgeInacti
                     .where(Listing.id.in_(chunk))
                     # TOCTOU-гард: между архивным проходом и delete мог появиться Match
                     # (nightly-матчер) — cascade снёс бы его историю. Такие строки щадим.
-                    .where(~Listing.id.in_(select(Match.listing_id)))
+                    .where(Listing.id.not_in(referenced))
                 )
                 deleted += result.rowcount or 0
 

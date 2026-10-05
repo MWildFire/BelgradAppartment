@@ -1,0 +1,7 @@
+{
+  "baseline_error_count": 314,
+  "current_error_count": 261,
+  "new_errors": {},
+  "removed_error_count": 53,
+  "python_target": "3.12; installed NumPy stubs cannot parse with 3.11 target"
+}

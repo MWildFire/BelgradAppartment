@@ -61,7 +61,7 @@ async def process_new_inbound(
             await send_match_to_saved(result.match_id, client)
         except Exception:
             logger.exception("[pipeline] matched delivery failed for match=%s", result.match_id)
-    else:
+    elif result.status == "no_match":
         logger.info(
             "[pipeline] inbound=%s no_match (best_count=%d conf=%.2f) — not forwarded",
             inbound_id, result.matched_photos, result.confidence,

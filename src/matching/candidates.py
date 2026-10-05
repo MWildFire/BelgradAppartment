@@ -57,8 +57,8 @@ class CandidateCache:
 
 def candidate_scan_select() -> Select:
     """The one lightweight candidates SELECT — shared by the per-call path and the cache
-    so both iterate listings in the identical row order (the pHash-vs-CLIP signal choice
-    is deliberately order-dependent; see matcher._select_best).
+    with deterministic ranking in matcher._select_best. Selected candidates are checked
+    against current evidence before a cached scan can produce a Match.
 
     photo_embeddings BLOBs are NOT selected — only an IS NOT NULL flag (see module docstring).
     """

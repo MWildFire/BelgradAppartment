@@ -213,16 +213,15 @@ async def test_write_false_does_not_persist(factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_inactive_listings_excluded(factory) -> None:
-    """Only ACTIVE listings are grouped; an inactive same-apartment row is ignored."""
-    s1, s2 = _near(BASE_A, 1), _near(BASE_B, 1)
-    a = await _seed(factory, platform=Platform.NEKRETNINE, phashes=[s1, s2])
-    b = await _seed(factory, platform=Platform.HALOOGLASI,
-                    phashes=[_near(BASE_A, 2), _near(BASE_B, 2)], is_active=False)
+async def test_inactive_origin_retains_live_sibling(factory) -> None:
+    hashes = [_near(BASE_A, 0), _near(BASE_B, 0)]
+    a = await _seed(factory, platform=Platform.NEKRETNINE, phashes=hashes, is_active=False)
+    b = await _seed(factory, platform=Platform.HALOOGLASI, phashes=hashes)
     stats = await find_cross_platform_dupes()
-    assert stats.groups_found == 0
-    la = await _fetch(factory, a)
-    assert la.dup_group_id is None and la.is_primary is True
+    assert stats.groups_found == 1 and stats.active_scanned == 1
+    la, lb = await _fetch(factory, a), await _fetch(factory, b)
+    assert la.dup_group_id == lb.dup_group_id == min(a, b)
+    assert lb.is_primary and not la.is_primary
 
 
 @pytest.mark.asyncio
@@ -278,8 +277,8 @@ def test_index_finds_matches_across_bit_chunk_boundaries(distance):
     bits = [63, 0, 9, 18, 27, 36, 45, 54]
     delta = sum(1 << bit for bit in bits[:distance])
     rows = [
-        DedupRow(1, (BASE_D, BASE_D), 2, False),
-        DedupRow(2, (BASE_D ^ delta,), 1, False),
+        DedupRow(1, (BASE_D, BASE_A), 2, False),
+        DedupRow(2, (BASE_D ^ delta, BASE_A ^ delta), 2, False),
         DedupRow(3, (BASE_D ^ delta ^ (1 << 62),), 1, False),
     ]
     actual = _group_rows(rows, distance, 2)

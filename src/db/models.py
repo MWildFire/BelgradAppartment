@@ -10,7 +10,7 @@ Notes on portability:
 from __future__ import annotations
 
 import enum
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -35,7 +35,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Base(DeclarativeBase):
@@ -138,6 +138,7 @@ class InboundPost(Base):
     photo_paths: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     photo_phashes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     # CLIP ViT-B/32 embeddings: concatenated float16 blob (N * 512 * 2 bytes).
+    photo_evidence: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list, nullable=False)
     photo_embeddings: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     parsed_price_eur: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -191,6 +192,7 @@ class Listing(Base):
     photo_urls: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     photo_phashes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     # CLIP ViT-B/32 embeddings: concatenated float16 blob (N * 512 * 2 bytes).
+    photo_evidence: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list, nullable=False)
     photo_embeddings: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
 
     raw_payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
@@ -254,6 +256,77 @@ class Match(Base):
     inbound_post: Mapped[InboundPost] = relationship(back_populates="matches")
     listing: Mapped[Listing] = relationship(back_populates="matches")
     published_post: Mapped[PublishedPost | None] = relationship(back_populates="match", uselist=False)
+
+
+class ApartmentIdentity(Base):
+    __tablename__ = "apartment_identities"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # The compatibility group key remains in Listing-ID namespace, avoiding coalesce collisions.
+    anchor_listing_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="RESTRICT"), unique=True, nullable=False)
+    merged_into: Mapped[int | None] = mapped_column(ForeignKey("apartment_identities.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ListingIdentityEdge(Base):
+    __tablename__ = "listing_identity_edges"
+
+    left_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="RESTRICT"), primary_key=True)
+    right_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="RESTRICT"), primary_key=True)
+    state: Mapped[str] = mapped_column(String(24), default="confirmed", nullable=False)
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_reason: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (CheckConstraint("left_id < right_id", name="ordered_identity_edge"),)
+
+
+class IdentityEvent(Base):
+    __tablename__ = "identity_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ValidationJob(Base):
+    """Durable outcome/lease separate from Match and legacy inbound status enums."""
+
+    __tablename__ = "validation_jobs"
+    inbound_id: Mapped[int] = mapped_column(
+        ForeignKey("inbound_posts.id", ondelete="CASCADE"), primary_key=True,
+    )
+    state: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    outcomes: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class DigestWorkItem(Base):
+    """Persist each digest share before fetching, independently of Telegram watermark."""
+
+    __tablename__ = "digest_work_items"
+    __table_args__ = (UniqueConstraint("source_id", "message_id", "share_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("source_channels.id", ondelete="CASCADE"))
+    message_id: Mapped[int] = mapped_column(BigInteger)
+    share_id: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    post_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(32), default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_token: Mapped[str | None] = mapped_column(String(64))
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason_code: Mapped[str] = mapped_column(String(64), default="")
 
 
 class DailyMetrics(Base):

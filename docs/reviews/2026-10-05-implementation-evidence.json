@@ -1,0 +1,95 @@
+{
+  "date": "2026-10-05",
+  "branch": "codex/renfinder-validation-20261005",
+  "base": "5338a5e47b43422b6e7943c5af9eea75097152ac",
+  "scope": "local implementation only; no deployment",
+  "tests": {
+    "unit": {
+      "passed": 1761,
+      "skipped": 1,
+      "warnings": 42,
+      "seconds": 122.95
+    },
+    "browser": {
+      "passed": 54,
+      "seconds": 54.85
+    },
+    "offline_contracts": {
+      "passed": 18,
+      "api_calls": 0,
+      "actual_cost_usd": 0
+    },
+    "independent_review": {
+      "initial_focused_passed": 128,
+      "final_focused_passed": 43,
+      "open_blockers": 0,
+      "fixed_final_blocker": "circuit_open consumed attempt budget; all-circuit passes now refund claim, mixed passes remain bounded"
+    },
+    "changed_lint_new_diagnostics": 0,
+    "targeted_mypy_clean_files": 15,
+    "full_mypy_delta": {
+      "baseline_error_count": 314,
+      "current_error_count": 261,
+      "new_errors": {},
+      "removed_error_count": 53,
+      "python_target": "3.12; installed NumPy stubs cannot parse with 3.11 target"
+    },
+    "shell_syntax": "passed",
+    "git_diff_check": "passed"
+  },
+  "production": {
+    "read": false,
+    "write": false,
+    "migration": false,
+    "restart": false
+  },
+  "actual_model_api_calls": 0,
+  "new_provider_live_transport": false,
+  "default_model": "claude-haiku-4-5",
+  "limitations": [
+    "No vision quality benchmark",
+    "No fresh production preflight",
+    "No aggregate billing reconciliation or hard spend cap",
+    "No Python3.11 verification with installed NumPy stubs",
+    "Process-local circuit breaker",
+    "No deployment or remote CI run"
+  ],
+  "code_sha256": {
+    "alembic/versions/20261005_0015_validation_work.py": "cc1be8bc6439ce08adc4cd57309886813d240863ea836b00b8e8afbe43851e40",
+    "alembic/versions/20261005_0016_identity_edges.py": "87acca61e781f5a2168bba2c6484b0bed66535091236d968859f12336d7082b4",
+    "scripts/run_offline_tests.py": "682467ecb84ef43ddacd5222835980aa6fba1492939ab5a73f5b9925c291af4e",
+    "src/cli.py": "a560db3f3a2e2edf40ac781ae0d19340d8fdfe59775a8dfcb275df1454a97d54",
+    "src/config.py": "cd21c4ae65cdd444181e5c33db97245b9ef60199139b43729537cecf1e6a1dc8",
+    "src/db/models.py": "df73b8fba0672167fa82ff3cc305e99f4d2979da37dfe0d8105c434da4f32dd1",
+    "src/jobs/lifecycle.py": "351a2b3fd9857834182649a72ee246c00da41003876a0655c8a2f8a4610ea908",
+    "src/jobs/pipeline.py": "a6b34a628852eba1ab684947c6e000d6228db743f0e92444c7ff10e7a3b2ea6a",
+    "src/jobs/validation_retry.py": "717a9f6804b66fc1a56239e70c7438acf1aaeb3401c992f0782dfaab45bd65f6",
+    "src/matching/candidates.py": "957edabc06b9f14c1a6e463eedeefe5582fd05dbd1ab2189949651ebce78ae14",
+    "src/matching/circuit_breaker.py": "853d5ebca2b22dd7658497d10e4ffbc886ae08c27f3651a3466ae4347ed253ab",
+    "src/matching/dedup.py": "fb73f78e7a2f2eea2d74302afaa3cd0708a57696d501942e469c973c6fccf813",
+    "src/matching/evidence.py": "67a68dedabbd1a21c791462d6c25a098680cadcabaee39daad56346707ef4522",
+    "src/matching/identity.py": "656ef7c4daf310eb1daa4974e9ec818862e07ad910e6e400c49ef448edafbeca",
+    "src/matching/llm_validator.py": "2774e937f8bb73739b32385af40f1971d03b08eabebab919e52ee8a81e667473",
+    "src/matching/matcher.py": "fa7a4c7bf35041306fa56a0451411c04b538c82a4aea066c082e345496f8b434",
+    "src/matching/model_adapters.py": "143abd0bc29baac984212604857fdcf8b1a6527883a4f2693cfdd82ca42bf450",
+    "src/matching/offline_eval.py": "f92b2f76fd07fdb2ea4dae2f5b0c1f13031a94b98f242271360c70213b5ee011",
+    "src/matching/pairs.py": "1bcabd6e59abff3a4253fba847d4813bae765111661124e499fc8bd29c507d8a",
+    "src/matching/photo_manifest.py": "4074b293c2d74412fa82d9eeb51170aa86a1a85a7e2719ab6689d93a060be107",
+    "src/matching/review_queue.py": "e9711b2517cfde47c73a4dcd2f8cf7703ac71021bca9d66610e74b6e1a87c6dc",
+    "src/matching/validation_contracts.py": "90e53e8401c4ad67a76251a778c37be04007eb653ebc4ea7677d3dc42849517f",
+    "src/matching/validation_jobs.py": "cb68108f99bbb70fedb261af6f5687ceb082641f187eefeb651fe64a366daf1f",
+    "src/scrapers/orchestrator.py": "5838567bf3f6d96f95adc301843213dc13d5463bd2360a557ec1f802ba0e8a85",
+    "src/telegram/digest_jobs.py": "570652eb10d46508e3043c1efda9a8e4a34e9a1fea4f8b9157f9743aff905447",
+    "src/telegram/monitor.py": "533bd083cc67a476097b6a26e6c37f30178fb2288a0864d52c6d318621deabd2",
+    "tests/test_circuit_breaker.py": "06fe1be915a9283282ba23149f49b5e1f2060ed4b7e6a8283d2fb38ef281232c",
+    "tests/test_dedup.py": "9433f4388f96838a4c9cbafeb1b1f2182df94e5c0f90536b35f9ccae94fca9b3",
+    "tests/test_identity_edges.py": "db0f4857c1ba32f5434b0fc8e498f4d1f0bb804a6ef04d19ceed7861de076207",
+    "tests/test_llm_report.py": "ce2ef64a147d350776a94581b2755449df7cce92dcf64ab288dacb2b6229b7a5",
+    "tests/test_matcher_perf.py": "f93f4399008faef55bb29508e593b5185c708ad80e599a0144ae186c342ec3cf",
+    "tests/test_matcher_stages.py": "14f95883b71976271c0cd44a45783c88a713beeb4ff4cce5f4fd26184670a4c2",
+    "tests/test_migration_validation.py": "9f77337b284ce26f86fc5b386c6cee0a90e1a7ea1f2c633e9da00667014ecfa1",
+    "tests/test_model_adapters.py": "632d61306d8dcecf2c72e80c4703f5777a7ccfa2db8bb7fcecc82a71150b9624",
+    "tests/test_render_finder_zero_regression.py": "4bd815d30f784f004a79cdd36703024f69f996b417f110947d210d295ec405e9",
+    "tests/test_validation_safety.py": "aefdd4a65c845fa76cf0c8bdf064b034920683ca6264cb471a072788e668a29c"
+  }
+}

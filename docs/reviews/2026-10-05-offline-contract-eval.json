@@ -1,0 +1,139 @@
+{
+  "scope": "offline contracts only; no model calls or visual quality measurement",
+  "actual_api_calls": 0,
+  "actual_cost_usd": 0,
+  "estimated_single_call_6000in_200out_usd": {
+    "baseline": 0.007,
+    "luna": 0.0007,
+    "sonnet": 0.014
+  },
+  "cases": [
+    {
+      "profile": "baseline",
+      "case": "same",
+      "expected": "same",
+      "actual": "same",
+      "passed": true
+    },
+    {
+      "profile": "baseline",
+      "case": "different",
+      "expected": "different",
+      "actual": "different",
+      "passed": true
+    },
+    {
+      "profile": "baseline",
+      "case": "low-positive",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "baseline",
+      "case": "low-negative",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "baseline",
+      "case": "uncertain",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "baseline",
+      "case": "malformed",
+      "expected": "unavailable",
+      "actual": "unavailable",
+      "passed": true
+    },
+    {
+      "profile": "luna",
+      "case": "same",
+      "expected": "same",
+      "actual": "same",
+      "passed": true
+    },
+    {
+      "profile": "luna",
+      "case": "different",
+      "expected": "different",
+      "actual": "different",
+      "passed": true
+    },
+    {
+      "profile": "luna",
+      "case": "low-positive",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "luna",
+      "case": "low-negative",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "luna",
+      "case": "uncertain",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "luna",
+      "case": "malformed",
+      "expected": "unavailable",
+      "actual": "unavailable",
+      "passed": true
+    },
+    {
+      "profile": "sonnet",
+      "case": "same",
+      "expected": "same",
+      "actual": "same",
+      "passed": true
+    },
+    {
+      "profile": "sonnet",
+      "case": "different",
+      "expected": "different",
+      "actual": "different",
+      "passed": true
+    },
+    {
+      "profile": "sonnet",
+      "case": "low-positive",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "sonnet",
+      "case": "low-negative",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "sonnet",
+      "case": "uncertain",
+      "expected": "uncertain",
+      "actual": "uncertain",
+      "passed": true
+    },
+    {
+      "profile": "sonnet",
+      "case": "malformed",
+      "expected": "unavailable",
+      "actual": "unavailable",
+      "passed": true
+    }
+  ],
+  "passed": true
+}

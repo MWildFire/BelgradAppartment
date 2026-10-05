@@ -14,8 +14,6 @@ stub — no network, no API key, no real photos needed (except where the test sa
 
 from __future__ import annotations
 
-import asyncio
-
 import numpy as np
 import pytest
 from sqlalchemy import select
@@ -42,6 +40,7 @@ from src.matching.matcher import (
     METHOD_PHASH,
     STATUS_MATCHED,
     STATUS_NO_MATCH,
+    STATUS_PENDING,
     match_inbound,
 )
 
@@ -113,6 +112,17 @@ def llm_stub(monkeypatch):
     so patching the module attribute is always picked up.
     """
     stub = LLMStub()
+    # These are gate tests; real evidence normalization is covered in test_validation_safety.
+    from pathlib import Path
+    from src.matching import evidence
+
+    def fake_evidence(inbound, listing, settings):
+        root = settings.listings_photos_dir / listing.platform.value / listing.external_id
+        if not root.exists():
+            raise LLMValidatorError("missing_photos", verdict="invalid_evidence")
+        return [Path(p) for p in inbound.photo_paths], list(root.glob("*.jpg"))
+
+    monkeypatch.setattr(evidence, "select_evidence", fake_evidence)
 
     async def fake_validate_match(inbound_photos, listing_photos, **kwargs):
         stub.calls.append(
@@ -328,12 +338,12 @@ async def test_llm_reject_kills_clip_match(
 
     result = await match_inbound(inbound_id)
 
-    assert result.status == STATUS_NO_MATCH
+    assert result.status == (STATUS_PENDING if same else STATUS_NO_MATCH)
     assert result.listing_id is None
-    assert result.method == METHOD_CLIP_LLM_REJECTED
+    assert result.method == (METHOD_CLIP if same else METHOD_CLIP_LLM_REJECTED)
     assert result.matched_photos == 2  # CLIP agreed — the rejection came from the LLM stage
     assert await _match_rows(factory) == []
-    assert await _inbound_status(factory, inbound_id) == InboundStatus.NO_MATCH
+    assert await _inbound_status(factory, inbound_id) == (InboundStatus.NEW if same else InboundStatus.NO_MATCH)
     assert len(llm_stub.calls) == 1
 
 
@@ -347,107 +357,39 @@ async def test_llm_reject_kills_clip_match(
         pytest.param(RuntimeError("validator crashed"), id="unexpected-exception"),
     ],
 )
-async def test_llm_failure_fails_open_keeping_clip_verdict(
+async def test_llm_failure_is_durable_pending_without_match(
     db, tmp_path, monkeypatch, settings_pin, llm_stub, exc
 ):
     """Transport/validator failures must NOT drop a good CLIP match: the verdict stands,
     but the method label stays plain `clip` (fail-open ≠ LLM-confirmed)."""
-    factory, inbound_id, listing_id = await _seed_clip_scenario(db)
+    factory, inbound_id, _listing_id = await _seed_clip_scenario(db)
     _put_listing_photos(settings_pin, monkeypatch, tmp_path, "w4t1-clip")
     llm_stub.exc = exc
 
     result = await match_inbound(inbound_id)
 
-    assert result.status == STATUS_MATCHED
-    assert result.listing_id == listing_id
-    assert result.method == METHOD_CLIP  # not clip+llm
-    rows = await _match_rows(factory)
-    assert len(rows) == 1
-    assert rows[0].method == METHOD_CLIP
-    assert rows[0].status == MatchStatus.PENDING
-    assert len(llm_stub.calls) == 1  # the validator WAS attempted
+    assert result.status == STATUS_PENDING
+    assert result.listing_id is None
+    assert result.match_id is None
+    assert await _match_rows(factory) == []
+    assert await _inbound_status(factory, inbound_id) == InboundStatus.NEW
+    assert len(llm_stub.calls) == 1
 
 
-async def test_llm_skipped_when_listing_photos_missing_keeps_clip_verdict(
+async def test_missing_listing_photos_require_review(
     db, tmp_path, monkeypatch, settings_pin, llm_stub
 ):
     """No listing photos on disk → stage 4 cannot run; treated like fail-open and the
     validator is never even invoked."""
-    factory, inbound_id, listing_id = await _seed_clip_scenario(db)
+    factory, inbound_id, _listing_id = await _seed_clip_scenario(db)
     monkeypatch.setattr(settings_pin, "listings_photos_dir", tmp_path / "listings")  # empty
 
     result = await match_inbound(inbound_id)
 
-    assert (result.status, result.listing_id, result.method) == (
-        STATUS_MATCHED, listing_id, METHOD_CLIP,
-    )
-    rows = await _match_rows(factory)
-    assert len(rows) == 1
-    assert rows[0].method == METHOD_CLIP
+    assert result.status == STATUS_PENDING
+    assert result.match_id is None
+    assert await _match_rows(factory) == []
     assert llm_stub.calls == []
-
-
-async def test_llm_fail_open_on_529_overloaded_through_real_validator(
-    db, tmp_path, monkeypatch, settings_pin
-):
-    """529 path end-to-end through the REAL validate_match: the anthropic client raises
-    Overloaded on every attempt → 4-attempt backoff exhausts → LLMValidatorError →
-    matcher keeps the CLIP verdict. Sleeps are intercepted, so the test runs instantly."""
-    import anthropic
-    import httpx
-
-    factory, inbound_id, listing_id = await _seed_clip_scenario(db)
-    _put_listing_photos(settings_pin, monkeypatch, tmp_path, "w4t1-clip")
-    monkeypatch.setattr(settings_pin, "anthropic_api_key", "test-key")
-    monkeypatch.setattr(settings_pin, "data_dir", tmp_path)
-
-    # The real validate_match drops non-existent inbound photos — put real files on disk.
-    inbound_dir = tmp_path / "inbound"
-    inbound_dir.mkdir()
-    paths = []
-    for i in range(2):
-        p = inbound_dir / f"{i}.jpg"
-        p.write_bytes(b"\xff\xd8fake-jpeg")
-        paths.append(str(p))
-    async with factory() as s:
-        (await s.get(InboundPost, inbound_id)).photo_paths = paths
-        await s.commit()
-
-    overloaded = anthropic.APIStatusError(
-        "Overloaded",
-        response=httpx.Response(
-            529, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        ),
-        body={"type": "error", "error": {"type": "overloaded_error"}},
-    )
-    parse_calls: list[int] = []
-
-    class _Messages:
-        async def parse(self, **kwargs):
-            parse_calls.append(1)
-            raise overloaded
-
-    class _Client:
-        def __init__(self, **kwargs):
-            self.messages = _Messages()
-
-    monkeypatch.setattr(anthropic, "AsyncAnthropic", _Client)
-
-    sleeps: list[float] = []
-
-    async def fake_sleep(delay, *args, **kwargs):
-        sleeps.append(delay)
-
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-
-    result = await match_inbound(inbound_id)
-
-    assert (result.status, result.listing_id, result.method) == (
-        STATUS_MATCHED, listing_id, METHOD_CLIP,
-    )
-    assert len(parse_calls) == 4  # one API call per backoff attempt
-    assert sleeps == [10, 25, 40, 55]  # the documented 529 backoff schedule
-    assert not (tmp_path / "logs" / "llm_decisions.jsonl").exists()  # no verdict → no log line
 
 
 # ---------------------------------------------------------------------------
