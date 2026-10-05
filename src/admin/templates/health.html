@@ -27,6 +27,22 @@
 <p><strong>{{ ops.status }}</strong> · Последний запуск:
   {{ ops.latest_run.get('status', 'нет проверенной истории') }}
   {{ ops.latest_run.get('finished_at') or ops.latest_run.get('started_at', '') }}</p>
+<h3>Полнота базы по трём площадкам</h3>
+<table>
+  <thead><tr><th>Площадка</th><th>В базе / на площадке</th><th>Полнота</th><th>Не хватает</th><th>Состояние</th></tr></thead>
+  <tbody>{% for p in ops.market_coverage %}<tr>
+    <td>{{ p.platform }}</td>
+    <td>{{ p.in_database if p.in_database is not none else '—' }} / {{ p.site_total if p.site_total is not none else '—' }}</td>
+    <td>{{ p.percent ~ '%' if p.percent is not none else 'не подтверждена' }}</td>
+    <td>{{ p.missing if p.missing is not none else '—' }}</td>
+    <td>{{ {'complete': 'полный обход', 'partial': 'неполный обход', 'dated': 'данные устарели',
+       'unverified': 'число площадки не подтверждено', 'unknown': 'нет полного обхода'}.get(p.status) }}
+       {% if p.as_of %}· {{ p.as_of }}{% endif %}</td>
+  </tr>{% endfor %}</tbody>
+</table>
+<p class="muted">Числитель — объявления, успешно сохранённые в базу за последний завершённый полный обход;
+  знаменатель — число объявлений в том же поиске по данным площадки. При неполном обходе доля —
+  подтверждённый минимум на указанное время. CityExpert — отдельный источник агентства.</p>
 <table>
   <thead><tr><th>Источник</th><th>Полный подтверждённый успех</th><th>Свежие данные {{ '≤24 часов' if all_daily else '≤7 дней' }}</th><th>Последний обход</th><th>Причины запрета снятия</th></tr></thead>
   <tbody>{% for p in ops.sources %}<tr>

@@ -1768,9 +1768,16 @@ async def _nightly_refresh_impl(
         lines.append("По площадкам (previewed/new):")
         for r in results:
             extra = ""
-            if r.site_total:
-                pct = 100 * r.previewed // max(r.site_total, 1)
-                extra += f"  покрытие {pct}% из {r.site_total}"
+            if not incremental and r.platform.value in {"NEKRETNINE", "CETIRI_ZIDA", "HALOOGLASI"}:
+                if (r.denominator_trusted and r.site_total is not None
+                        and r.site_total > 0 and r.fetched <= r.site_total):
+                    pct = 100 * r.fetched / r.site_total
+                    extra += (f"  в базе {r.fetched}/{r.site_total} ({pct:.1f}%), "
+                              f"не хватает {r.site_total - r.fetched}")
+                    if not r.crawl_complete:
+                        extra += " [неполный обход]"
+                else:
+                    extra += "  полнота базы не подтверждена"
             if r.skipped_pages:
                 extra += f"  ⚠️ пропущено стр.: {r.skipped_pages}"
             if r.details_attempted:

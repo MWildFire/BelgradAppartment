@@ -1,0 +1,9 @@
+# Preserve the September 28 production changes in RenFinderbot
+
+The validation branch diverged from production commit `4235abf9da9ea33d0c07aede0ae42f02dcdd1e7a`. Applying its seven-file change restores the marketplace coverage report, its admin integration, the CLI's persisted-row/trusted-denominator calculation, and the protected archived-photo cleanup tool. The original four tests in `test_market_coverage.py` and `test_cleanup_listing_photos.py` are byte-identical to production. Five additional regression cases verify the CLI's full/incremental/untrusted behavior and the actual admin rendering.
+
+The coverage module has explicit container type parameters only; its production behavior is unchanged. The candidate retains all 770307c validation, digest/identity queues and resumable release-controller changes. The separate fallback retains e9dddef's queue-aware semantics plus the same production-preservation patch. Haiku, thresholds, encoder, migrations, lockfile and service topology are unchanged by this integration fix.
+
+Initial focused validation: 9 passed with outbound network denied. Before these changes, the four production tests passed on isolated4235abf while the candidate could not collect their two modules. Full unit/browser, changed Ruff, mypy delta, distributions and exact-packet migration/rollback evidence are recorded separately in the local `readiness/integration-fix/` receipts with full commit identities. Do not infer remote CI or deployment from local results.
+
+This work does not authorize another push, merge, deploy or paid model evaluation. The earlier push authorization applied only to770307c. A new exact candidate SHA, reason for the additional push and included-quota CI evidence must be presented before any further remote mutation. Before production, recheck the backup freshness/schema, current server revision, maintenance state and reviewed packet pair.

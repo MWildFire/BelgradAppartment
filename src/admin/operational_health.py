@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 
 from src.config import get_settings
 from src.db.models import MatchDelivery, Platform, SiteListing, SubscriptionDelivery
+from src.jobs.market_coverage import market_coverage
 from src.jobs.run_history import read_runs
 from src.scrapers.freshness import RefreshCandidate, load_candidates, quota_estimates, utc
 
@@ -364,6 +365,7 @@ async def build_operations(session, *, now: datetime | None = None) -> dict:
         "status": "degraded" if reasons else "ok",
         "reasons": reasons,
         "sources": sources,
+        "market_coverage": market_coverage(runs, now=now),
         "latest_run": runs[0] if runs else {},
         "public_refresh": public_refresh,
         "schedules": await asyncio.to_thread(schedules),
