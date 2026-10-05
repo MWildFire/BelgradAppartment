@@ -6,6 +6,7 @@ import argparse
 import io
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -153,7 +154,12 @@ def test_code_rollback_preserves_new_database_rows_and_photos(tmp_path, monkeypa
     (root / "src").mkdir(parents=True)
     (root / "src/app.py").write_text("old")
     (root / "data").mkdir()
-    (root / "data/otz.db").write_bytes(b"new leads after backup must survive")
+    with sqlite3.connect(root / "data/otz.db") as con:
+        con.execute("CREATE TABLE alembic_version(version_num TEXT)")
+        con.execute("INSERT INTO alembic_version VALUES('0014_group_availability_index')")
+        con.execute("CREATE TABLE new_leads(value TEXT)")
+        con.execute("INSERT INTO new_leads VALUES('new leads after backup must survive')")
+    database_before = (root / "data/otz.db").read_bytes()
     (root / "data/photo.jpg").write_bytes(b"new photo must survive")
     (source / "code/src").mkdir(parents=True)
     (source / "code/src/app.py").write_text("new")
@@ -168,7 +174,7 @@ def test_code_rollback_preserves_new_database_rows_and_photos(tmp_path, monkeypa
     result = release.restore_code(root, source)
     assert result["result"] == "rolled_back_code_only"
     assert (root / "src/app.py").read_text() == "old"
-    assert (root / "data/otz.db").read_bytes() == b"new leads after backup must survive"
+    assert (root / "data/otz.db").read_bytes() == database_before
     assert (root / "data/photo.jpg").read_bytes() == b"new photo must survive"
 
 
@@ -282,7 +288,9 @@ def test_effective_units_allows_unrelated_dropins_without_mutating_units(effecti
     assert (deploy / "other.service").read_text() == "[Service]\nExecStart=/bin/true\n"
 
 
-@pytest.mark.parametrize("failure", [None, "browser", "health", "hash"])
+@pytest.mark.parametrize("failure", [
+    None, "browser", "health", "hash", "contract_heads", "migration_head_mismatch",
+])
 @pytest.mark.parametrize("process_umask", [0o022, 0o077])
 def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     tmp_path, monkeypatch, backup_receipt, failure, process_umask
@@ -304,6 +312,7 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     events = []
     browser_commands = []
     clock = [0.0]
+    migrated = [False]
     real_require = release.require
 
     def isolated_require(condition, message):
@@ -323,6 +332,10 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
         (code / "src/app.py").write_text("new")
         (code / "data").mkdir()
         (code / "data/districts.yaml").write_text("fixture")
+        if failure == "contract_heads":
+            release.write_json(code / "scripts/runtime_contract.json", {
+                "version": 1, "migration_heads": ["0014_group_availability_index"],
+            })
         return {
             "revision": revision,
             "files": {"src/app.py": release.hash_bytes(b"bad" if failure == "hash" else b"new")},
@@ -344,12 +357,18 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
             active_units.update(args[2:])
         if args[0] == "curl":
             return "503" if failure == "health" else "200"
+        if args[1:2] == ["-c"] and "ScriptDirectory" in args[2]:
+            return json.dumps(["0016_identity_edges" if failure == "contract_heads" else "0011"])
+        if args[1:] == ["upgrade", "head"]:
+            migrated[0] = True
         return ""
 
     monkeypatch.setattr(release, "require", isolated_require)
     monkeypatch.setattr(release.os, "geteuid", lambda: 0)
     monkeypatch.setattr(release, "unpack_packet", packet)
-    monkeypatch.setattr(release, "current_revisions", lambda db: ["0011"])
+    monkeypatch.setattr(release, "current_revisions", lambda db: [
+        "0012" if migrated[0] and failure == "migration_head_mismatch" else "0011",
+    ])
     monkeypatch.setattr(release, "run", command)
     monkeypatch.setattr(release.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(release.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
@@ -389,7 +408,7 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     assert launch[1]["env"]["HOME"] == str(tmp_path)
     assert "PLAYWRIGHT_BROWSERS_PATH" not in launch[1]["env"]
     assert launch[1]["timeout"] == 45
-    if failure == "browser":
+    if failure in {"browser", "contract_heads"}:
         assert not any(args[0] == "systemctl" for args, _ in events)
         assert (root / "src/app.py").read_text() == "old"
         assert active_units == {timer, service}
@@ -408,8 +427,11 @@ def test_activation_cannot_start_timer_on_unverified_or_rejected_code(
     ]
     assert len(timer_starts) == 1
     assert timer_starts[0][1] == ("old" if failure else "new")
-    health_index = next(index for index, (args, _) in enumerate(events) if args[0] == "curl")
-    assert health_index < timer_starts[0][0]
+    if failure == "migration_head_mismatch":
+        assert not any(args[0] == "curl" for args, _ in events)
+    else:
+        health_index = next(index for index, (args, _) in enumerate(events) if args[0] == "curl")
+        assert health_index < timer_starts[0][0]
     assert (root / "data/otz.db").read_bytes() == b"keep new data"
 
 
@@ -476,8 +498,9 @@ def test_cooperative_stop_does_not_interrupt_same_jobs_cleanup_twice(tmp_path, m
 
 
 @pytest.mark.parametrize("later_release", [False, True])
+@pytest.mark.parametrize("blocked", ["rollback_blocked_maintenance", "rollback_blocked_incompatible"])
 def test_blocked_rollback_can_resume_only_while_its_previous_release_is_recorded(
-    tmp_path, monkeypatch, later_release
+    tmp_path, monkeypatch, later_release, blocked
 ):
     root = tmp_path / "app"
     revision = "b" * 40
@@ -489,7 +512,7 @@ def test_blocked_rollback_can_resume_only_while_its_previous_release_is_recorded
     release.write_json(
         staged / "activation.json",
         {
-            "result": "rollback_blocked_maintenance",
+            "result": blocked,
             "swapped": ["src"],
             "previous_revision": previous,
         },

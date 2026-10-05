@@ -534,6 +534,12 @@ def restore_code(root, release):
         state["result"] = "rollback_blocked_maintenance"
         write_json(release / "activation.json", state)
         raise
+    try:
+        verify_rollback_compatibility(root, release, state, current_revisions(root / "data/otz.db"))
+    except Exception:
+        state["result"] = "rollback_blocked_incompatible"
+        write_json(release / "activation.json", state)
+        raise
     services = sorted(set(state["services"]) | {unit for unit in SERVICES if active(unit)})
     if services:
         run(["systemctl", "stop", *services], timeout=60)
@@ -561,6 +567,49 @@ def restore_code(root, release):
     write_json(release / "activation.json", state)
     restart_units(state)
     return state
+
+
+def verify_rollback_compatibility(root, release, state, revisions, *, manifest=None):
+    """Additive SQL is insufficient: the prior runtime must understand durable work.
+
+    The declaration and every prior runtime file are bound to its release manifest.
+    Missing/unknown contracts fail closed, leaving current code/data untouched.
+    This is a compatibility declaration tested in CI, not a proof of model quality.
+    """
+    require(revisions, "cannot establish rollback schema compatibility")
+    if all(re.fullmatch(r"00(?:0[1-9]|1[0-4])(?:_[a-z0-9_]+)?", r) for r in revisions):
+        return  # Before durable validation/identity tables existed.
+
+    def prior(relative):
+        parts = PurePosixPath(relative).parts
+        swapped = any(relative == item or item == parts[0] for item in state["swapped"])
+        return (release / "rollback" if swapped else root) / relative
+
+    if manifest is None:
+        marker = prior("release.json")
+        require(marker.is_file(), "rollback requires a verified prior release manifest")
+        manifest = read_json(marker)
+    files = manifest.get("files", {})
+    contract_path = "scripts/runtime_contract.json"
+    require(contract_path in files, "rollback lacks a schema compatibility contract")
+    require({"src/matching/matcher.py", "src/matching/llm_validator.py",
+             "src/matching/validation_jobs.py", "src/matching/identity.py",
+             "src/telegram/digest_jobs.py"} <= set(files),
+            "prior rollback manifest lacks critical runtime files")
+    for relative, digest in files.items():
+        require(allowed_path(relative), "unsafe prior release manifest path")
+        # Runtime only: docs/tests need not exist in the activated application directory.
+        if PurePosixPath(relative).parts[0] not in RUNTIME:
+            continue
+        candidate = prior(relative)
+        require(candidate.is_file() and hash_bytes(candidate.read_bytes()) == digest,
+                f"prior rollback payload hash mismatch: {relative}")
+    contract = read_json(prior(contract_path))
+    require(contract.get("version") == 1, "unsupported rollback compatibility contract")
+    require(set(revisions) <= set(contract.get("compatible_revisions", [])),
+            "prior runtime is incompatible with current schema")
+    require({"fail_closed_validation", "durable_digest", "identity_edges"}
+            <= set(contract.get("semantics", [])), "prior runtime lacks durable-work semantics")
 
 
 def activate(args):
@@ -659,6 +708,38 @@ def activate(args):
             if (root / "release.json").exists()
             else None
         )
+        target_contract = release / "code/scripts/runtime_contract.json"
+        require("src/matching/validation_jobs.py" not in manifest["files"]
+                or target_contract.is_file(), "queue-aware release requires a runtime contract")
+        live_revisions = current_revisions(root / "data/otz.db")
+        # Derive the migration destination from the checked artifact itself. A stale
+        # declaration must not bypass compatibility checks before `upgrade head`.
+        head_probe = (
+            "import json,sys; from alembic.config import Config; "
+            "from alembic.script import ScriptDirectory; cfg=Config(); "
+            "cfg.set_main_option('script_location',sys.argv[1]); "
+            "print(json.dumps(ScriptDirectory.from_config(cfg).get_heads()))"
+        )
+        target_heads = json.loads(run(
+            [str(new_python), "-c", head_probe, str(release / "code/alembic")],
+            capture=True, timeout=30,
+        ))
+        require(isinstance(target_heads, list) and target_heads
+                and all(isinstance(head, str) for head in target_heads),
+                "cannot establish staged migration heads")
+        if target_contract.is_file():
+            require(
+                sorted(read_json(target_contract).get("migration_heads", []))
+                == sorted(target_heads),
+                "runtime contract does not match staged migration heads",
+            )
+        # Reject a legacy runtime against a newer DB, including an attempted activation
+        # downgrade. Then prove the fallback before the first stop/swap/migration.
+        for revisions in (live_revisions, target_heads):
+            verify_rollback_compatibility(
+                release / "code", release, {"swapped": []}, revisions, manifest=manifest,
+            )
+        verify_rollback_compatibility(root, release, state, target_heads)
         write_json(release / "activation.json", state)
         try:
             stop_units(state)
@@ -692,7 +773,8 @@ def activate(args):
                 cwd=root,
                 env={**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{root}/data/otz.db"},
             )
-            current_revisions(root / "data/otz.db")
+            require(current_revisions(root / "data/otz.db") == sorted(target_heads),
+                    "migrated schema does not match staged migration heads")
             for unit in sorted((root / "deploy").glob("otz-*")):
                 if unit.suffix not in {".service", ".timer"}:
                     continue
@@ -734,7 +816,7 @@ def activate(args):
             restart_timers(state)
             return state
         except Exception:
-            # App rollback is safe with additive schema. Never downgrade/restore the live DB.
+            # The rollback gate also checks durable-work semantics. Never downgrade live DB.
             restore_code(root, release)
             raise
 
@@ -783,7 +865,9 @@ def main():
                 require(
                     current == args.revision
                     or (
-                        saved["result"] == "rollback_blocked_maintenance"
+                        saved["result"] in {
+                            "rollback_blocked_maintenance", "rollback_blocked_incompatible",
+                        }
                         and saved["swapped"]
                         and "previous_revision" in saved
                         and current == saved["previous_revision"]

@@ -156,7 +156,7 @@ def _line_at(surrogate_text: str, offset: int) -> str:
         start += 1
     if end == -1:
         end = len(surrogate_text)
-    return del_surrogate(surrogate_text[start:end]).strip()
+    return str(del_surrogate(surrogate_text[start:end])).strip()
 
 
 def _classify_section(heading: str) -> str | None:

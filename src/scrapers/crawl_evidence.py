@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
+from typing import Any
 
 
-def source_total_report(scraper):
+def source_total_report(scraper: CrawlEvidence) -> dict[str, Any]:
     """Snapshot only generated count telemetry, independently of later scraper reuse."""
-    return deepcopy(getattr(scraper, "_source_total_telemetry", {}))
+    return dict(deepcopy(getattr(scraper, "_source_total_telemetry", {})))
 
 
 class CrawlEvidence:

@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient, events
 from telethon.tl.custom.message import Message
 from telethon.tl.types import Channel, Chat, MessageMediaPhoto, User
@@ -202,7 +203,7 @@ async def backfill(
 # --------------------------------------------------------------------------- Live
 
 
-OnInboundCallable = "callable"  # type alias hint — runtime: any coroutine taking int
+OnInboundCallable = Callable[[int], Awaitable[None]]
 
 # One matcher pipeline at a time — a full pass loads CLIP embeddings (memory + CPU),
 # so concurrent live posts must queue rather than stack.
@@ -256,7 +257,6 @@ def register_live_handler(
             except Exception:
                 logger.exception("on_inbound callback failed for live post %s", post.id)
 
-    @client.on(events.NewMessage(chats=chat_filter))
     async def _handler(event: events.NewMessage.Event) -> None:
         msg: Message = event.message
         source = sources_by_tg.get(int(event.chat_id))
@@ -283,6 +283,7 @@ def register_live_handler(
             except Exception:
                 logger.exception("on_inbound callback failed for live post %s", post.id)
 
+    client.on(events.NewMessage(chats=chat_filter))(_handler)
     logger.info("Live handler registered for %d source(s)", len(chat_filter))
 
 
@@ -445,7 +446,9 @@ async def _persist_regular_inbound(source_id: int, msgs: list[Message]) -> list[
         return []
 
 
-async def _select_existing_regular(s, source_id: int, tg_message_id: int) -> InboundPost | None:
+async def _select_existing_regular(
+    s: AsyncSession, source_id: int, tg_message_id: int
+) -> InboundPost | None:
     return (
         await s.execute(
             select(InboundPost).where(
@@ -524,7 +527,7 @@ async def _compute_clip_blob(photo_paths: list[str], leader_id: int) -> bytes | 
         return None
 
 
-async def _advance_watermark(s, source_id: int, last_msg_id: int) -> None:
+async def _advance_watermark(s: AsyncSession, source_id: int, last_msg_id: int) -> None:
     chan = await s.get(SourceChannel, source_id)
     if chan is not None:
         chan.last_processed_message_id = max(chan.last_processed_message_id or 0, last_msg_id)

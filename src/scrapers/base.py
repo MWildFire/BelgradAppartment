@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import abc
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import httpx
 
 from src.config import get_settings
 from src.db.models import Platform
 from src.scrapers.crawl_evidence import CrawlEvidence
+
+if TYPE_CHECKING:
+    from src.scrapers.orchestrator import ScrapeResult
 
 # HTTP-only platform fetches and photo downloads need a conservative desktop identity. Browser
 # scrapers intentionally use Chromium's native UA instead: a hard-coded UA can drift from the
@@ -75,6 +79,8 @@ class Scraper(CrawlEvidence, abc.ABC):
     """Base contract every platform scraper must satisfy."""
 
     platform: ClassVar[Platform]
+    last_scrape_result: ScrapeResult
+    _progress_callback: Callable[[], None] | None
     list_url: ClassVar[str]
     # Nekretnine needs the paid proxy because its DataDome wall blocks the VPS egress. Other
     # sources currently parse directly and must not depend on proxy availability or allowance.

@@ -55,7 +55,9 @@ class CandidateCache:
     rows: list[CandidateRow]
 
 
-def candidate_scan_select() -> Select:
+def candidate_scan_select() -> Select[
+    tuple[int, list[str], int | None, float | None, str | None, bool, bool]
+]:
     """The one lightweight candidates SELECT — shared by the per-call path and the cache
     with deterministic ranking in matcher._select_best. Selected candidates are checked
     against current evidence before a cached scan can produce a Match.

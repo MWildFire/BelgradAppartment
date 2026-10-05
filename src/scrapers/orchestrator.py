@@ -23,12 +23,13 @@ from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
 from sqlalchemy import func, select, update
+from sqlalchemy.engine import CursorResult
 
 from src.matching.photo_manifest import build_manifest
 from src.config import get_settings
@@ -151,7 +152,7 @@ class ScrapeResult:
     @classmethod
     def failed(
         cls, platform: Platform, *, reason: str = "source_exception", full_crawl: bool = True
-    ):
+    ) -> ScrapeResult:
         return cls(platform=platform, full_crawl=full_crawl, stop_reason="source_exception",
                    errors=1, quality_reasons=[reason])
 
@@ -239,7 +240,7 @@ async def scrape_platform(
         get_settings().data_dir / "state" / "scrape" / f"{scraper.platform.value.lower()}.json"
     )
     last_checkpoint = 0.0
-    def progress():
+    def progress() -> None:
         nonlocal last_checkpoint
         result.pages_attempted = int(getattr(scraper, "_pages_attempted", 0))
         result.pages_failed = int(getattr(scraper, "_pages_failed", 0))
@@ -417,7 +418,10 @@ def _copy_crawl_evidence(
         result.stop_reason = str(getattr(scraper, "_crawl_stop_reason", "unverified"))
 
 
-async def _evaluate_one(scraper, url, external_id, *, download_photos, preview=None):
+async def _evaluate_one(
+    scraper: Scraper, url: str, external_id: str, *, download_photos: bool,
+    preview: ListingPreview | None = None,
+) -> tuple[None, int, bool]:
     """Network evaluation only: deliberately cannot call persistence/photo helpers."""
     snapshot = _complete_snapshot_for(scraper, preview)
     if _snapshot_mode(scraper) == "active" and snapshot is not None:
@@ -433,7 +437,7 @@ class _DetailFetchError(RuntimeError):
     """A real detail transport/parser attempt failed before a usable payload was returned."""
 
 
-async def _fetch_processing_detail(scraper, url):
+async def _fetch_processing_detail(scraper: Scraper, url: str) -> ListingDetail:
     try:
         return await scraper.fetch_detail(url)
     except Exception as exc:
@@ -498,17 +502,19 @@ async def _process_one(
                 photo_update_needed = row.photo_urls != snapshot.photo_urls
 
         if photo_update_needed and download_photos and snapshot is not None:
-            photo_paths, photo_hashes, embeddings_blob = await _download_photos(snapshot)
+            snapshot_paths, snapshot_hashes, snapshot_embeddings = await _download_photos(snapshot)
             # Never replace a complete existing album with a partial download. The next scrape
             # will retry the same snapshot while preserving the old URLs/hashes/embeddings.
-            if len(photo_paths) == len(snapshot.photo_urls):
+            if len(snapshot_paths) == len(snapshot.photo_urls):
                 async with get_session() as session:
                     row = (await session.execute(select(Listing).where(Listing.id == existing.id))).scalar_one()
                     row.photo_urls = snapshot.photo_urls
-                    row.photo_evidence = build_manifest(photo_paths, photo_hashes, relative=True)
-                    row.photo_phashes = photo_hashes
-                    row.photo_embeddings = embeddings_blob
-                return False, len(photo_paths), False
+                    row.photo_evidence = build_manifest(
+                        snapshot_paths, snapshot_hashes, relative=True,
+                    )
+                    row.photo_phashes = snapshot_hashes
+                    row.photo_embeddings = snapshot_embeddings
+                return False, len(snapshot_paths), False
             logger.warning(
                 "[%s] snapshot photo swap skipped after partial download external_id=%s",
                 scraper.platform.value,
@@ -972,7 +978,7 @@ async def verify_active_links(
     observed_status: dict[int, str] = {}
     dead_ids: set[int] = set()
 
-    async def _record_check(row, status: str, *, definitive_alive: bool = False):
+    async def _record_check(row: Any, status: str, *, definitive_alive: bool = False) -> None:
         observed_status[row.id] = status
         if dry_run:
             return
@@ -1439,7 +1445,7 @@ async def _refetch_one_listing(
                 # Keep the exact CancelledError type: asyncio.timeout recognizes it to
                 # convert a source/item deadline into TimeoutError and continue its queue.
                 cancelled = asyncio.CancelledError("refresh_committed_before_cancellation")
-                cancelled.committed_refresh_outcome = _RefetchOutcome(
+                cancelled.__dict__["committed_refresh_outcome"] = _RefetchOutcome(
                     len(hashes), current.price_eur, new_price, evidence,
                 )
                 raise cancelled from None
@@ -1554,20 +1560,19 @@ async def rolling_detail_refresh(
         limit=None if all_listings else limit, scrapers=scrapers,
         only_broken=False, public_only=public_only, due_only=not all_listings,
     )
-    allocation = {}
+    weights: dict[Platform, float] | None = None
     if all_listings:
         # Relative cost observed in the 2026-09-14 sustained probes, with room for
         # local photo validation. Weight the actual queue, never equal-size quotas.
         cost = {Platform.CETIRI_ZIDA: 2, Platform.CITYEXPERT: 1,
                 Platform.HALOOGLASI: 1, Platform.NEKRETNINE: 4}
-        weights: dict[Platform, float] = {}
+        weights = {}
         for row in plan.rows:
             weights[row.platform] = weights.get(row.platform, 0) + cost.get(row.platform, 1)
-        allocation = {"source_weights": weights}
     stats = await refetch_listing_details(
         plan.rows, scrapers=scrapers, deadline=deadline,
         checkpoint_name="public_refetch" if public_only else "refetch",
-        **allocation,
+        source_weights=weights,
     )
     logger.info("[rolling-refresh] selected=%d verified=%d errors=%d skipped=%d",
                 len(plan.rows), stats.verified, stats.errors, stats.skipped)
@@ -1595,7 +1600,7 @@ async def prune_inactive_embeddings(*, older_than_days: int = 30) -> int:
             )
             .values(photo_embeddings=None)
         )
-        pruned = res.rowcount or 0
+        pruned = cast(CursorResult[Any], res).rowcount or 0
     logger.info("[prune-embeddings] cleared %d rows (inactive > %d days)", pruned, older_than_days)
     return pruned
 
