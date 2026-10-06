@@ -50,6 +50,7 @@ from src.scrapers.freshness import (
     select_fair,
 )
 from src.scrapers.link_probe import SourceProbeSession
+from src.scrapers.refresh_diagnostics import add_reason, reason_code, source_error_code
 from src.scrapers.run_safety import evaluate_absence, evaluate_source
 from src.scrapers.snapshot_parity import mismatch_fields
 
@@ -1153,6 +1154,7 @@ class DetailRefetchStats:
     deactivated: int = 0
     skipped: int = 0
     source_errors: dict[str, str] = field(default_factory=dict)
+    reason_counts: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
     price_changes: list[PriceChange] = field(default_factory=list)
 
 
@@ -1215,6 +1217,21 @@ async def refetch_listing_details(
     stop_reason = "running"
     next_fetch_at = 0.0
     attempted_ids: set[int] = set()
+    skipped_ids: set[int] = set()
+    card_reasons: dict[int, tuple[str, str]] = {}
+
+    def card_reason(row: RefreshCandidate, stage: str, code: str) -> None:
+        previous = card_reasons.get(row.id)
+        if previous is not None:
+            add_reason(stats.reason_counts, row.platform, *previous, delta=-1)
+        card_reasons[row.id] = (stage, code)
+        add_reason(stats.reason_counts, row.platform, stage, code)
+
+    def skip(row: RefreshCandidate, code: str) -> None:
+        if row.id not in skipped_ids:
+            skipped_ids.add(row.id)
+            stats.skipped += 1
+        card_reason(row, "skipped", code)
 
     def checkpoint(*, final: bool) -> None:
         _write_refresh_state(checkpoint_name, {
@@ -1223,10 +1240,25 @@ async def refetch_listing_details(
             "price_changes": len(stats.price_changes),
         })
 
+    def source_error(platform: Platform, code: str) -> None:
+        stats.source_errors[platform.value] = source_error_code(code)
+        add_reason(stats.reason_counts, platform, "source", reason_code(code))
+        for row in candidates:
+            if row.platform != platform:
+                continue
+            if row.id not in attempted_ids:
+                skip(row, reason_code(code))
+            elif (card_reasons.get(row.id) == ("item", "cancelled")
+                  and reason_code(code) == "timeout"):
+                card_reason(row, "item", "timeout")
+        checkpoint(final=False)
+
     def account(row: RefreshCandidate, outcome: _RefetchOutcome) -> None:
         stats.updated += 1
         stats.verified += int(outcome.evidence.succeeded)
         stats.errors += int(not outcome.evidence.succeeded)
+        if not outcome.evidence.succeeded:
+            card_reason(row, "item", reason_code(outcome.evidence.reason))
         stats.photos += outcome.photos_added
         if outcome.old_price != outcome.new_price:
             stats.price_changes.append(
@@ -1246,7 +1278,7 @@ async def refetch_listing_details(
                 touch_refreshed_at=touch_refreshed_at, attempted_at=attempted_at,
             )
             if outcome is None:
-                stats.skipped += 1
+                skip(row, "listing_deleted")
                 return CallbackResult(RefreshEvidence.failed("listing_deleted"))
             account(row, outcome)
             if progress is not None:
@@ -1263,6 +1295,7 @@ async def refetch_listing_details(
                 raise
             evidence = RefreshEvidence.failed(type(error).__name__)
             stats.errors += 1
+            card_reason(row, "item", reason_code(error))
             status = getattr(getattr(error, "response", None), "status_code", None)
             try:
                 async with get_session() as session:
@@ -1275,6 +1308,8 @@ async def refetch_listing_details(
                         stats.deactivated += 1
                     await record_attempt(session, row.id, evidence, attempted_at=attempted_at)
             except BaseException as persistence_error:
+                add_reason(stats.reason_counts, row.platform, "persistence",
+                           reason_code(persistence_error))
                 if isinstance(error, asyncio.CancelledError):
                     raise error from persistence_error
                 raise
@@ -1289,7 +1324,8 @@ async def refetch_listing_details(
     checkpoint(final=False)
     try:
         if not rows or budget <= 0:
-            stats.skipped = len(rows)
+            for row in candidates:
+                skip(row, "source_budget_exhausted")
             stop_reason = "budget_exhausted" if rows else "empty"
             return stats
         execution = await run_fair_refresh(
@@ -1297,15 +1333,27 @@ async def refetch_listing_details(
             item_timeout_sec=get_settings().refetch_per_fetch_timeout_sec,
             context_factory=lambda platform: scrapers[platform](),
             source_weights=source_weights,
+            on_source_error=source_error,
         )
-        stats.source_errors = dict(execution.source_errors)
-        stats.skipped += sum(item.row.id not in attempted_ids for item in execution.items)
+        stats.source_errors = {
+            platform: source_error_code(code) for platform, code in execution.source_errors.items()
+        }
+        for item in execution.items:
+            if item.row.id not in attempted_ids:
+                skip(item.row, reason_code(item.evidence.reason))
+            elif (card_reasons.get(item.row.id) == ("item", "cancelled")
+                  and reason_code(item.evidence.reason) == "timeout"):
+                # asyncio.timeout translates its own cancellation outside the callback.
+                card_reason(item.row, "item", "timeout")
         stop_reason = (
             "degraded" if stats.errors or stats.skipped or stats.source_errors else "completed"
         )
         return stats
     except asyncio.CancelledError:
         stop_reason = "cancelled"
+        for row in candidates:
+            if row.id not in attempted_ids and row.id not in skipped_ids:
+                skip(row, "cancelled")
         raise
     except BaseException:
         stop_reason = "failed"

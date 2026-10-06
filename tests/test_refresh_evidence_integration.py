@@ -167,6 +167,7 @@ async def test_cancel_records_attempt_failure_and_final_checkpoint(db):
 
     report = json.loads((orch.get_settings().data_dir / "state/freshness/refetch.json").read_text())
     assert report["final"] is True and report["stop_reason"] == "cancelled"
+    assert report["reason_counts"] == {row.platform.value: {"item": {"cancelled": 1}}}
 
 
 async def test_hanging_first_source_leaves_time_for_second_source(db, monkeypatch):
@@ -356,6 +357,7 @@ async def test_cancel_after_sql_commit_settles_media_and_records_actual_success(
     state = json.loads((orch.get_settings().data_dir / "state/freshness/refetch.json").read_text())
     assert state["final"] and state["stop_reason"] == "cancelled"
     assert state["verified"] == 1 and state["errors"] == 0
+    assert state["reason_counts"] == {}
 
 
 async def test_source_timeout_during_commit_preserves_success_and_continues_queue(db, monkeypatch):

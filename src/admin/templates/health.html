@@ -65,12 +65,21 @@
   Выбрано {{ public_run.selected }}, подтверждено {{ public_run.verified }},
   ошибок {{ public_run.errors }}, пропущено {{ public_run.skipped }},
   ошибок источников {{ public_run.source_error_count }}.
+  Недоступность подтверждена для {{ public_run.deactivated }} карточек.
   {% if not public_run.final %}Завершение не подтверждено.{% endif %}
   {% if public_run.stop_reason == 'budget_exhausted' %}Исчерпан бюджет времени.{% endif %}
   {% if public_run.overdue %}Нет новой записи более 14 часов.{% endif %}</p>
 {% if public_run.source_errors %}<ul>
   {% for source, code in public_run.source_errors.items() %}<li>{{ source }}: {{ code }}</li>{% endfor %}
 </ul>{% endif %}
+{% if public_run.reason_counts %}<ul>
+  {% for source, stages in public_run.reason_counts.items() %}
+  {% for stage, reasons in stages.items() %}
+  {% for code, count in reasons.items() %}<li>{{ source }} / {{ stage }}: {{ code }} × {{ count }}</li>{% endfor %}
+  {% endfor %}{% endfor %}
+</ul>{% endif %}
+{% if public_run.diagnostics_valid is defined and not public_run.diagnostics_valid %}
+<p>Причины ошибок не подтверждены: некорректная запись диагностики.</p>{% endif %}
 {% endif %}
 <h3>Хватает ли мощности обновлений</h3>
 <p>Сейчас {{ capacity.active }} активных объявлений и {{ ops.public_overlays }} публичных публикаций

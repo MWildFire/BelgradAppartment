@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.offline_assets import offline_context
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_DIR = Path(__file__).parent / "site" / "_artifacts"
 
@@ -228,7 +230,10 @@ def browser():  # type: ignore[no-untyped-def]
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, args=[
+            "--proxy-server=http://127.0.0.1:9",
+            "--proxy-bypass-list=127.0.0.1;localhost;[::1]",
+        ])
         try:
             yield browser
         finally:
@@ -238,7 +243,7 @@ def browser():  # type: ignore[no-untyped-def]
 @pytest.fixture
 def page(browser):  # type: ignore[no-untyped-def]
     """Fresh page per test (own context → isolated localStorage/cookies)."""
-    context = browser.new_context()
+    context = offline_context(browser)
     pg = context.new_page()
     try:
         yield pg

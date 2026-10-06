@@ -28,10 +28,13 @@ def main():
         "--activate", action="store_true", help="apply staged release through gates"
     )
     parser.add_argument("--sudo", action="store_true", help="use sudo for remote activation")
+    parser.add_argument("--code-only-data-backup", action="store_true",
+                        help="Explicit same-schema/config/dependency release with DB+media proof")
     args = parser.parse_args()
     require(re.fullmatch(r"[A-Za-z0-9_.-]+@[A-Za-z0-9_.:-]+", args.target), "invalid SSH target")
     require(Path(args.uv_bin).is_absolute(), "absolute uv binary path required")
-    validate_backup(json.loads(args.backup_receipt.read_text()))
+    validate_backup(json.loads(args.backup_receipt.read_text()),
+                    allow_data_only=args.code_only_data_backup)
     options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
     if args.ssh_key:
         options.extend(["-i", str(args.ssh_key)])
@@ -80,6 +83,8 @@ def main():
         ]
         if args.fallback_packet:
             command.extend(["--fallback-packet", staging + "/fallback.tar.gz"])
+        if args.code_only_data_backup:
+            command.append("--code-only-data-backup")
         if args.activate:
             subprocess.run(["ssh", *options, args.target, shlex.join(command)], check=True)
         print(

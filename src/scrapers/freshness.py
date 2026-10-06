@@ -385,6 +385,7 @@ async def run_fair_refresh(
     item_timeout_sec: float,
     context_factory: Callable[[Platform], AbstractAsyncContextManager[Any]] = _empty_context,
     source_weights: Mapping[Platform, float] | None = None,
+    on_source_error: Callable[[Platform, str], None] | None = None,
 ) -> FairExecutionResult:
     """Reserve a share of remaining time for every remaining source; one context at a time.
 
@@ -467,6 +468,8 @@ async def run_fair_refresh(
                     )
         else:
             source_errors[platform.value] = source_code
+        if platform.value in source_errors and on_source_error is not None:
+            on_source_error(platform, source_code)
         for row in rows:
             if row.id not in attempted_ids:
                 items.append(RefreshExecution(row, False, RefreshEvidence.failed(source_code)))

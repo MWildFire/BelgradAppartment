@@ -42,6 +42,7 @@ async def test_public_failure_visible_immediately_and_does_not_claim_full_succes
     isolated.write_text(json.dumps(checkpoint(
         errors=1, verified=2,
         source_errors={"NEKRETNINE": "TimeoutError"},
+        reason_counts={"HALOOGLASI": {"item": {"incomplete_photos": 1}}},
         private_payload="contact and private URL must not escape",
     )))
     result = await report()
@@ -70,7 +71,31 @@ async def test_public_failure_visible_immediately_and_does_not_claim_full_succes
     )
     assert "ошибками</strong>" in rendered and "подтверждено 2" in rendered
     assert "NEKRETNINE: TimeoutError" in rendered
+    assert "HALOOGLASI / item: incomplete_photos \u00d7 1" in rendered
     assert "contact and private URL" not in rendered
+
+
+@pytest.mark.parametrize("diagnostics", [
+    {"private URL": {"item": {"timeout": 1}}},
+    {"NEKRETNINE": {"private URL": {"timeout": 1}}},
+    {"NEKRETNINE": {"item": {"private URL": 1}}},
+    {"NEKRETNINE": {"item": {"timeout": True}}},
+    {"NEKRETNINE": {"item": {"timeout": -1}}},
+    {"NEKRETNINE": {"item": {"timeout": "secret"}}},
+    [],
+])
+def test_malformed_diagnostics_cannot_claim_success_or_leak_values(isolated, diagnostics):
+    isolated.write_text(json.dumps(checkpoint(reason_counts=diagnostics)))
+    result = health.public_refresh_checkpoint(isolated, now=NOW)
+    assert result["status"] == "degraded" and result["diagnostics_valid"] is False
+    assert result["reason_counts"] == {}
+    assert "private URL" not in json.dumps(result, default=str)
+
+
+def test_legacy_checkpoint_remains_readable(isolated):
+    isolated.write_text(json.dumps(checkpoint()))
+    result = health.public_refresh_checkpoint(isolated, now=NOW)
+    assert result["status"] == "success" and result["reason_counts"] == {}
 
 
 @pytest.mark.parametrize("change,status", [

@@ -151,14 +151,15 @@ def validate_tests(receipt, revision, checks):
     )
 
 
-def validate_backup(receipt, now=None):
+def validate_backup(receipt, now=None, *, allow_data_only=False):
     require(receipt.get("result") == "data_restore_verified", "backup restore is not verified")
     created = datetime.fromisoformat(receipt["created_at"])
     require(created.tzinfo is not None, "backup timestamp missing timezone")
     age = ((now or datetime.now(UTC)) - created).total_seconds() / 3600
     require(-0.1 <= age <= 36, "release requires a backup no older than 36 hours")
     backup_format = receipt.get("backup_format", "tar_archive")
-    if backup_format == "directory_generation":
+    data_only = backup_format == "data_only_directory_generation"
+    if backup_format == "directory_generation" or data_only:
         digest = receipt.get("manifest_sha256", "")
         require(
             re.fullmatch(r"[0-9a-f]{64}", digest)
@@ -176,10 +177,22 @@ def validate_backup(receipt, now=None):
             "verified archive SHA-256 missing",
         )
     require(receipt.get("offhost_verified") is True, "off-host backup is not verified")
-    require(
-        receipt.get("protected_recovery_verified") is True,
-        "protected configuration/session recovery is not verified",
-    )
+    if data_only:
+        require(allow_data_only, "data-only backup requires explicit code-only release mode")
+        require(receipt.get("protected_recovery_verified") is False
+                and receipt.get("backup_scope") == "db_media"
+                and (receipt.get("credential_inspection", {}).get("result")
+                     == "heuristic_scan_passed")
+                and receipt.get("source_snapshot_immutable") is True
+                and receipt.get("media_decode_verified") is True
+                and type(receipt.get("media_files_verified")) is int
+                and receipt["media_files_verified"] > 0
+                and receipt.get("application", {}).get("network") == "disabled"
+                and re.fullmatch(r"[a-f0-9]{40}", receipt.get("source_revision", "")),
+                "incomplete data-only recovery proof")
+    else:
+        require(receipt.get("protected_recovery_verified") is True,
+                "protected configuration/session recovery is not verified")
     application = receipt.get("application", {})
     require(
         all(application.get(name) == 200 for name in ("catalog", "apartment", "photo"))
@@ -187,6 +200,29 @@ def validate_backup(receipt, now=None):
         "application/photo restore gate missing",
     )
     require(receipt.get("database", {}).get("revisions"), "backup schema revision missing")
+
+
+def validate_data_only_release(root, manifest, backup):
+    """Narrow opt-in: same schema/dependencies/config/units, with the current runtime as rollback.
+
+    This does not assert protected disaster recovery and never permits a schema transition.
+    Default deployments retain the existing protected-backup gate.
+    """
+    require(backup.get("backup_format") == "data_only_directory_generation",
+            "code-only mode requires a data-only receipt")
+    previous = read_json(root / "release.json")
+    require(previous["revision"] == backup.get("source_revision"),
+            "data-only snapshot belongs to a different source release")
+    before, after = previous["files"], manifest["files"]
+    fixed = {"pyproject.toml", "uv.lock", "alembic.ini", "src/config.py", "src/db/models.py",
+             "scripts/runtime_contract.json", "data/districts.yaml"}
+    names = fixed | {name for name in set(before) | set(after)
+                     if name.startswith(("alembic/", "deploy/"))}
+    require(all(name in before and name in after and before[name] == after[name] for name in names),
+            "data-only mode forbids schema/dependency/config/unit changes")
+    require(all(allowed_path(name) and (root / name).is_file()
+                and hash_bytes((root / name).read_bytes()) == before[name] for name in names),
+            "live schema/dependency/config/unit files differ from source release")
 
 
 def allowed_path(name):
@@ -991,7 +1027,11 @@ def activate(args):
     require(os.geteuid() == 0, "activation requires root for coherent systemd update")
     require(args.uv_bin.is_absolute() and args.uv_bin.is_file(), "explicit uv binary unavailable")
     backup = read_json(args.backup_receipt)
-    validate_backup(backup)
+    code_only = bool(getattr(args, "code_only_data_backup", False))
+    if code_only:
+        validate_backup(backup, allow_data_only=True)
+    else:
+        validate_backup(backup)
     with (root / "data/state/release.lock").open("a+") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1001,6 +1041,10 @@ def activate(args):
             unpacked = Path(temporary)
             manifest = unpack_packet(args.packet, unpacked)
             validate_tests(manifest["tests"], manifest["revision"], CHECKS)
+            if code_only:
+                require(getattr(args, "fallback_packet", None) is None,
+                        "code-only mode rolls back to the current verified runtime")
+                validate_data_only_release(root, manifest, backup)
             require(
                 current_revisions(root / "data/otz.db") == sorted(backup["database"]["revisions"]),
                 "live schema no longer matches the verified backup",
@@ -1032,6 +1076,10 @@ def activate(args):
         # Derive the migration destination from the checked artifact itself. A stale
         # declaration must not bypass compatibility checks before `upgrade head`.
         target_heads = staged_heads(new_python, release / "code")
+        if code_only:
+            require(sorted(target_heads) == sorted(live_revisions),
+                    "data-only mode forbids database migrations")
+            state.update(backup_scope="db_media", code_only=True, protected_recovery_verified=False)
         if target_contract.is_file():
             require(
                 sorted(read_json(target_contract).get("migration_heads", []))
@@ -1075,11 +1123,12 @@ def activate(args):
                     str(root / "deploy"),
                 ]
             )
-            run(
-                [str(root / ".venv/bin/alembic"), "upgrade", "head"],
-                cwd=root,
-                env={**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{root}/data/otz.db"},
-            )
+            if not code_only:
+                run(
+                    [str(root / ".venv/bin/alembic"), "upgrade", "head"],
+                    cwd=root,
+                    env={**os.environ, "DATABASE_URL": f"sqlite+aiosqlite:///{root}/data/otz.db"},
+                )
             require(current_revisions(root / "data/otz.db") == sorted(target_heads),
                     "migrated schema does not match staged migration heads")
             for unit in sorted((root / "deploy").glob("otz-*")):
@@ -1136,6 +1185,8 @@ def main():
                             help="Separately tested queue-aware fallback for the first migration")
     activation.add_argument("--remote-root", type=Path, required=True)
     activation.add_argument("--backup-receipt", type=Path, required=True)
+    activation.add_argument("--code-only-data-backup", action="store_true",
+                            help="DB+media proof; no schema/config/units/dependency changes")
     activation.add_argument("--uv-bin", type=Path, required=True)
     rollback = commands.add_parser("rollback")
     rollback.add_argument("--remote-root", type=Path, required=True)

@@ -17,6 +17,7 @@ from src.db.models import MatchDelivery, Platform, SiteListing, SubscriptionDeli
 from src.jobs.market_coverage import market_coverage
 from src.jobs.run_history import read_runs
 from src.scrapers.freshness import RefreshCandidate, load_candidates, quota_estimates, utc
+from src.scrapers.refresh_diagnostics import read_reason_counts, source_error_code
 
 
 def _datetime(value):
@@ -58,8 +59,9 @@ def public_refresh_checkpoint(path: Path, *, now: datetime) -> dict:
     unknown = {
         "status": "unknown", "run_id": None, "checkpoint_at": None, "final": False,
         "stop_reason": None,
-        "selected": 0, "updated": 0, "verified": 0, "errors": 0, "skipped": 0,
+        "selected": 0, "updated": 0, "verified": 0, "errors": 0, "skipped": 0, "deactivated": 0,
         "source_errors": {}, "source_error_count": 0, "overdue": False,
+        "reason_counts": {}, "diagnostics_valid": False,
     }
     try:
         with path.open("rb") as stream:
@@ -76,6 +78,7 @@ def public_refresh_checkpoint(path: Path, *, now: datetime) -> dict:
         counts = {name: value.get(name) for name in (
             "selected", "updated", "verified", "errors", "skipped",
         )}
+        counts["deactivated"] = value.get("deactivated", 0)
         source_errors = value.get("source_errors")
         if (
             not isinstance(run_id, str) or not re.fullmatch(r"[0-9a-f]{32}", run_id)
@@ -88,12 +91,13 @@ def public_refresh_checkpoint(path: Path, *, now: datetime) -> dict:
         ):
             return unknown
         safe_sources = {
-            platform.value: (code if isinstance(code, str)
-                             and re.fullmatch(r"[A-Za-z0-9_]{1,80}", code) else "unknown")
+            platform.value: (source_error_code(code) if isinstance(code, str) else "RefreshError")
             for platform in Platform
             if (code := source_errors.get(platform.value)) is not None
         }
-        failures = counts["errors"] or counts["skipped"] or source_errors
+        reasons = read_reason_counts(value.get("reason_counts", {}))
+        failures = (counts["errors"] or counts["skipped"] or source_errors
+                    or reasons or reasons is None)
         if not final:
             status = "stalled" if now - checked > timedelta(minutes=45) else "running"
         elif stop in {"cancelled", "failed"}:
@@ -109,6 +113,7 @@ def public_refresh_checkpoint(path: Path, *, now: datetime) -> dict:
             "status": status, "run_id": run_id, "checkpoint_at": checked, "final": final,
             "stop_reason": stop,
             **counts, "source_errors": safe_sources, "source_error_count": len(source_errors),
+            "reason_counts": reasons or {}, "diagnostics_valid": reasons is not None,
             # 19:00 -> 08:00 plus 5-minute jitter and a 45-minute service window.
             "overdue": now - checked > timedelta(hours=14),
         }

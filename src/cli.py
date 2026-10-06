@@ -1511,10 +1511,10 @@ def nightly_refresh(
     dry_run: bool,
     no_notify: bool,
 ) -> None:
-    """Nightly maintenance: incremental daily scrape or full weekly refresh.
+    """Nightly maintenance: full scrape by default, optional incremental scrape.
 
-    The daily systemd job uses ``--incremental`` to keep metered proxy traffic bounded. The
-    weekly full unit omits it and performs the coverage/stale sweep.
+    The canonical daily and weekly systemd units both use full mode. ``--incremental``
+    remains an explicit operator option and skips the coverage/stale sweep.
     """
     run_cooperatively(
         _nightly_refresh(max_pages, inactive_after_days, skip_sweep, skip_scrape, incremental,
