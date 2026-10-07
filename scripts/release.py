@@ -151,14 +151,19 @@ def validate_tests(receipt, revision, checks):
     )
 
 
-def validate_backup(receipt, now=None, *, allow_data_only=False):
+def validate_backup(receipt, now=None, *, allow_data_only=False, allow_sanitized=False):
+    require(not allow_sanitized or allow_data_only,
+            "sanitized URL-loss acknowledgement requires explicit code-only mode")
     require(receipt.get("result") == "data_restore_verified", "backup restore is not verified")
     created = datetime.fromisoformat(receipt["created_at"])
     require(created.tzinfo is not None, "backup timestamp missing timezone")
     age = ((now or datetime.now(UTC)) - created).total_seconds() / 3600
     require(-0.1 <= age <= 36, "release requires a backup no older than 36 hours")
     backup_format = receipt.get("backup_format", "tar_archive")
-    data_only = backup_format == "data_only_directory_generation"
+    sanitized = backup_format == "sanitized_directory_generation"
+    require(not allow_sanitized or sanitized,
+            "sanitized URL-loss acknowledgement requires a sanitized receipt")
+    data_only = backup_format == "data_only_directory_generation" or sanitized
     if backup_format == "directory_generation" or data_only:
         digest = receipt.get("manifest_sha256", "")
         require(
@@ -179,8 +184,18 @@ def validate_backup(receipt, now=None, *, allow_data_only=False):
     require(receipt.get("offhost_verified") is True, "off-host backup is not verified")
     if data_only:
         require(allow_data_only, "data-only backup requires explicit code-only release mode")
+        require(not sanitized or allow_sanitized,
+                "sanitized backup requires explicit acknowledgement of 43 lost URLs")
+        require(sanitized or not any(name in receipt for name in (
+            "sanitization", "affected_albums", "listing_albums",
+        )), "sanitized proof must not be relabelled as ordinary data-only recovery")
+        if sanitized:
+            require(all(isinstance(receipt.get(name), dict) for name in (
+                "credential_inspection", "database", "application",
+            )), "sanitized recovery proof has invalid object types")
         require(receipt.get("protected_recovery_verified") is False
-                and receipt.get("backup_scope") == "db_media"
+                and receipt.get("backup_scope")
+                == ("db_media_sanitized" if sanitized else "db_media")
                 and (receipt.get("credential_inspection", {}).get("result")
                      == "heuristic_scan_passed")
                 and receipt.get("source_snapshot_immutable") is True
@@ -190,6 +205,8 @@ def validate_backup(receipt, now=None, *, allow_data_only=False):
                 and receipt.get("application", {}).get("network") == "disabled"
                 and re.fullmatch(r"[a-f0-9]{40}", receipt.get("source_revision", "")),
                 "incomplete data-only recovery proof")
+        if sanitized:
+            validate_sanitized_backup(receipt)
     else:
         require(receipt.get("protected_recovery_verified") is True,
                 "protected configuration/session recovery is not verified")
@@ -202,13 +219,65 @@ def validate_backup(receipt, now=None, *, allow_data_only=False):
     require(receipt.get("database", {}).get("revisions"), "backup schema revision missing")
 
 
+def validate_sanitized_backup(receipt):
+    """Accept only the reviewed v1 loss contract, never relabel it as protected recovery.
+
+    The receipt attests a completed independent receiver/restore. This validates that
+    attestation; it does not rescan a remote backup or authorize production activation.
+    """
+    expected = {
+        "format": "renfinder-db-media-sanitized-v1", "scope": "db_media_sanitized",
+        "source_revision": receipt.get("source_revision"),
+        "revisions": ["0016_identity_edges"], "source_database_modified": False,
+        "marker_scheme": "restore-local", "array_positions_preserved": True,
+        "original_urls_retained": False, "other_database_values_unchanged": True,
+        "protected_recovery_verified": False, "sqlite_journal_mode": "delete",
+        "sqlite_freelist_count": 0, "database_sidecars": [],
+        "credential_inspection": {"result": "heuristic_scan_passed", "scanner_exemptions": []},
+        "redaction": {
+            "affected_cells": 5, "affected_photo_slots": 147, "halo_cells": 2,
+            "halo_urls": 40, "resizer_cells": 3, "resizer_urls": 3,
+            "remaining_original_urls": 104, "replaced_url_values": 43,
+        },
+    }
+    # Canonical JSON comparison also distinguishes booleans from numeric counters.
+    def exact(actual, target):
+        return json.dumps(actual, sort_keys=True) == json.dumps(target, sort_keys=True)
+
+    require(exact(receipt.get("sanitization"), expected),
+            "sanitized recovery contract differs from reviewed 43-URL loss")
+    albums = {"listings": 5, "photos": 147, "markers": 43}
+    require(exact(receipt.get("affected_albums"), albums)
+            and exact(receipt.get("listing_albums"), albums | {"network": "disabled"}),
+            "sanitized album restore proof missing or different")
+    inspection = receipt.get("credential_inspection", {})
+    require(inspection.get("arbitrary_secrets_absence_proven") is False
+            and all(type(inspection.get(name)) is int and inspection[name] > 0
+                    for name in ("bytes_scanned", "cells_scanned")),
+            "sanitized credential inspection proof incomplete")
+    require(receipt.get("database", {}).get("revisions") == ["0016_identity_edges"]
+            and receipt["media_files_verified"] >= 147
+            and receipt.get("source_temporary_snapshot_removed") is True
+            and receipt.get("personal_data_present") is True
+            and receipt.get("health_receipt_published") is False
+            and type(receipt.get("media_reused_from_verified_seed")) is int
+            and receipt["media_reused_from_verified_seed"] == 0
+            and type(receipt.get("files")) is int
+            and type(receipt.get("files_transferred")) is int
+            and receipt["files_transferred"] == receipt["files"]
+            == receipt["media_files_verified"] + 2,
+            "sanitized independent transfer/cleanup proof incomplete")
+
+
 def validate_data_only_release(root, manifest, backup):
     """Narrow opt-in: same schema/dependencies/config/units, with the current runtime as rollback.
 
     This does not assert protected disaster recovery and never permits a schema transition.
     Default deployments retain the existing protected-backup gate.
     """
-    require(backup.get("backup_format") == "data_only_directory_generation",
+    require(backup.get("backup_format") in {
+                "data_only_directory_generation", "sanitized_directory_generation",
+            },
             "code-only mode requires a data-only receipt")
     previous = read_json(root / "release.json")
     require(previous["revision"] == backup.get("source_revision"),
@@ -1028,8 +1097,11 @@ def activate(args):
     require(args.uv_bin.is_absolute() and args.uv_bin.is_file(), "explicit uv binary unavailable")
     backup = read_json(args.backup_receipt)
     code_only = bool(getattr(args, "code_only_data_backup", False))
+    sanitized_ack = bool(getattr(args, "acknowledge_sanitized_url_loss", False))
+    require(not sanitized_ack or code_only,
+            "sanitized URL-loss acknowledgement requires explicit code-only mode")
     if code_only:
-        validate_backup(backup, allow_data_only=True)
+        validate_backup(backup, allow_data_only=True, allow_sanitized=sanitized_ack)
     else:
         validate_backup(backup)
     with (root / "data/state/release.lock").open("a+") as lock:
@@ -1079,7 +1151,9 @@ def activate(args):
         if code_only:
             require(sorted(target_heads) == sorted(live_revisions),
                     "data-only mode forbids database migrations")
-            state.update(backup_scope="db_media", code_only=True, protected_recovery_verified=False)
+            state.update(backup_scope=backup["backup_scope"], code_only=True,
+                         protected_recovery_verified=False,
+                         sanitized_url_loss_acknowledged=sanitized_ack)
         if target_contract.is_file():
             require(
                 sorted(read_json(target_contract).get("migration_heads", []))
@@ -1187,6 +1261,8 @@ def main():
     activation.add_argument("--backup-receipt", type=Path, required=True)
     activation.add_argument("--code-only-data-backup", action="store_true",
                             help="DB+media proof; no schema/config/units/dependency changes")
+    activation.add_argument("--acknowledge-sanitized-url-loss", action="store_true",
+                            help="With code-only mode: reviewed v1 loss of 43 URLs in backup")
     activation.add_argument("--uv-bin", type=Path, required=True)
     rollback = commands.add_parser("rollback")
     rollback.add_argument("--remote-root", type=Path, required=True)

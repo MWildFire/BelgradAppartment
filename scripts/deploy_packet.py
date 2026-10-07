@@ -30,11 +30,14 @@ def main():
     parser.add_argument("--sudo", action="store_true", help="use sudo for remote activation")
     parser.add_argument("--code-only-data-backup", action="store_true",
                         help="Explicit same-schema/config/dependency release with DB+media proof")
+    parser.add_argument("--acknowledge-sanitized-url-loss", action="store_true",
+                        help="With code-only mode: reviewed v1 loss of 43 URLs in backup")
     args = parser.parse_args()
     require(re.fullmatch(r"[A-Za-z0-9_.-]+@[A-Za-z0-9_.:-]+", args.target), "invalid SSH target")
     require(Path(args.uv_bin).is_absolute(), "absolute uv binary path required")
     validate_backup(json.loads(args.backup_receipt.read_text()),
-                    allow_data_only=args.code_only_data_backup)
+                    allow_data_only=args.code_only_data_backup,
+                    allow_sanitized=args.acknowledge_sanitized_url_loss)
     options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
     if args.ssh_key:
         options.extend(["-i", str(args.ssh_key)])
@@ -85,6 +88,8 @@ def main():
             command.extend(["--fallback-packet", staging + "/fallback.tar.gz"])
         if args.code_only_data_backup:
             command.append("--code-only-data-backup")
+        if args.acknowledge_sanitized_url_loss:
+            command.append("--acknowledge-sanitized-url-loss")
         if args.activate:
             subprocess.run(["ssh", *options, args.target, shlex.join(command)], check=True)
         print(
