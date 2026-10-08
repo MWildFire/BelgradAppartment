@@ -34,6 +34,8 @@ from src.telegram.delivery_ledger import (
     prepare_recipients,
 )
 
+from src.telegram.run_summary import format_run_summary
+
 logger = logging.getLogger(__name__)
 
 MAX_ALBUM = 10
@@ -327,6 +329,10 @@ async def send_run_summary(
     matched: int,
     no_match: int,
     errors: int = 0,
+    needs_review: int = 0,
+    pending: int = 0,
+    unresolved: int = 0,
+    selected: int | None = None,
     duration_seconds: float | None = None,
     label: str = "Прогон обработки",
 ) -> None:
@@ -342,31 +348,16 @@ async def send_run_summary(
         from src.telegram.bot_delivery import send_run_summary_via_bot
         await send_run_summary_via_bot(
             matched=matched, no_match=no_match, errors=errors,
+            needs_review=needs_review, pending=pending, unresolved=unresolved, selected=selected,
             duration_seconds=duration_seconds, label=label,
         )
         return
 
-    total = matched + no_match + errors
-    lines = [
-        f"📊 {label} — завершён",
-        "",
-        f"Обработано: {total}",
-        f"✅ Найдено матчей: {matched}",
-        f"❌ Без совпадения: {no_match}",
-    ]
-    if errors:
-        lines.append(f"⚠️ Ошибки: {errors}")
-    if duration_seconds is not None:
-        if duration_seconds < 60:
-            duration = f"{duration_seconds:.0f} сек"
-        elif duration_seconds < 3600:
-            duration = f"{int(duration_seconds // 60)} мин {int(duration_seconds % 60)} сек"
-        else:
-            h, rem = divmod(int(duration_seconds), 3600)
-            duration = f"{h} ч {rem // 60} мин"
-        lines.append(f"⏱ Время: {duration}")
-
-    text = "\n".join(lines)
+    text = format_run_summary(
+        matched=matched, no_match=no_match, errors=errors, needs_review=needs_review,
+        pending=pending, unresolved=unresolved, selected=selected,
+        duration_seconds=duration_seconds, label=label,
+    )
     recipient = await _resolve_delivery_target(client)
     await client.send_message(recipient, text)
     logger.info(

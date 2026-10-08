@@ -368,23 +368,15 @@ async def _run_llm_validation(
 
 
 async def match_all_pending(cache: CandidateCache | None = None) -> list[MatchResult]:
-    """Run matcher for every InboundPost in NEW status. Useful for batch backfill.
+    """Run matcher for automatically eligible NEW posts. Useful for batch backfill.
 
     Builds the candidate snapshot ONCE (unless the caller already passes one), so a batch
     of N inbounds does a single candidates SELECT instead of N full table scans.
     """
+    from src.matching.validation_queue import automatic_inbound_ids
+
+    ids = await automatic_inbound_ids()
     async with get_session() as s:
-        ids = list(
-            (
-                await s.execute(
-                    select(InboundPost.id)
-                    .where(InboundPost.status == InboundStatus.NEW)
-                    .order_by(InboundPost.received_at)
-                )
-            )
-            .scalars()
-            .all()
-        )
         if ids and cache is None:
             cache = await load_candidate_cache(s)
     results: list[MatchResult] = []

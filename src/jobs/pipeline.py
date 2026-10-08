@@ -18,6 +18,7 @@ from telethon import TelegramClient
 
 from src.config import get_settings
 from src.matching.matcher import MatchResult, match_inbound
+from src.matching.validation_queue import may_refresh
 from src.scrapers.orchestrator import scrape_all_with_throttle
 from src.telegram.delivery import send_match_to_saved
 from src.telegram.telemetry import notify_no_match
@@ -40,7 +41,7 @@ async def process_new_inbound(
     """
     settings = get_settings()
 
-    if refresh_listings:
+    if refresh_listings and await may_refresh(inbound_id):
         try:
             ran, _results = await scrape_all_with_throttle()
             if ran:

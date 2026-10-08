@@ -401,15 +401,21 @@ async def _backfill(
     await client.start()
 
     # Track per-run statistics so we can send Дарья a single summary message at the end.
-    run_stats = {"matched": 0, "no_match": 0, "errors": 0}
+    from src.matching.validation_queue import unresolved_counts
+
+    run_stats = {"matched": 0, "no_match": 0, "errors": 0, "needs_review": 0, "pending": 0}
 
     async def on_inbound(inbound_id: int) -> None:
         try:
             result = await process_new_inbound(inbound_id, client=client)
             if result.status == "matched":
                 run_stats["matched"] += 1
-            else:
+            elif result.status == "no_match":
                 run_stats["no_match"] += 1
+            else:
+                counts = await unresolved_counts([inbound_id])
+                run_stats["needs_review"] += counts["needs_review"]
+                run_stats["pending"] += counts["pending"] or int(not counts["needs_review"])
         except Exception:
             run_stats["errors"] += 1
             logging.getLogger(__name__).exception("inbound=%s pipeline failed", inbound_id)
@@ -438,6 +444,7 @@ async def _backfill(
                     matched=run_stats["matched"],
                     no_match=run_stats["no_match"],
                     errors=run_stats["errors"],
+                    needs_review=run_stats["needs_review"], pending=run_stats["pending"],
                     duration_seconds=elapsed,
                     label="backfill",
                 )
@@ -540,7 +547,6 @@ def notify_subscriptions_cmd(since_hours: int, dry_run: bool) -> None:
 async def _monitor(do_backfill_first: bool) -> None:
     from telethon.errors import AuthKeyDuplicatedError, UnauthorizedError
 
-    from src.db.models import InboundPost, InboundStatus
     from src.db.session import get_session
     from src.jobs.pipeline import process_new_inbound
     from src.telegram.monitor import (
@@ -592,69 +598,18 @@ async def _monitor(do_backfill_first: bool) -> None:
                     f"  caught up: inserted={stats.posts_inserted} skipped={stats.skipped_no_photo}"
                 )
 
-            # Stranded NEW recovery: previous runs (e.g. killed by OOM mid-pipeline) can leave
-            # InboundPost rows in NEW status with the watermark already advanced past them, so
-            # backfill won't revisit them. Run the pipeline on whatever's left so they don't sit
-            # forever. Idempotent: process_new_inbound is a no-op once status flips off NEW.
-            async with get_session() as s:
-                stranded = list(
-                    (
-                        await s.execute(
-                            select(InboundPost.id)
-                            .where(InboundPost.status == InboundStatus.NEW)
-                            .order_by(InboundPost.received_at)
-                        )
-                    ).scalars().all()
-                )
-            if stranded:
-                import time as _time
+            from src.jobs.recovery import recover_new_posts
+            from src.telegram.delivery import send_run_summary, send_text_to_recipients
 
-                from src.db.models import InboundStatus as _IS
-                from src.telegram.delivery import send_run_summary, send_text_to_recipients
+            async def notify_start(text: str) -> None:
+                await send_text_to_recipients(client, text)
 
-                click.echo(f"→ Catching up {len(stranded)} stranded NEW post(s)...")
-                # Tell recipients we're catching up — silence here is the symptom Дарья wants
-                # to spot before scrolling the daily summary.
-                try:
-                    await send_text_to_recipients(
-                        client,
-                        f"🔄 Recovery: догоняем {len(stranded)} зависших NEW пост(ов) "
-                        "из предыдущего прогона. Через несколько минут пришлю итог.",
-                    )
-                except Exception:
-                    logging.getLogger(__name__).exception("recovery start notify failed")
+            async def notify_summary(**stats) -> None:
+                await send_run_summary(client, **stats)
 
-                started = _time.monotonic()
-                recovery_stats = {"matched": 0, "no_match": 0, "errors": 0}
-                for iid in stranded:
-                    try:
-                        await on_inbound(iid)
-                    except Exception:
-                        recovery_stats["errors"] += 1
-                        logging.getLogger(__name__).exception(
-                            "stranded inbound=%s pipeline failed", iid
-                        )
-                # Re-read final statuses so the summary reflects what actually landed.
-                async with get_session() as s:
-                    for iid in stranded:
-                        post = await s.get(InboundPost, iid)
-                        if post is None:
-                            continue
-                        if post.status == _IS.MATCHED:
-                            recovery_stats["matched"] += 1
-                        elif post.status == _IS.NO_MATCH:
-                            recovery_stats["no_match"] += 1
-                try:
-                    await send_run_summary(
-                        client,
-                        matched=recovery_stats["matched"],
-                        no_match=recovery_stats["no_match"],
-                        errors=recovery_stats["errors"],
-                        duration_seconds=_time.monotonic() - started,
-                        label=f"Recovery после рестарта ({len(stranded)} зависших)",
-                    )
-                except Exception:
-                    logging.getLogger(__name__).exception("recovery summary delivery failed")
+            await recover_new_posts(
+                on_inbound, notify_start=notify_start, notify_summary=notify_summary,
+            )
 
         click.echo("Live monitor running — Ctrl+C to stop.")
         from src.jobs.validation_retry import retry_loop
@@ -796,6 +751,7 @@ async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
     import time as _time
 
     from src.matching.matcher import match_all_pending
+    from src.matching.validation_queue import unresolved_counts
     from src.telegram.delivery import send_run_summary
 
     started = _time.monotonic()
@@ -813,7 +769,11 @@ async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
             f"matched_photos={r.matched_photos}  conf={r.confidence:.2f}"
         )
 
-    if results:
+    remaining = await unresolved_counts()
+    click.echo(
+        f"NEW queue: needs_review={remaining['needs_review']} pending={remaining['pending']}"
+    )
+    if results or any(remaining.values()):
         client = await _open_userbot_if_needed()
         try:
             hamming_note = f" (Hamming≤{hamming})" if hamming is not None else ""
@@ -821,6 +781,7 @@ async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
                 client,
                 matched=matched,
                 no_match=no_match,
+                **remaining,
                 duration_seconds=elapsed,
                 label=f"rematch-all{hamming_note}",
             )
@@ -835,6 +796,7 @@ async def _match_all() -> None:
     import time as _time
 
     from src.matching.matcher import match_all_pending
+    from src.matching.validation_queue import unresolved_counts
     from src.telegram.delivery import send_run_summary
 
     started = _time.monotonic()
@@ -854,13 +816,18 @@ async def _match_all() -> None:
             f"matched_photos={r.matched_photos}  conf={r.confidence:.2f}"
         )
 
-    if results:
+    remaining = await unresolved_counts()
+    click.echo(
+        f"NEW queue: needs_review={remaining['needs_review']} pending={remaining['pending']}"
+    )
+    if results or any(remaining.values()):
         client = await _open_userbot_if_needed()
         try:
             await send_run_summary(
                 client,
                 matched=matched,
                 no_match=no_match,
+                **remaining,
                 duration_seconds=elapsed,
                 label="match-all",
             )
@@ -1321,7 +1288,9 @@ async def _test_batch(n: int, from_id: int | None) -> None:
     # with the long-running otz-monitor.service.
     client = await _open_userbot_if_needed()
 
-    stats = {"matched": 0, "no_match": 0, "errors": 0}
+    from src.matching.validation_queue import unresolved_counts
+
+    stats = {"matched": 0, "no_match": 0, "errors": 0, "pending": 0}
     started = _time.monotonic()
     try:
         for iid in inbound_ids:
@@ -1330,9 +1299,12 @@ async def _test_batch(n: int, from_id: int | None) -> None:
                 if result.status == "matched":
                     stats["matched"] += 1
                     click.echo(f"  ✓ inbound={iid} → match (conf={result.confidence:.2f}, {result.method})")
-                else:
+                elif result.status == "no_match":
                     stats["no_match"] += 1
                     click.echo(f"  · inbound={iid} → no_match")
+                else:
+                    stats["pending"] += 1
+                    click.echo(f"  ⏳ inbound={iid} → validation_pending")
             except Exception as e:
                 stats["errors"] += 1
                 click.echo(f"  ⚠ inbound={iid} FAILED: {e}", err=True)
@@ -1343,6 +1315,7 @@ async def _test_batch(n: int, from_id: int | None) -> None:
                 matched=stats["matched"],
                 no_match=stats["no_match"],
                 errors=stats["errors"],
+                **(await unresolved_counts(inbound_ids)),
                 duration_seconds=elapsed,
                 label=f"test-batch (последних {len(inbound_ids)})",
             )
@@ -1352,8 +1325,10 @@ async def _test_batch(n: int, from_id: int | None) -> None:
         if client is not None:
             await client.disconnect()
 
+    state = "REQUIRES_ATTENTION" if stats["pending"] or stats["errors"] else "DONE"
     click.echo(
-        f"\n=== DONE: matched={stats['matched']} no_match={stats['no_match']} errors={stats['errors']} ==="
+        f"\n=== {state}: matched={stats['matched']} no_match={stats['no_match']} "
+        f"pending={stats['pending']} errors={stats['errors']} ==="
     )
 
 
@@ -3006,18 +2981,15 @@ async def _daily_summary(hours: int) -> None:
         f"→ {label}: inbound={inbound_total} matched={matched} no_match={no_match} delivered={delivered}"
     )
 
-    # Same layout as send_run_summary, composed locally so the photo-coverage section
-    # (W2-C6) rides in the same message instead of a second ping.
+    from src.matching.validation_queue import unresolved_counts
+    from src.telegram.run_summary import format_run_summary
+
+    remaining = await unresolved_counts()
     errors = max(matched - delivered, 0)
-    lines = [
-        f"📊 {label} — завершён",
-        "",
-        f"Обработано: {matched + no_match + errors}",
-        f"✅ Найдено матчей: {matched}",
-        f"❌ Без совпадения: {no_match}",
-    ]
-    if errors:
-        lines.append(f"⚠️ Ошибки: {errors}")
+    lines = format_run_summary(
+        matched=matched, no_match=no_match, errors=errors, **remaining, label=label,
+    ).splitlines()
+    lines.insert(2, "Нерешённые NEW ниже — вся текущая очередь, включая более старые посты.")
     coverage = await _photo_coverage_by_platform()
     lines.append("")
     lines.append("📷 Активные без фото:")

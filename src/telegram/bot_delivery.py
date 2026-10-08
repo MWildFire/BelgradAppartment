@@ -42,6 +42,8 @@ from src.telegram.delivery_ledger import (
     prepare_recipients,
 )
 
+from src.telegram.run_summary import format_run_summary
+
 logger = logging.getLogger(__name__)
 
 MAX_ALBUM = 10
@@ -361,30 +363,19 @@ async def send_run_summary_via_bot(
     matched: int,
     no_match: int,
     errors: int = 0,
+    needs_review: int = 0,
+    pending: int = 0,
+    unresolved: int = 0,
+    selected: int | None = None,
     duration_seconds: float | None = None,
     label: str = "Прогон обработки",
 ) -> None:
     """Text-only run summary, fanned out to every recipient."""
-    total = matched + no_match + errors
-    lines = [
-        f"📊 {label} — завершён",
-        "",
-        f"Обработано: {total}",
-        f"✅ Найдено матчей: {matched}",
-        f"❌ Без совпадения: {no_match}",
-    ]
-    if errors:
-        lines.append(f"⚠️ Ошибки: {errors}")
-    if duration_seconds is not None:
-        if duration_seconds < 60:
-            dur = f"{duration_seconds:.0f} сек"
-        elif duration_seconds < 3600:
-            dur = f"{int(duration_seconds // 60)} мин {int(duration_seconds % 60)} сек"
-        else:
-            h, rem = divmod(int(duration_seconds), 3600)
-            dur = f"{h} ч {rem // 60} мин"
-        lines.append(f"⏱ Время: {dur}")
-    text = "\n".join(lines)
+    text = format_run_summary(
+        matched=matched, no_match=no_match, errors=errors, needs_review=needs_review,
+        pending=pending, unresolved=unresolved, selected=selected,
+        duration_seconds=duration_seconds, label=label,
+    )
 
     recipients = _recipients()
     bot = _make_bot()
