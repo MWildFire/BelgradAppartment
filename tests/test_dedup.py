@@ -213,16 +213,15 @@ async def test_write_false_does_not_persist(factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_inactive_listings_excluded(factory) -> None:
-    """Only ACTIVE listings are grouped; an inactive same-apartment row is ignored."""
-    s1, s2 = _near(BASE_A, 1), _near(BASE_B, 1)
-    a = await _seed(factory, platform=Platform.NEKRETNINE, phashes=[s1, s2])
-    b = await _seed(factory, platform=Platform.HALOOGLASI,
-                    phashes=[_near(BASE_A, 2), _near(BASE_B, 2)], is_active=False)
+async def test_inactive_origin_retains_live_sibling(factory) -> None:
+    hashes = [_near(BASE_A, 0), _near(BASE_B, 0)]
+    a = await _seed(factory, platform=Platform.NEKRETNINE, phashes=hashes, is_active=False)
+    b = await _seed(factory, platform=Platform.HALOOGLASI, phashes=hashes)
     stats = await find_cross_platform_dupes()
-    assert stats.groups_found == 0
-    la = await _fetch(factory, a)
-    assert la.dup_group_id is None and la.is_primary is True
+    assert stats.groups_found == 1 and stats.active_scanned == 1
+    la, lb = await _fetch(factory, a), await _fetch(factory, b)
+    assert la.dup_group_id == lb.dup_group_id == min(a, b)
+    assert lb.is_primary and not la.is_primary
 
 
 @pytest.mark.asyncio
@@ -242,3 +241,66 @@ async def test_dupes_report_cli_renders_group(factory, capsys) -> None:
     # read-only: nothing persisted.
     la, lb = await _fetch(factory, a), await _fetch(factory, b)
     assert la.dup_group_id is None and lb.dup_group_id is None
+
+
+def test_index_matches_pairwise_groups_with_repeated_and_uneven_photos():
+    """The directed photo count and transitive closure must remain identical."""
+    import random
+    from src.matching.dedup import DedupRow, _group_rows, _group_rows_quadratic
+
+    rng = random.Random(7365)
+    for _ in range(120):
+        bases = [rng.getrandbits(64) for _ in range(12)]
+        rows = []
+        for i in range(24):
+            hashes = []
+            for _ in range(rng.randrange(0, 8)):
+                h = rng.choice(bases)
+                for bit in rng.sample(range(64), rng.randrange(0, 8)):
+                    h ^= 1 << bit
+                hashes.append(h)
+            if i % 4 == 0 and hashes:
+                hashes.extend([hashes[0]] * 2)
+            rows.append(DedupRow(i, tuple(hashes), len(hashes), bool(i % 2)))
+        distance = rng.choice([0, 1, 3, 6, 8])
+        minimum = rng.choice([1, 2, 3, 5])
+        assert _group_rows(rows, distance, minimum) == _group_rows_quadratic(
+            rows, distance, minimum,
+        )
+
+
+@pytest.mark.parametrize("distance", [0, 1, 6, 8])
+def test_index_finds_matches_across_bit_chunk_boundaries(distance):
+    from src.matching.dedup import DedupRow, _group_rows, _group_rows_quadratic
+
+    # Spread differences through distinct chunks, including the highest bit.
+    bits = [63, 0, 9, 18, 27, 36, 45, 54]
+    delta = sum(1 << bit for bit in bits[:distance])
+    rows = [
+        DedupRow(1, (BASE_D, BASE_A), 2, False),
+        DedupRow(2, (BASE_D ^ delta, BASE_A ^ delta), 2, False),
+        DedupRow(3, (BASE_D ^ delta ^ (1 << 62),), 1, False),
+    ]
+    actual = _group_rows(rows, distance, 2)
+    assert actual == _group_rows_quadratic(rows, distance, 2)
+    assert [r.id for r in actual[0]] == [1, 2]
+
+
+@pytest.mark.parametrize("distance,minimum", [(-1, 2), (9, 2), (64, 2), (6, 0)])
+def test_index_preserves_unusual_parameter_semantics(distance, minimum):
+    from src.matching.dedup import DedupRow, _group_rows, _group_rows_quadratic
+
+    rows = [DedupRow(1, (0, 1), 2, False), DedupRow(2, (3,), 1, False)]
+    assert _group_rows(rows, distance, minimum) == _group_rows_quadratic(
+        rows, distance, minimum,
+    )
+
+
+def test_index_preserves_out_of_range_hash_semantics():
+    from src.matching.dedup import DedupRow, _group_rows, _group_rows_quadratic
+
+    rows = [
+        DedupRow(1, (-1, -1), 2, False),
+        DedupRow(2, (1 << 65, 1 << 65), 2, False),
+    ]
+    assert _group_rows(rows, 6, 2) == _group_rows_quadratic(rows, 6, 2)

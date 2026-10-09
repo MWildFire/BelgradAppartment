@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from telethon import TelegramClient, events
 from telethon.tl.custom.message import Message
 from telethon.tl.types import Channel, Chat, MessageMediaPhoto, User
@@ -41,6 +42,7 @@ from src.integrations.yonote import (
     download_attachment,
     fetch_document,
 )
+from src.matching.photo_manifest import build_manifest
 from src.matching.phash import compute_phash_from_path
 from src.telegram.digest_parser import DigestLine, is_digest_post, parse_digest
 
@@ -162,7 +164,16 @@ async def backfill(
     Idempotent: replays from `last_processed_message_id + 1` (or `start_date` if first run).
     Updates the watermark after each inserted post.
     """
+    from src.telegram.digest_jobs import retry_pending
+
     stats = BackfillStats()
+    for post in await retry_pending(source_id=source.id):
+        stats.posts_inserted += 1
+        if on_inbound is not None:
+            try:
+                await on_inbound(post.id)
+            except Exception:
+                logger.exception("on_inbound callback failed for recovered digest=%s", post.id)
     entity = await client.get_entity(source.username or source.tg_id)
 
     kwargs: dict[str, object] = {"reverse": True}  # chronological order
@@ -192,7 +203,7 @@ async def backfill(
 # --------------------------------------------------------------------------- Live
 
 
-OnInboundCallable = "callable"  # type alias hint — runtime: any coroutine taking int
+OnInboundCallable = Callable[[int], Awaitable[None]]
 
 # One matcher pipeline at a time — a full pass loads CLIP embeddings (memory + CPU),
 # so concurrent live posts must queue rather than stack.
@@ -246,7 +257,6 @@ def register_live_handler(
             except Exception:
                 logger.exception("on_inbound callback failed for live post %s", post.id)
 
-    @client.on(events.NewMessage(chats=chat_filter))
     async def _handler(event: events.NewMessage.Event) -> None:
         msg: Message = event.message
         source = sources_by_tg.get(int(event.chat_id))
@@ -273,6 +283,7 @@ def register_live_handler(
             except Exception:
                 logger.exception("on_inbound callback failed for live post %s", post.id)
 
+    client.on(events.NewMessage(chats=chat_filter))(_handler)
     logger.info("Live handler registered for %d source(s)", len(chat_filter))
 
 
@@ -283,6 +294,7 @@ __all__ = [
     "add_source",
     "backfill",
     "connect_authorized",
+    "fetch_document",
     "make_client",
     "parse_channel_identifier",
     "register_live_handler",
@@ -404,6 +416,7 @@ async def _persist_regular_inbound(source_id: int, msgs: list[Message]) -> list[
                 post_date=post_date,
                 raw_text=raw_text,
                 photo_paths=photo_paths,
+                photo_evidence=build_manifest(photo_paths, photo_hashes),
                 photo_phashes=photo_hashes,
                 photo_embeddings=embeddings_blob,
                 status=InboundStatus.NEW,
@@ -433,7 +446,9 @@ async def _persist_regular_inbound(source_id: int, msgs: list[Message]) -> list[
         return []
 
 
-async def _select_existing_regular(s, source_id: int, tg_message_id: int) -> InboundPost | None:
+async def _select_existing_regular(
+    s: AsyncSession, source_id: int, tg_message_id: int
+) -> InboundPost | None:
     return (
         await s.execute(
             select(InboundPost).where(
@@ -446,109 +461,13 @@ async def _select_existing_regular(s, source_id: int, tg_message_id: int) -> Inb
 
 
 async def _persist_digest_inbound(source_id: int, leader: Message) -> list[InboundPost]:
-    """One Telegram message → N InboundPosts (one per YoNote share inside the digest).
-
-    For each share: fetch metadata + photos from YoNote, hash them, persist a fresh InboundPost
-    identified by `digest_share_id`. Skips lines whose YoNote fetch fails (logged) — partial
-    results are better than dropping the whole digest.
-
-    Watermark is only advanced after *all* lines have been processed (or the digest is empty/
-    fully duplicated). If we crash mid-digest (OOM, network) the watermark stays behind, so a
-    restart re-enters the same `leader.id` and the per-line idempotency check skips already-
-    persisted shares while processing the missing ones.
-    """
-    lines = parse_digest(leader)
-    if not lines:
-        logger.warning("[monitor] digest msg %s had no parsable lines", leader.id)
-        # Still advance the watermark so we don't reprocess.
-        async with get_session() as s:
-            await _advance_watermark(s, source_id, leader.id)
-        return []
+    from src.telegram.digest_jobs import enqueue, retry_pending
 
     post_date = leader.date or datetime.now(timezone.utc)
     if post_date.tzinfo is None:
         post_date = post_date.replace(tzinfo=timezone.utc)
-
-    settings = get_settings()
-    created: list[InboundPost] = []
-    any_fetch_ok = False
-
-    for idx, line in enumerate(lines):
-        # One sub-directory per share so LLM validator and downstream code can locate the
-        # apartment's photos.
-        slug = line.share_id.split("-")[0]
-        target_dir = settings.inbound_photos_dir / str(source_id) / str(leader.id) / f"digest-{slug}"
-
-        try:
-            yonote_doc = await fetch_document(line.share_id, line.yonote_team)
-        except YoNoteError:
-            logger.exception("[monitor] yonote fetch failed for share %s", line.share_id)
-            continue
-        except Exception:
-            logger.exception("[monitor] unexpected error fetching yonote share %s", line.share_id)
-            continue
-        any_fetch_ok = True
-
-        photo_paths, photo_hashes = await _download_yonote_photos(yonote_doc, target_dir)
-        if not photo_paths:
-            logger.warning(
-                "[monitor] yonote share %s had no downloadable photos — skipping",
-                line.share_id,
-            )
-            continue
-
-        embeddings_blob = await _compute_clip_blob(photo_paths, leader.id)
-        raw_text = _build_digest_raw_text(line, yonote_doc)
-
-        async with get_session() as s:
-            existing = (
-                await s.execute(
-                    select(InboundPost).where(
-                        InboundPost.source_channel_id == source_id,
-                        InboundPost.tg_message_id == leader.id,
-                        InboundPost.digest_share_id == line.share_id,
-                    )
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
-                continue
-
-            post = InboundPost(
-                source_channel_id=source_id,
-                tg_message_id=leader.id,
-                digest_share_id=line.share_id,
-                post_date=post_date,
-                raw_text=raw_text,
-                photo_paths=photo_paths,
-                photo_phashes=photo_hashes,
-                photo_embeddings=embeddings_blob,
-                status=InboundStatus.NEW,
-            )
-            s.add(post)
-            await s.flush()
-            await s.refresh(post)
-            created.append(post)
-            logger.info(
-                "[monitor] digest msg=%s line=%d share=%s → inbound=%s (%d photos)",
-                leader.id, idx, line.share_id[:8], post.id, len(photo_paths),
-            )
-
-    # Only advance the watermark once the whole digest is done — if a previous run crashed
-    # mid-digest, this lets us re-enter the same leader.id and pick up the missed shares
-    # (the per-line `existing` check makes the re-entry idempotent for shares we already saved).
-    # If EVERY YoNote fetch failed (outage), keep the watermark behind so the next pass retries
-    # instead of permanently losing the digest.
-    if not any_fetch_ok:
-        logger.warning(
-            "[monitor] digest msg %s: all %d yonote fetches failed — watermark not advanced",
-            leader.id, len(lines),
-        )
-        return created
-
-    async with get_session() as s:
-        await _advance_watermark(s, source_id, leader.id)
-
-    return created
+    await enqueue(source_id, leader.id, post_date, parse_digest(leader))
+    return await retry_pending(source_id=source_id, message_id=leader.id)
 
 
 async def _download_yonote_photos(
@@ -608,7 +527,7 @@ async def _compute_clip_blob(photo_paths: list[str], leader_id: int) -> bytes | 
         return None
 
 
-async def _advance_watermark(s, source_id: int, last_msg_id: int) -> None:
+async def _advance_watermark(s: AsyncSession, source_id: int, last_msg_id: int) -> None:
     chan = await s.get(SourceChannel, source_id)
     if chan is not None:
         chan.last_processed_message_id = max(chan.last_processed_message_id or 0, last_msg_id)

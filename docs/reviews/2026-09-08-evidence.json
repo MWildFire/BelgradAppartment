@@ -1,0 +1,1590 @@
+{
+  "checked_at": "2026-09-08T06:52:57.387958+00:00",
+  "revision": "38ad154",
+  "scope": "Read-only production inspection and bounded public GET/HEAD probes; no job runs, restarts, settings changes or messages",
+  "source": "Live AWS host, local repository, isolated tests",
+  "live": {
+    "config_nonsecret": {
+      "NEKRETNINE_LIST_SNAPSHOT_MODE": "shadow",
+      "NEKRETNINE_PROXY_MODE": "static_isp",
+      "SITE_LIVENESS_ENABLED": "<default>",
+      "SITE_LIVENESS_WARN_ONLY": "<default>",
+      "SITE_LIVENESS_MAX_HIDES_PER_RUN": "<default>",
+      "NIGHTLY_DUPES_WRITE": "<default>",
+      "DETAIL_REFRESH_LIMIT": "<default>",
+      "TG_DELIVERY_MODE": "bot",
+      "SCRAPE_MAX_PAGES": "<default>",
+      "NIGHTLY_MAX_PAGES": "<default>",
+      "SITE_ANALYTICS_ENABLED": "true",
+      "SITE_SUBSCRIPTIONS_ENABLED": "<default>"
+    },
+    "proxy_config_presence": {
+      "SCRAPER_PROXY_URL": true,
+      "NEKRETNINE_PROXY_PRIMARY_URL": true,
+      "NEKRETNINE_PROXY_SECONDARY_URL": true,
+      "NEKRETNINE_PROXY_METERED_URL": false,
+      "additional_slot_count": 2
+    },
+    "db_migration": [
+      {
+        "version_num": "0011_keep_on_site"
+      }
+    ],
+    "db_tables": [
+      {
+        "name": "alembic_version"
+      },
+      {
+        "name": "matches"
+      },
+      {
+        "name": "source_channels"
+      },
+      {
+        "name": "published_posts"
+      },
+      {
+        "name": "inbound_posts"
+      },
+      {
+        "name": "daily_metrics"
+      },
+      {
+        "name": "leads"
+      },
+      {
+        "name": "listings"
+      },
+      {
+        "name": "subscriptions"
+      },
+      {
+        "name": "subscription_matches"
+      },
+      {
+        "name": "site_events"
+      },
+      {
+        "name": "sqlite_sequence"
+      },
+      {
+        "name": "site_stats_daily"
+      },
+      {
+        "name": "site_listings"
+      }
+    ],
+    "db_listings": [
+      {
+        "platform": "CETIRI_ZIDA",
+        "total": 18340,
+        "active": 4799,
+        "latest_created": "2026-09-08 03:03:39.190172",
+        "latest_seen": "2026-09-08 03:03:39.554121",
+        "latest_detail": "2026-09-08 03:16:33.249289",
+        "active_not_seen_7d": 0,
+        "active_details_stale_7d": 3759,
+        "active_details_never_refreshed": 0
+      },
+      {
+        "platform": "CITYEXPERT",
+        "total": 2418,
+        "active": 748,
+        "latest_created": "2026-09-08 03:06:52.130042",
+        "latest_seen": "2026-09-08 03:06:52.302544",
+        "latest_detail": "2026-09-08 03:17:42.726130",
+        "active_not_seen_7d": 0,
+        "active_details_stale_7d": 304,
+        "active_details_never_refreshed": 0
+      },
+      {
+        "platform": "HALOOGLASI",
+        "total": 22217,
+        "active": 3753,
+        "latest_created": "2026-09-08 03:05:18.277305",
+        "latest_seen": "2026-09-08 03:05:18.334001",
+        "latest_detail": "2026-09-08 03:17:26.239175",
+        "active_not_seen_7d": 0,
+        "active_details_stale_7d": 2557,
+        "active_details_never_refreshed": 0
+      },
+      {
+        "platform": "NEKRETNINE",
+        "total": 34334,
+        "active": 3889,
+        "latest_created": "2026-09-08 03:03:29.423416",
+        "latest_seen": "2026-09-08 03:03:29.567154",
+        "latest_detail": "2026-09-08 03:15:25.782439",
+        "active_not_seen_7d": 0,
+        "active_details_stale_7d": 2969,
+        "active_details_never_refreshed": 0
+      }
+    ],
+    "db_inbound": [
+      {
+        "status": "MATCHED",
+        "n": 371,
+        "latest": "2026-08-30 11:29:40.706085"
+      },
+      {
+        "status": "NO_MATCH",
+        "n": 293,
+        "latest": "2026-08-30 11:29:41.829619"
+      }
+    ],
+    "db_matches": [
+      {
+        "status": "PENDING",
+        "n": 1,
+        "latest": "2026-08-12 18:11:08.793397"
+      },
+      {
+        "status": "PUBLISHED",
+        "n": 370,
+        "latest": "2026-08-30 11:30:32.408908"
+      }
+    ],
+    "db_counts": [
+      {
+        "name": "site_listings",
+        "n": 267
+      },
+      {
+        "name": "leads",
+        "n": 12
+      },
+      {
+        "name": "subscriptions",
+        "n": 0
+      },
+      {
+        "name": "subscription_matches",
+        "n": 0
+      }
+    ],
+    "unit_otz-weekly-full-refresh.service": [
+      "# /etc/systemd/system/otz-weekly-full-refresh.service",
+      "[Unit]",
+      "Description=otz-rent-finder — weekly full refresh",
+      "OnFailure=otz-notify-failure@%n.service",
+      "",
+      "[Service]",
+      "Type=oneshot",
+      "User=otz",
+      "WorkingDirectory=/opt/otz",
+      "ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli nightly-refresh --max-pages=500",
+      "ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/nightly-refresh.log --label weekly-full-refresh",
+      "StandardOutput=append:/var/log/otz/nightly-refresh.log",
+      "StandardError=append:/var/log/otz/nightly-refresh.log",
+      "TimeoutStartSec=8h",
+      "",
+      "# /etc/systemd/system/otz-weekly-full-refresh.service.d/10-playwright.conf",
+      "[Service]",
+      "ExecStartPre=/opt/otz/.venv/bin/playwright install chromium"
+    ],
+    "unit_otz-nightly-refresh.service": [
+      "# /etc/systemd/system/otz-nightly-refresh.service",
+      "[Unit]",
+      "Description=otz-rent-finder — nightly incremental refresh",
+      "OnFailure=otz-notify-failure@%n.service",
+      "",
+      "[Service]",
+      "Type=oneshot",
+      "User=otz",
+      "WorkingDirectory=/opt/otz",
+      "ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli nightly-refresh --incremental --max-pages=5",
+      "ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/nightly-refresh.log --label nightly-refresh",
+      "StandardOutput=append:/var/log/otz/nightly-refresh.log",
+      "StandardError=append:/var/log/otz/nightly-refresh.log",
+      "TimeoutStartSec=2h"
+    ],
+    "unit_otz-scrape-smoke.service": [
+      "# /etc/systemd/system/otz-scrape-smoke.service",
+      "[Unit]",
+      "Description=otz-rent-finder — live smoke probe (markup-change protection, A2)",
+      "",
+      "[Service]",
+      "Type=oneshot",
+      "User=otz",
+      "WorkingDirectory=/opt/otz",
+      "ExecStartPre=/opt/otz/.venv/bin/playwright install chromium",
+      "ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli scrape-smoke",
+      "ExecStartPost=-/opt/otz/.venv/bin/python -m src.cli ship-log /var/log/otz/scrape-smoke.log --label scrape-smoke --lines 40",
+      "StandardOutput=append:/var/log/otz/scrape-smoke.log",
+      "StandardError=append:/var/log/otz/scrape-smoke.log",
+      "TimeoutStartSec=30min"
+    ],
+    "unit_otz-weekly-full-refresh.timer": [
+      "# /etc/systemd/system/otz-weekly-full-refresh.timer",
+      "[Unit]",
+      "Description=otz weekly full refresh (Sunday 04:00 UTC)",
+      "",
+      "[Timer]",
+      "OnCalendar=Sun *-*-* 04:00:00",
+      "Persistent=true",
+      "RandomizedDelaySec=15min",
+      "",
+      "[Install]",
+      "WantedBy=timers.target"
+    ],
+    "unit_otz-nightly-refresh.timer": [
+      "# /etc/systemd/system/otz-nightly-refresh.timer",
+      "[Unit]",
+      "Description=otz nightly full refresh (03:00 UTC = 05:00 Belgrade)",
+      "",
+      "[Timer]",
+      "OnCalendar=*-*-* 03:00:00",
+      "Persistent=true",
+      "RandomizedDelaySec=15min",
+      "",
+      "[Install]",
+      "WantedBy=timers.target"
+    ],
+    "latest_smoke_log": [
+      {
+        "line": 4745,
+        "text": "00:32:00 INFO src.scrapers.nekretnine — [nekretnine] playwright fallback <url> → HTTP 403/no payload; waiting 4000ms before challenge reload 1/3"
+      },
+      {
+        "line": 4747,
+        "text": "00:32:07 INFO src.scrapers.nekretnine — [nekretnine] detail <url> recovered via browser fallback"
+      },
+      {
+        "line": 4749,
+        "text": "00:32:07 WARNING src.scrapers.nekretnine — [nekretnine] GET <url> attempt 1/3 failed: HTTPStatusError (HTTP 403)"
+      },
+      {
+        "line": 4760,
+        "text": "  OK  NEKRETNINE     previews= 25 detail_ok=True"
+      },
+      {
+        "line": 4761,
+        "text": "  OK  CETIRI_ZIDA    previews= 20 detail_ok=True"
+      },
+      {
+        "line": 4762,
+        "text": "  OK  HALOOGLASI     previews= 20 detail_ok=True"
+      },
+      {
+        "line": 4763,
+        "text": "  OK  CITYEXPERT     previews= 12 detail_ok=True"
+      },
+      {
+        "line": 4771,
+        "text": "06:34:39 WARNING src.scrapers.nekretnine — [nekretnine] GET <url> attempt 1/3 failed: HTTPStatusError (HTTP 403)"
+      },
+      {
+        "line": 4772,
+        "text": "06:34:41 INFO src.scrapers.nekretnine — [nekretnine] playwright fallback <url> → HTTP 403/no payload; waiting 4000ms before challenge reload 1/3"
+      },
+      {
+        "line": 4774,
+        "text": "06:34:48 INFO src.scrapers.nekretnine — [nekretnine] detail <url> recovered via browser fallback"
+      },
+      {
+        "line": 4776,
+        "text": "06:34:48 WARNING src.scrapers.nekretnine — [nekretnine] GET <url> attempt 1/3 failed: HTTPStatusError (HTTP 403)"
+      },
+      {
+        "line": 4787,
+        "text": "  OK  NEKRETNINE     previews= 25 detail_ok=True"
+      },
+      {
+        "line": 4788,
+        "text": "  OK  CETIRI_ZIDA    previews= 20 detail_ok=True"
+      },
+      {
+        "line": 4789,
+        "text": "  OK  HALOOGLASI     previews= 20 detail_ok=True"
+      },
+      {
+        "line": 4790,
+        "text": "  OK  CITYEXPERT     previews= 12 detail_ok=True"
+      }
+    ]
+  },
+  "extended": {
+    "run_logs": [
+      {
+        "first_line": 333207,
+        "last_line": 335761,
+        "lines": 2555,
+        "402_count": 150,
+        "403_count": 295,
+        "selected": [
+          {
+            "line": 333207,
+            "text": "→ Incremental scrape (incremental=True, max_pages=5)…"
+          },
+          {
+            "line": 333219,
+            "text": "03:11:19 INFO src.scrapers.orchestrator — [NEKRETNINE] list_recent → 125 previews (skipped_pages=0, site_total=4581)"
+          },
+          {
+            "line": 333363,
+            "text": "03:12:05 INFO src.scrapers.orchestrator — [CETIRI_ZIDA] list_recent → 80 previews (skipped_pages=0, site_total=6500)"
+          },
+          {
+            "line": 333565,
+            "text": "03:12:56 INFO src.scrapers.orchestrator — [HALOOGLASI] list_recent → 100 previews (skipped_pages=0, site_total=3822)"
+          },
+          {
+            "line": 334171,
+            "text": "03:14:24 INFO src.scrapers.orchestrator — [CITYEXPERT] list_recent → 60 previews (skipped_pages=0, site_total=721)"
+          },
+          {
+            "line": 334483,
+            "text": "  NEKRETNINE     previewed= 125  new=   8  refreshed= 117  photos= 109  errors=0  snapshots=94/125  fallback=31  proxy(challenge=0,failover=0,errors=0)"
+          },
+          {
+            "line": 334484,
+            "text": "  CETIRI_ZIDA    previewed=  80  new=  12  refreshed=  68  photos= 183  errors=0"
+          },
+          {
+            "line": 334485,
+            "text": "  HALOOGLASI     previewed= 100  new=  44  refreshed=  56  photos= 551  errors=0"
+          },
+          {
+            "line": 334486,
+            "text": "  CITYEXPERT     previewed=  60  new=  17  refreshed=  43  photos= 292  errors=0"
+          },
+          {
+            "line": 334489,
+            "text": "→ Heal broken listings (limit=50)…"
+          },
+          {
+            "line": 334547,
+            "text": "03:18:10 ERROR asyncio — Future exception was never retrieved"
+          },
+          {
+            "line": 334548,
+            "text": "future: <Future finished exception=TargetClosedError('Target page, context or browser has been closed')>"
+          },
+          {
+            "line": 334549,
+            "text": "playwright._impl._errors.TargetClosedError: Target page, context or browser has been closed"
+          },
+          {
+            "line": 334584,
+            "text": "03:18:26 INFO src.scrapers.orchestrator — [heal] selected=50 fixed=0 remaining=124 errors=3 skipped=0"
+          },
+          {
+            "line": 334585,
+            "text": "→ Rolling detail refresh (limit=200)…"
+          },
+          {
+            "line": 335289,
+            "text": "03:22:39 INFO src.scrapers.orchestrator — [rolling-refresh] selected=200 refreshed=165 price_changes=24 errors=35 skipped=0"
+          },
+          {
+            "line": 335290,
+            "text": "→ Verify active links (limit=250)…"
+          },
+          {
+            "line": 335391,
+            "text": "03:22:41 INFO src.scrapers.orchestrator — [verify-links] checked=74 deactivated=0 errors=47 skipped=0 (platform=all)"
+          },
+          {
+            "line": 335392,
+            "text": "→ Auto-publish backfill (delivered matches → site)…"
+          },
+          {
+            "line": 335394,
+            "text": "→ Notify saved-search subscriptions…"
+          },
+          {
+            "line": 335395,
+            "text": "→ Daily metrics snapshot…"
+          },
+          {
+            "line": 335397,
+            "text": "→ Prune embeddings of long-inactive listings…"
+          },
+          {
+            "line": 335399,
+            "text": "→ Site-listing liveness sweep…"
+          },
+          {
+            "line": 335747,
+            "text": "03:23:25 INFO src.site.liveness — [liveness] cards=184 kept_active=80 kept_pinned=0 unconfirmed=104 confirmed=0 hidden=0 errors=129 dry_run=False"
+          },
+          {
+            "line": 335750,
+            "text": "→ Site analytics rollup + retention…"
+          },
+          {
+            "line": 335752,
+            "text": "→ Cross-platform dupes report (report-only)…"
+          }
+        ]
+      },
+      {
+        "first_line": 335762,
+        "last_line": 337338,
+        "lines": 1577,
+        "402_count": 150,
+        "403_count": 228,
+        "selected": [
+          {
+            "line": 335762,
+            "text": "→ Incremental scrape (incremental=True, max_pages=5)…"
+          },
+          {
+            "line": 335769,
+            "text": "03:14:13 INFO src.scrapers.orchestrator — [NEKRETNINE] list_recent → 50 previews (skipped_pages=0, site_total=4562)"
+          },
+          {
+            "line": 335775,
+            "text": "03:14:16 INFO src.scrapers.orchestrator — [CETIRI_ZIDA] list_recent → 60 previews (skipped_pages=0, site_total=6500)"
+          },
+          {
+            "line": 335820,
+            "text": "03:14:46 INFO src.scrapers.orchestrator — [HALOOGLASI] list_recent → 80 previews (skipped_pages=0, site_total=3732)"
+          },
+          {
+            "line": 336006,
+            "text": "03:15:19 INFO src.scrapers.orchestrator — [CITYEXPERT] list_recent → 36 previews (skipped_pages=0, site_total=709)"
+          },
+          {
+            "line": 336057,
+            "text": "  NEKRETNINE     previewed=  50  new=   0  refreshed=  50  photos=   0  errors=0  snapshots=32/50  fallback=18  proxy(challenge=0,failover=0,errors=0)"
+          },
+          {
+            "line": 336058,
+            "text": "  CETIRI_ZIDA    previewed=  60  new=   2  refreshed=  58  photos=  24  errors=0"
+          },
+          {
+            "line": 336059,
+            "text": "  HALOOGLASI     previewed=  80  new=  14  refreshed=  66  photos= 166  errors=0"
+          },
+          {
+            "line": 336060,
+            "text": "  CITYEXPERT     previewed=  36  new=   3  refreshed=  33  photos=  45  errors=0"
+          },
+          {
+            "line": 336063,
+            "text": "→ Heal broken listings (limit=50)…"
+          },
+          {
+            "line": 336132,
+            "text": "03:16:23 INFO src.scrapers.orchestrator — [heal] selected=50 fixed=1 remaining=123 errors=8 skipped=0"
+          },
+          {
+            "line": 336133,
+            "text": "→ Rolling detail refresh (limit=200)…"
+          },
+          {
+            "line": 336874,
+            "text": "03:21:18 INFO src.scrapers.orchestrator — [rolling-refresh] selected=200 refreshed=180 price_changes=34 errors=20 skipped=0"
+          },
+          {
+            "line": 336875,
+            "text": "→ Verify active links (limit=250)…"
+          },
+          {
+            "line": 336976,
+            "text": "03:21:20 INFO src.scrapers.orchestrator — [verify-links] checked=74 deactivated=0 errors=47 skipped=0 (platform=all)"
+          },
+          {
+            "line": 336977,
+            "text": "→ Auto-publish backfill (delivered matches → site)…"
+          },
+          {
+            "line": 336979,
+            "text": "→ Notify saved-search subscriptions…"
+          },
+          {
+            "line": 336980,
+            "text": "→ Daily metrics snapshot…"
+          },
+          {
+            "line": 336982,
+            "text": "→ Prune embeddings of long-inactive listings…"
+          },
+          {
+            "line": 336984,
+            "text": "→ Site-listing liveness sweep…"
+          },
+          {
+            "line": 337332,
+            "text": "03:22:05 INFO src.site.liveness — [liveness] cards=184 kept_active=80 kept_pinned=0 unconfirmed=104 confirmed=0 hidden=0 errors=129 dry_run=False"
+          },
+          {
+            "line": 337335,
+            "text": "→ Site analytics rollup + retention…"
+          },
+          {
+            "line": 337337,
+            "text": "→ Cross-platform dupes report (report-only)…"
+          }
+        ]
+      },
+      {
+        "first_line": 337339,
+        "last_line": 376890,
+        "lines": 39552,
+        "402_count": 158,
+        "403_count": 3592,
+        "selected": [
+          {
+            "line": 358654,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358674,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358694,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358714,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358734,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358754,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358774,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358794,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358814,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358834,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358854,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358874,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358894,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358914,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 358934,
+            "text": "  File \"/opt/otz/src/scrapers/orchestrator.py\", line 198, in scrape_platform"
+          },
+          {
+            "line": 359052,
+            "text": "04:57:00 INFO src.scrapers.cetiri_zida — [4zida] band 0-300: +44 new (band_total=None, cumulative=2022)"
+          },
+          {
+            "line": 359066,
+            "text": "04:57:25 INFO src.scrapers.cetiri_zida — [4zida] band 300-400: +88 new (band_total=None, cumulative=2110)"
+          },
+          {
+            "line": 359092,
+            "text": "04:58:09 INFO src.scrapers.cetiri_zida — [4zida] band 400-500: +167 new (band_total=None, cumulative=2277)"
+          },
+          {
+            "line": 359121,
+            "text": "04:59:00 INFO src.scrapers.cetiri_zida — [4zida] band 500-600: +216 new (band_total=None, cumulative=2493)"
+          },
+          {
+            "line": 359158,
+            "text": "05:00:04 INFO src.scrapers.cetiri_zida — [4zida] band 600-700: +277 new (band_total=None, cumulative=2770)"
+          },
+          {
+            "line": 359199,
+            "text": "05:01:07 INFO src.scrapers.cetiri_zida — [4zida] band 700-800: +300 new (band_total=None, cumulative=3070)"
+          },
+          {
+            "line": 359233,
+            "text": "05:01:56 INFO src.scrapers.cetiri_zida — [4zida] band 800-900: +229 new (band_total=None, cumulative=3299)"
+          },
+          {
+            "line": 359269,
+            "text": "05:02:46 INFO src.scrapers.cetiri_zida — [4zida] band 900-1100: +259 new (band_total=None, cumulative=3558)"
+          },
+          {
+            "line": 359304,
+            "text": "05:03:36 INFO src.scrapers.cetiri_zida — [4zida] band 1100-1400: +331 new (band_total=None, cumulative=3889)"
+          },
+          {
+            "line": 359345,
+            "text": "05:04:36 INFO src.scrapers.cetiri_zida — [4zida] band 1400-2000: +411 new (band_total=None, cumulative=4300)"
+          },
+          {
+            "line": 359384,
+            "text": "05:05:30 INFO src.scrapers.cetiri_zida — [4zida] band 2000-3000: +322 new (band_total=None, cumulative=4622)"
+          },
+          {
+            "line": 359406,
+            "text": "05:06:10 INFO src.scrapers.cetiri_zida — [4zida] band 3000-∞: +165 new (band_total=None, cumulative=4787)"
+          },
+          {
+            "line": 359407,
+            "text": "05:06:10 INFO src.scrapers.cetiri_zida — [4zida] segmented walk done: 4787 collected vs site_total=6500"
+          },
+          {
+            "line": 359408,
+            "text": "05:06:10 INFO src.scrapers.orchestrator — [CETIRI_ZIDA] list_recent → 4787 previews (skipped_pages=0, site_total=6500)"
+          },
+          {
+            "line": 367494,
+            "text": "05:41:44 INFO src.scrapers.orchestrator — [HALOOGLASI] list_recent → 3647 previews (skipped_pages=0, site_total=3744)"
+          },
+          {
+            "line": 375557,
+            "text": "06:01:35 INFO src.scrapers.orchestrator — [CITYEXPERT] list_recent → 709 previews (skipped_pages=0, site_total=709)"
+          },
+          {
+            "line": 375560,
+            "text": "  NEKRETNINE     previewed=4557  new= 464  refreshed=3416  photos=5738  errors=677  snapshots=1963/4557  fallback=2594  proxy(challenge=5,failover=4,errors=2011)"
+          },
+          {
+            "line": 375561,
+            "text": "  CETIRI_ZIDA    previewed=4787  new= 591  refreshed=4196  photos=7303  errors=0"
+          },
+          {
+            "line": 375562,
+            "text": "  HALOOGLASI     previewed=3647  new= 609  refreshed=3038  photos=7392  errors=0"
+          },
+          {
+            "line": 375563,
+            "text": "  CITYEXPERT     previewed= 709  new=   0  refreshed= 709  photos=   0  errors=0"
+          },
+          {
+            "line": 375565,
+            "text": "→ Marking listings inactive (not seen in last 3 days)…"
+          },
+          {
+            "line": 375566,
+            "text": "06:01:44 INFO src.scrapers.orchestrator — [stale-sweep] marked 669 listings inactive (cutoff=2026-09-03, platform=NEKRETNINE)"
+          },
+          {
+            "line": 375567,
+            "text": "06:01:51 INFO src.scrapers.orchestrator — [stale-sweep] marked 1053 listings inactive (cutoff=2026-09-03, platform=CETIRI_ZIDA)"
+          },
+          {
+            "line": 375568,
+            "text": "06:01:55 INFO src.scrapers.orchestrator — [stale-sweep] marked 1436 listings inactive (cutoff=2026-09-03, platform=HALOOGLASI)"
+          },
+          {
+            "line": 375569,
+            "text": "06:01:55 INFO src.scrapers.orchestrator — [stale-sweep] marked 173 listings inactive (cutoff=2026-09-03, platform=CITYEXPERT)"
+          },
+          {
+            "line": 375570,
+            "text": "  marked 3331 listings inactive"
+          },
+          {
+            "line": 375572,
+            "text": "→ Heal broken listings (limit=50)…"
+          },
+          {
+            "line": 375667,
+            "text": "06:03:19 INFO src.scrapers.orchestrator — [heal] selected=50 fixed=1 remaining=129 errors=0 skipped=0"
+          },
+          {
+            "line": 375668,
+            "text": "→ Rolling detail refresh (limit=200)…"
+          },
+          {
+            "line": 376363,
+            "text": "06:07:47 INFO src.scrapers.orchestrator — [rolling-refresh] selected=200 refreshed=200 price_changes=43 errors=0 skipped=0"
+          },
+          {
+            "line": 376364,
+            "text": "→ Verify active links (limit=250)…"
+          },
+          {
+            "line": 376436,
+            "text": "06:07:49 INFO src.scrapers.orchestrator — [verify-links] checked=54 deactivated=0 errors=36 skipped=0 (platform=all)"
+          },
+          {
+            "line": 376437,
+            "text": "→ Auto-publish backfill (delivered matches → site)…"
+          },
+          {
+            "line": 376439,
+            "text": "→ Notify saved-search subscriptions…"
+          },
+          {
+            "line": 376440,
+            "text": "→ Daily metrics snapshot…"
+          },
+          {
+            "line": 376442,
+            "text": "→ Prune embeddings of long-inactive listings…"
+          },
+          {
+            "line": 376444,
+            "text": "→ Site-listing liveness sweep…"
+          },
+          {
+            "line": 376876,
+            "text": "06:08:38 INFO src.site.liveness — [liveness] cards=184 kept_active=65 kept_pinned=0 unconfirmed=119 confirmed=0 hidden=0 errors=139 dry_run=False"
+          },
+          {
+            "line": 376879,
+            "text": "→ Site analytics rollup + retention…"
+          },
+          {
+            "line": 376881,
+            "text": "→ Cross-platform dupes report (report-only)…"
+          }
+        ]
+      },
+      {
+        "first_line": 376891,
+        "last_line": 378419,
+        "lines": 1529,
+        "402_count": 154,
+        "403_count": 227,
+        "selected": [
+          {
+            "line": 376891,
+            "text": "→ Incremental scrape (incremental=True, max_pages=5)…"
+          },
+          {
+            "line": 376899,
+            "text": "03:01:17 INFO src.scrapers.orchestrator — [NEKRETNINE] list_recent → 50 previews (skipped_pages=0, site_total=4543)"
+          },
+          {
+            "line": 376905,
+            "text": "03:01:20 INFO src.scrapers.orchestrator — [CETIRI_ZIDA] list_recent → 60 previews (skipped_pages=0, site_total=6500)"
+          },
+          {
+            "line": 376943,
+            "text": "03:01:46 INFO src.scrapers.orchestrator — [HALOOGLASI] list_recent → 80 previews (skipped_pages=0, site_total=3672)"
+          },
+          {
+            "line": 377163,
+            "text": "03:02:18 INFO src.scrapers.orchestrator — [CITYEXPERT] list_recent → 24 previews (skipped_pages=0, site_total=703)"
+          },
+          {
+            "line": 377166,
+            "text": "  NEKRETNINE     previewed=  50  new=   0  refreshed=  50  photos=   0  errors=0  snapshots=32/50  fallback=18  proxy(challenge=0,failover=0,errors=0)"
+          },
+          {
+            "line": 377167,
+            "text": "  CETIRI_ZIDA    previewed=  60  new=   1  refreshed=  59  photos=  20  errors=0"
+          },
+          {
+            "line": 377168,
+            "text": "  HALOOGLASI     previewed=  80  new=  17  refreshed=  63  photos= 198  errors=0"
+          },
+          {
+            "line": 377169,
+            "text": "  CITYEXPERT     previewed=  24  new=   0  refreshed=  24  photos=   0  errors=0"
+          },
+          {
+            "line": 377172,
+            "text": "→ Heal broken listings (limit=50)…"
+          },
+          {
+            "line": 377244,
+            "text": "03:04:29 ERROR asyncio — Future exception was never retrieved"
+          },
+          {
+            "line": 377245,
+            "text": "future: <Future finished exception=TargetClosedError('Target page, context or browser has been closed')>"
+          },
+          {
+            "line": 377246,
+            "text": "playwright._impl._errors.TargetClosedError: Target page, context or browser has been closed"
+          },
+          {
+            "line": 377248,
+            "text": "03:04:36 INFO src.scrapers.orchestrator — [heal] selected=50 fixed=0 remaining=129 errors=2 skipped=0"
+          },
+          {
+            "line": 377249,
+            "text": "→ Rolling detail refresh (limit=200)…"
+          },
+          {
+            "line": 377904,
+            "text": "03:11:19 INFO src.scrapers.orchestrator — [rolling-refresh] selected=200 refreshed=198 price_changes=26 errors=2 skipped=0"
+          },
+          {
+            "line": 377905,
+            "text": "→ Verify active links (limit=250)…"
+          },
+          {
+            "line": 377977,
+            "text": "03:11:20 INFO src.scrapers.orchestrator — [verify-links] checked=54 deactivated=0 errors=36 skipped=0 (platform=all)"
+          },
+          {
+            "line": 377978,
+            "text": "→ Auto-publish backfill (delivered matches → site)…"
+          },
+          {
+            "line": 377980,
+            "text": "→ Notify saved-search subscriptions…"
+          },
+          {
+            "line": 377981,
+            "text": "→ Daily metrics snapshot…"
+          },
+          {
+            "line": 377983,
+            "text": "→ Prune embeddings of long-inactive listings…"
+          },
+          {
+            "line": 377985,
+            "text": "→ Site-listing liveness sweep…"
+          },
+          {
+            "line": 378405,
+            "text": "03:12:07 INFO src.site.liveness — [liveness] cards=184 kept_active=57 kept_pinned=0 unconfirmed=127 confirmed=0 hidden=0 errors=135 dry_run=False"
+          },
+          {
+            "line": 378408,
+            "text": "→ Site analytics rollup + retention…"
+          },
+          {
+            "line": 378410,
+            "text": "→ Cross-platform dupes report (report-only)…"
+          }
+        ]
+      },
+      {
+        "first_line": 378420,
+        "last_line": 381031,
+        "lines": 2612,
+        "402_count": 154,
+        "403_count": 274,
+        "selected": [
+          {
+            "line": 378420,
+            "text": "→ Incremental scrape (incremental=True, max_pages=5)…"
+          },
+          {
+            "line": 378433,
+            "text": "03:02:54 INFO src.scrapers.orchestrator — [NEKRETNINE] list_recent → 125 previews (skipped_pages=0, site_total=4488)"
+          },
+          {
+            "line": 378563,
+            "text": "03:03:33 INFO src.scrapers.orchestrator — [CETIRI_ZIDA] list_recent → 80 previews (skipped_pages=0, site_total=6500)"
+          },
+          {
+            "line": 378598,
+            "text": "03:03:49 INFO src.scrapers.orchestrator — [HALOOGLASI] list_recent → 100 previews (skipped_pages=0, site_total=3633)"
+          },
+          {
+            "line": 379225,
+            "text": "03:05:20 INFO src.scrapers.orchestrator — [CITYEXPERT] list_recent → 60 previews (skipped_pages=0, site_total=690)"
+          },
+          {
+            "line": 379645,
+            "text": "  NEKRETNINE     previewed= 125  new=   4  refreshed= 121  photos= 103  errors=0  snapshots=95/125  fallback=30  proxy(challenge=0,failover=0,errors=0)"
+          },
+          {
+            "line": 379646,
+            "text": "  CETIRI_ZIDA    previewed=  80  new=   2  refreshed=  78  photos=  26  errors=0"
+          },
+          {
+            "line": 379647,
+            "text": "  HALOOGLASI     previewed= 100  new=  47  refreshed=  53  photos= 572  errors=0"
+          },
+          {
+            "line": 379648,
+            "text": "  CITYEXPERT     previewed=  60  new=  24  refreshed=  36  photos= 393  errors=0"
+          },
+          {
+            "line": 379651,
+            "text": "→ Heal broken listings (limit=50)…"
+          },
+          {
+            "line": 379674,
+            "text": "03:08:35 ERROR asyncio — Future exception was never retrieved"
+          },
+          {
+            "line": 379675,
+            "text": "future: <Future finished exception=TargetClosedError('Target page, context or browser has been closed')>"
+          },
+          {
+            "line": 379676,
+            "text": "playwright._impl._errors.TargetClosedError: Target page, context or browser has been closed"
+          },
+          {
+            "line": 379690,
+            "text": "03:10:05 ERROR asyncio — Future exception was never retrieved"
+          },
+          {
+            "line": 379691,
+            "text": "future: <Future finished exception=TargetClosedError('Target page, context or browser has been closed')>"
+          },
+          {
+            "line": 379692,
+            "text": "playwright._impl._errors.TargetClosedError: Target page, context or browser has been closed"
+          },
+          {
+            "line": 379790,
+            "text": "03:12:12 INFO src.scrapers.orchestrator — [heal] selected=50 fixed=2 remaining=127 errors=6 skipped=0"
+          },
+          {
+            "line": 379791,
+            "text": "→ Rolling detail refresh (limit=200)…"
+          },
+          {
+            "line": 380517,
+            "text": "03:17:43 INFO src.scrapers.orchestrator — [rolling-refresh] selected=200 refreshed=198 price_changes=20 errors=2 skipped=0"
+          },
+          {
+            "line": 380518,
+            "text": "→ Verify active links (limit=250)…"
+          },
+          {
+            "line": 380591,
+            "text": "03:17:44 INFO src.scrapers.orchestrator — [verify-links] checked=55 deactivated=0 errors=36 skipped=0 (platform=all)"
+          },
+          {
+            "line": 380592,
+            "text": "→ Auto-publish backfill (delivered matches → site)…"
+          },
+          {
+            "line": 380594,
+            "text": "→ Notify saved-search subscriptions…"
+          },
+          {
+            "line": 380595,
+            "text": "→ Daily metrics snapshot…"
+          },
+          {
+            "line": 380597,
+            "text": "→ Prune embeddings of long-inactive listings…"
+          },
+          {
+            "line": 380599,
+            "text": "→ Site-listing liveness sweep…"
+          },
+          {
+            "line": 381018,
+            "text": "03:18:37 INFO src.site.liveness — [liveness] cards=184 kept_active=58 kept_pinned=0 unconfirmed=126 confirmed=0 hidden=0 errors=135 dry_run=False"
+          },
+          {
+            "line": 381021,
+            "text": "→ Site analytics rollup + retention…"
+          },
+          {
+            "line": 381023,
+            "text": "→ Cross-platform dupes report (report-only)…"
+          }
+        ]
+      }
+    ],
+    "file_comparison": [
+      {
+        "file": "src/cli.py",
+        "sha256": "77dadbcd77474eb8702f8eb50946d94bc4c7f08e789ccac9c4f0a02fe5be28e8",
+        "local_sha256": "77dadbcd77474eb8702f8eb50946d94bc4c7f08e789ccac9c4f0a02fe5be28e8",
+        "matches": true
+      },
+      {
+        "file": "src/config.py",
+        "sha256": "9cf28c2220b10ab8fc3ce9b06176a4b84701825a35dc60f0b41df0995ca479f8",
+        "local_sha256": "9cf28c2220b10ab8fc3ce9b06176a4b84701825a35dc60f0b41df0995ca479f8",
+        "matches": true
+      },
+      {
+        "file": "src/scrapers/orchestrator.py",
+        "sha256": "74e7d30e864f65170e95c3ef0cabe14b3c2767d3c302b6add2fe4480a9129243",
+        "local_sha256": "74e7d30e864f65170e95c3ef0cabe14b3c2767d3c302b6add2fe4480a9129243",
+        "matches": true
+      },
+      {
+        "file": "src/scrapers/nekretnine.py",
+        "sha256": "cb1e69a9e5c914ed05f74399a2bf758b705b0596e05361718298d96cbbe72d58",
+        "local_sha256": "cb1e69a9e5c914ed05f74399a2bf758b705b0596e05361718298d96cbbe72d58",
+        "matches": true
+      },
+      {
+        "file": "src/scrapers/proxy_pool.py",
+        "sha256": "d9291a7f07c5ad87066dbb45a95b814080319ea9751661c0ce12d021cea39216",
+        "local_sha256": "d9291a7f07c5ad87066dbb45a95b814080319ea9751661c0ce12d021cea39216",
+        "matches": true
+      },
+      {
+        "file": "src/site/liveness.py",
+        "sha256": "a4c37f9ba22bea2ca9fc45132e494eda4c84edb089afdfc000c5c37f466ca96f",
+        "local_sha256": "a4c37f9ba22bea2ca9fc45132e494eda4c84edb089afdfc000c5c37f466ca96f",
+        "matches": true
+      },
+      {
+        "file": "src/telegram/monitor.py",
+        "sha256": "49ca8a708537b5de72b8ea26758065dffc0bb825fbd77e79ad5a506aedbfe00d",
+        "local_sha256": "49ca8a708537b5de72b8ea26758065dffc0bb825fbd77e79ad5a506aedbfe00d",
+        "matches": true
+      },
+      {
+        "file": "src/site/readmodel.py",
+        "sha256": "ad1cb975a69692cd317d781f0a6e59b3e8708b6bdefd29d0971e9b9f4964a06d",
+        "local_sha256": "ad1cb975a69692cd317d781f0a6e59b3e8708b6bdefd29d0971e9b9f4964a06d",
+        "matches": true
+      },
+      {
+        "file": "scripts/vps_install.sh",
+        "sha256": "5561f07ccd9938fb0df4e72e1379b726139e31a78aa345b7001b2d4d964e0727",
+        "local_sha256": "5561f07ccd9938fb0df4e72e1379b726139e31a78aa345b7001b2d4d964e0727",
+        "matches": true
+      },
+      {
+        "file": "scripts/deploy_sync.sh",
+        "sha256": "b2128b9eeb3882ba2fbf6b32713f24ab1a7e261cb61e39a9d6e4e9109151dbb5",
+        "local_sha256": "b2128b9eeb3882ba2fbf6b32713f24ab1a7e261cb61e39a9d6e4e9109151dbb5",
+        "matches": true
+      },
+      {
+        "file": "uv.lock",
+        "sha256": "9d91802c6da0044e3e3b5213ab76e800a7f52573362569ebe2de45dae276f537",
+        "local_sha256": "9d91802c6da0044e3e3b5213ab76e800a7f52573362569ebe2de45dae276f537",
+        "matches": true
+      }
+    ],
+    "freshness": [
+      {
+        "platform": "CETIRI_ZIDA",
+        "active": 4799,
+        "old14": 3017,
+        "old30": 1835,
+        "oldest_active_detail": "2026-06-30 04:21:22.682931",
+        "active_no_hashes": 53,
+        "active_no_price": 0
+      },
+      {
+        "platform": "CITYEXPERT",
+        "active": 748,
+        "old14": 0,
+        "old30": 0,
+        "oldest_active_detail": "2026-08-27 03:17:23.080650",
+        "active_no_hashes": 0,
+        "active_no_price": 0
+      },
+      {
+        "platform": "HALOOGLASI",
+        "active": 3753,
+        "old14": 1827,
+        "old30": 755,
+        "oldest_active_detail": "2026-07-18 03:53:49.087634",
+        "active_no_hashes": 31,
+        "active_no_price": 1
+      },
+      {
+        "platform": "NEKRETNINE",
+        "active": 3889,
+        "old14": 2528,
+        "old30": 1279,
+        "oldest_active_detail": "2026-07-11 04:18:54.547125",
+        "active_no_hashes": 43,
+        "active_no_price": 13
+      }
+    ],
+    "metrics": [
+      {
+        "id": 307,
+        "snapshot_date": "2026-09-01",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 5183,
+        "no_photo_count": 53
+      },
+      {
+        "id": 309,
+        "snapshot_date": "2026-09-01",
+        "platform": "CITYEXPERT",
+        "active_count": 808,
+        "no_photo_count": 0
+      },
+      {
+        "id": 308,
+        "snapshot_date": "2026-09-01",
+        "platform": "HALOOGLASI",
+        "active_count": 4107,
+        "no_photo_count": 27
+      },
+      {
+        "id": 306,
+        "snapshot_date": "2026-09-01",
+        "platform": "NEKRETNINE",
+        "active_count": 4039,
+        "no_photo_count": 45
+      },
+      {
+        "id": 311,
+        "snapshot_date": "2026-09-02",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 5187,
+        "no_photo_count": 53
+      },
+      {
+        "id": 313,
+        "snapshot_date": "2026-09-02",
+        "platform": "CITYEXPERT",
+        "active_count": 826,
+        "no_photo_count": 0
+      },
+      {
+        "id": 312,
+        "snapshot_date": "2026-09-02",
+        "platform": "HALOOGLASI",
+        "active_count": 4164,
+        "no_photo_count": 27
+      },
+      {
+        "id": 310,
+        "snapshot_date": "2026-09-02",
+        "platform": "NEKRETNINE",
+        "active_count": 4049,
+        "no_photo_count": 44
+      },
+      {
+        "id": 315,
+        "snapshot_date": "2026-09-03",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 5201,
+        "no_photo_count": 53
+      },
+      {
+        "id": 317,
+        "snapshot_date": "2026-09-03",
+        "platform": "CITYEXPERT",
+        "active_count": 842,
+        "no_photo_count": 0
+      },
+      {
+        "id": 316,
+        "snapshot_date": "2026-09-03",
+        "platform": "HALOOGLASI",
+        "active_count": 4214,
+        "no_photo_count": 27
+      },
+      {
+        "id": 314,
+        "snapshot_date": "2026-09-03",
+        "platform": "NEKRETNINE",
+        "active_count": 4055,
+        "no_photo_count": 44
+      },
+      {
+        "id": 319,
+        "snapshot_date": "2026-09-04",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 5203,
+        "no_photo_count": 53
+      },
+      {
+        "id": 321,
+        "snapshot_date": "2026-09-04",
+        "platform": "CITYEXPERT",
+        "active_count": 871,
+        "no_photo_count": 0
+      },
+      {
+        "id": 320,
+        "snapshot_date": "2026-09-04",
+        "platform": "HALOOGLASI",
+        "active_count": 4253,
+        "no_photo_count": 27
+      },
+      {
+        "id": 318,
+        "snapshot_date": "2026-09-04",
+        "platform": "NEKRETNINE",
+        "active_count": 4065,
+        "no_photo_count": 44
+      },
+      {
+        "id": 323,
+        "snapshot_date": "2026-09-05",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 5215,
+        "no_photo_count": 53
+      },
+      {
+        "id": 325,
+        "snapshot_date": "2026-09-05",
+        "platform": "CITYEXPERT",
+        "active_count": 892,
+        "no_photo_count": 0
+      },
+      {
+        "id": 324,
+        "snapshot_date": "2026-09-05",
+        "platform": "HALOOGLASI",
+        "active_count": 4303,
+        "no_photo_count": 27
+      },
+      {
+        "id": 322,
+        "snapshot_date": "2026-09-05",
+        "platform": "NEKRETNINE",
+        "active_count": 4073,
+        "no_photo_count": 44
+      },
+      {
+        "id": 327,
+        "snapshot_date": "2026-09-06",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 4795,
+        "no_photo_count": 55
+      },
+      {
+        "id": 329,
+        "snapshot_date": "2026-09-06",
+        "platform": "CITYEXPERT",
+        "active_count": 722,
+        "no_photo_count": 0
+      },
+      {
+        "id": 328,
+        "snapshot_date": "2026-09-06",
+        "platform": "HALOOGLASI",
+        "active_count": 3669,
+        "no_photo_count": 31
+      },
+      {
+        "id": 326,
+        "snapshot_date": "2026-09-06",
+        "platform": "NEKRETNINE",
+        "active_count": 3885,
+        "no_photo_count": 43
+      },
+      {
+        "id": 331,
+        "snapshot_date": "2026-09-07",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 4796,
+        "no_photo_count": 55
+      },
+      {
+        "id": 333,
+        "snapshot_date": "2026-09-07",
+        "platform": "CITYEXPERT",
+        "active_count": 722,
+        "no_photo_count": 0
+      },
+      {
+        "id": 332,
+        "snapshot_date": "2026-09-07",
+        "platform": "HALOOGLASI",
+        "active_count": 3690,
+        "no_photo_count": 31
+      },
+      {
+        "id": 330,
+        "snapshot_date": "2026-09-07",
+        "platform": "NEKRETNINE",
+        "active_count": 3885,
+        "no_photo_count": 43
+      },
+      {
+        "id": 335,
+        "snapshot_date": "2026-09-08",
+        "platform": "CETIRI_ZIDA",
+        "active_count": 4799,
+        "no_photo_count": 53
+      },
+      {
+        "id": 337,
+        "snapshot_date": "2026-09-08",
+        "platform": "CITYEXPERT",
+        "active_count": 748,
+        "no_photo_count": 0
+      },
+      {
+        "id": 336,
+        "snapshot_date": "2026-09-08",
+        "platform": "HALOOGLASI",
+        "active_count": 3753,
+        "no_photo_count": 31
+      },
+      {
+        "id": 334,
+        "snapshot_date": "2026-09-08",
+        "platform": "NEKRETNINE",
+        "active_count": 3889,
+        "no_photo_count": 43
+      }
+    ],
+    "site_state": [
+      {
+        "is_public": 0,
+        "is_active": 0,
+        "keep_on_site": 0,
+        "n": 83
+      },
+      {
+        "is_public": 1,
+        "is_active": 0,
+        "keep_on_site": 0,
+        "n": 133
+      },
+      {
+        "is_public": 1,
+        "is_active": 1,
+        "keep_on_site": 0,
+        "n": 51
+      }
+    ],
+    "site_age": [
+      {
+        "total": 184,
+        "latest_added": "2026-08-30 11:30:33.577648",
+        "stale7": 171
+      }
+    ],
+    "active_sibling_hidden": [
+      {
+        "n": 7
+      }
+    ],
+    "matched_active": [
+      {
+        "n": 55
+      }
+    ],
+    "pending": [
+      {
+        "id": 312,
+        "status": "PENDING",
+        "created_at": "2026-08-12 18:11:08.793397"
+      }
+    ],
+    "quick_check": [
+      {
+        "quick_check": "ok"
+      }
+    ],
+    "foreign_keys": [],
+    "cron_root": "",
+    "cron_otz": "",
+    "backup_jobs": [],
+    "backups": [
+      {
+        "name": "otz-before-snapshot-20260825-211756.db",
+        "size": 1496510464,
+        "mtime": "2026-08-25T21:18:18.740199+00:00"
+      },
+      {
+        "name": "otz-before-snapshot-20260825-211756.db-shm",
+        "size": 32768,
+        "mtime": "2026-08-25T21:53:07.672016+00:00"
+      },
+      {
+        "name": "otz-before-snapshot-20260825-211756.db-wal",
+        "size": 0,
+        "mtime": "2026-08-25T21:51:28.248170+00:00"
+      }
+    ]
+  },
+  "proxy_probes": [
+    {
+      "slot": "legacy",
+      "checks": [
+        {
+          "target": "https_tunnel",
+          "error_type": "ProxyError",
+          "is_payment_required": true,
+          "elapsed_sec": 0.02
+        },
+        {
+          "target": "nekretnine_list",
+          "error_type": "ProxyError",
+          "is_payment_required": true,
+          "elapsed_sec": 0.01
+        }
+      ]
+    },
+    {
+      "slot": "additional-1",
+      "checks": [
+        {
+          "target": "https_tunnel",
+          "http_status": 200,
+          "elapsed_sec": 0.18,
+          "bytes": 559
+        },
+        {
+          "target": "nekretnine_list",
+          "http_status": 403,
+          "elapsed_sec": 0.12,
+          "bytes": 773
+        }
+      ]
+    },
+    {
+      "slot": "additional-2",
+      "checks": [
+        {
+          "target": "https_tunnel",
+          "http_status": 200,
+          "elapsed_sec": 0.13,
+          "bytes": 559
+        },
+        {
+          "target": "nekretnine_list",
+          "http_status": 403,
+          "elapsed_sec": 0.12,
+          "bytes": 773
+        }
+      ]
+    },
+    {
+      "slot": "primary",
+      "checks": [
+        {
+          "target": "https_tunnel",
+          "http_status": 200,
+          "elapsed_sec": 0.29,
+          "bytes": 559
+        },
+        {
+          "target": "nekretnine_list",
+          "http_status": 403,
+          "elapsed_sec": 0.12,
+          "bytes": 773
+        }
+      ]
+    },
+    {
+      "slot": "secondary",
+      "checks": [
+        {
+          "target": "https_tunnel",
+          "http_status": 200,
+          "elapsed_sec": 0.38,
+          "bytes": 559
+        },
+        {
+          "target": "nekretnine_list",
+          "http_status": 403,
+          "elapsed_sec": 0.28,
+          "bytes": 773
+        }
+      ]
+    }
+  ],
+  "media_probe": {
+    "unpublished_photo_unauthenticated_head": 200,
+    "content_type": "image/jpeg",
+    "content_length": "178189",
+    "private_path_omitted": true
+  },
+  "service_results": {
+    "weekly": {
+      "start_utc": "2026-09-06T04:01:43Z",
+      "exit_utc": "2026-09-06T06:58:52Z",
+      "exit_status": 0,
+      "result": "success",
+      "next_timer_utc": "2026-09-13T04:01:47Z"
+    },
+    "nightly": {
+      "start_utc": "2026-09-08T03:02:37Z",
+      "exit_utc": "2026-09-08T04:09:49Z",
+      "exit_status": 0,
+      "result": "success"
+    },
+    "smoke": {
+      "start_utc": "2026-09-08T06:34:38Z",
+      "exit_utc": "2026-09-08T06:34:55Z",
+      "exit_status": 0,
+      "sources_ok": [
+        "NEKRETNINE",
+        "CETIRI_ZIDA",
+        "HALOOGLASI",
+        "CITYEXPERT"
+      ]
+    },
+    "overlap_2026_09_06": {
+      "start_utc": "04:01:42",
+      "end_utc": "04:44:23",
+      "duration_seconds": 2561
+    }
+  },
+  "effective_settings": {
+    "nightly_detail_refresh": 200,
+    "nightly_heal_limit": 50,
+    "nightly_verify_links_limit": 250,
+    "nightly_refetch_budget_sec": 7200,
+    "refetch_per_fetch_timeout_sec": 90,
+    "site_liveness_enabled": true,
+    "site_liveness_auto_hide": false,
+    "site_liveness_max_hides": 10,
+    "nightly_auto_hide_site_listings": true,
+    "nightly_dupes_write": true,
+    "subscription_notify_since_hours": 24,
+    "nightly_notify_subscriptions": true,
+    "auto_publish_on_send": true
+  },
+  "catalog_followup": {
+    "public_active_cards": 51,
+    "public_active_nonprimary_cards": 20,
+    "nonprimary_with_no_public_active_primary_cards": 20,
+    "distinct_affected_apartments": 16,
+    "public_inactive_cards_with_active_sibling": 7,
+    "those_inactive_cards_also_primary": 0,
+    "live_html_catalog_count": 31,
+    "do_not_sum_affected_counts": true
+  },
+  "http_results": {
+    "/healthz": 200,
+    "/": 200,
+    "/catalog": 200,
+    "/api/map.json": 200,
+    "admin_unauthenticated": 401
+  },
+  "infrastructure": {
+    "root_filesystem_used_percent": 59,
+    "root_filesystem_available_gb": 60,
+    "memory_gb": 3.7,
+    "core_services_active": true,
+    "ufw_active": false,
+    "application_binds": "127.0.0.1:8000,127.0.0.1:8001",
+    "cloud_security_group_checked": false,
+    "cloud_backups_checked": false,
+    "env_permissions": "600 otz:otz"
+  },
+  "tests": {
+    "main": {
+      "passed": 1148,
+      "skipped": 55,
+      "warnings": 34,
+      "seconds": 31.09
+    },
+    "focused_overlapping_suites": [
+      98,
+      88,
+      58
+    ],
+    "browser_subset_system_chrome": {
+      "passed": 28,
+      "failed": 1,
+      "seconds": 46.85,
+      "failure": "outdated test_pwa route expectation /calculator vs /#lead"
+    },
+    "standard_browser_runtime": "missing expected chromium_headless_shell-1228; system Chrome used without installation",
+    "lint_issues": 903,
+    "not_all_lint_are_product_bugs": true
+  },
+  "known_limitations": [
+    "No full listing-by-listing external reconciliation",
+    "No fresh full shadow crawl during review; existing latest full run inspected",
+    "No real Telegram sending",
+    "No cloud backup or AWS security group inspection",
+    "No provider billing/expiry inspection",
+    "No full dependency vulnerability scan"
+  ]
+}

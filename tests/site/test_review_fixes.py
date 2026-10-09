@@ -25,10 +25,10 @@ STATIC = ROOT / "src" / "site" / "static"
 
 
 @pytest.mark.asyncio
-async def test_public_ids_lists_public_primary_only(site_db: str) -> None:
-    """public_ids returns every public+primary site_listing id and never a private one."""
+async def test_public_ids_lists_available_public_representatives(site_db: str) -> None:
+    """The sitemap matches available public representatives, never a private overlay."""
     ids = await rm.public_ids(database_url=site_db)
-    assert set(ids) == {1, 2, 3}  # id 4's site_listing is is_public=False
+    assert set(ids) == {1, 2, 3}  # authorized dead id=3 retained; id=4 private.
     assert 4 not in ids
 
 

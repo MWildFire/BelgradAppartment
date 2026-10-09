@@ -32,7 +32,7 @@ async def test_subscriptions_step_adds_summary_line(monkeypatch):
         )
 
     monkeypatch.setattr(notify_mod, "notify_subscriptions", fake_notify)
-    lines, _pc, _alerts = await _run_nightly_steps()
+    lines, _pc, _alerts, _hidden = await _run_nightly_steps()
     assert any("подписки" in ln and "2" in ln for ln in lines), lines
 
 
@@ -46,7 +46,7 @@ async def test_subscriptions_step_disabled_by_flag(monkeypatch):
         return notify_mod.NotifyStats()
 
     monkeypatch.setattr(notify_mod, "notify_subscriptions", fake_notify)
-    lines, _pc, _alerts = await _run_nightly_steps()
+    lines, _pc, _alerts, _hidden = await _run_nightly_steps()
     assert called["n"] == 0
     assert not any("подписки" in ln for ln in lines)
 
@@ -60,5 +60,5 @@ async def test_subscriptions_step_failure_is_isolated(monkeypatch):
 
     monkeypatch.setattr(notify_mod, "notify_subscriptions", boom)
     # Must not raise — a failed step adds a 🚨 line, never crashes the nightly.
-    lines, _pc, _alerts = await _run_nightly_steps()
+    lines, _pc, _alerts, _hidden = await _run_nightly_steps()
     assert any("🚨" in ln and "подписк" in ln for ln in lines), lines

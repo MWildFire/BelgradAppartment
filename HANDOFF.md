@@ -1,6 +1,146 @@
 # otz-rent-finder — handoff документ
 
-Цель этого документа — дать новому инстансу Claude (или человеку) исчерпывающий контекст для продолжения работы над проектом.
+> **ПРОДОЛЖЕНИЕ 12.09,17:42UTC:** [текущий итог](docs/reviews/2026-09-12-continuation.md). Production52266a2/0014 выпущен:1545unit/54browser/CI PASS, fresh backup1068893files/5631refs принят. Настоящий public timer17:32–17:39UTC:185attempts/142verified/43errors/0skipped, qualitydegraded; DB и post-run HTTP194catalog/181map/215rights PASS. Core4/4 и5timers active. Лимиты3600s/3000 применены, Finder8matches×2recipients подтверждён. Полные source-quality/freshness24h/7d, новая полная automatic backup после исправления и AWS Console остаются открытыми.
+
+Цель этого документа — дать новому агенту или человеку проверяемый контекст для продолжения работы над проектом.
+
+> **ИСТОРИЧЕСКИЙ ЧЕКПОИНТ — ПАУЗА 10.09.2026, 12:35 Asia/Dubai.**
+> Последняя команда Дмитрия: «Остановись не надолго. Продолжим позже. Сделай чекпоинт и расскажи про статус».
+> **Продолжать только после новой команды.** Агенты остановлены, Codex heartbeat не создан.
+> Самодостаточный [чекпоинт10.09](docs/reviews/2026-09-10-checkpoint-1235.md) — текущая точка входа.
+> Production **4684f4709df727accac20cebff598f47a272e5bd /DB0014** уже выпущен:
+> 1513unit/54browser/CI PASS; live207 прав публикации сохранены, каталог188/карта174/sitemap188.
+> Published photos200, actual private photo404, admin401; Caddy bypass закрыт, новые лимиты применены.
+> Рабочие site/monitor/admin/Caddy и прежние4 timers включены. Новый public timer пока выключен.
+> Последняя принятая внешняя копия **20260910-072302-c5c6aa45**, schema0013: полный restore PASS.
+> Новый automatic RunAtLoad0014 **20260910-080628-2989418e прерван по просьбе пользователя**.
+> Backup LaunchAgent disabled/unloaded; local pending сохранён; runner удалил собственный remote staging.
+> Source/canary процессов нет, leases свободны. Для0014 понадобится новая копия; canary/full не запускались.
+> Фоновый SSH исправлен private operational path того же ключа; 4.208s реальная launchd probe PASS.
+> Canary runner frozen ebb0d66e:39tests/independent review PASS, live не установлен/не запускался.
+> Правильный Telegram source проверен: последний альбом09.09 уже вDB; исторического replay нет.
+> Все F01–F23: [статус](docs/reviews/2026-09-08-implementation-status.md), [доказательства10.09](docs/reviews/2026-09-10-resume-evidence.json).
+> План08.09: [remediation](docs/superpowers/plans/2026-09-08-reliability-remediation.md).
+> Сохранять привычный результат Render Finder для Даши, snapshot shadow, activeoff, ручные публикации.
+> Старые пометки «продолжать/актуально/следующий шаг» ниже исторические; новая пауза имеет приоритет.
+
+> **Исторический план миграции (24.08.2026; контекст):**
+> [`Nekretnine Zero-Regression — list snapshot + ISP proxy без изменений Render Finder Bot`](docs/superpowers/plans/2026-08-24-nekretnine-zero-regression-isp-migration.md).
+> Выполнять через обязательный multi-agent DAG: Integration Captain + три постоянно занятых worker-lane
+> в изолированных worktree, с последовательными общими barriers. После абсолютных quality/Telegram
+> gates — shadow, Chrome quote, отдельное подтверждение оплаты, production canary и rollback-ready activation.
+
+---
+
+## 0.0.1. Продолжение Zero-Regression плана — 25.08.2026
+
+Работа продолжена на чистой integration-ветке `codex/nzr-integration`. Реальный локальный результат:
+
+- `ffcc3a6` + `cd3d11b` + `d8b298a` + `2fcb3b3` + `1d4bebb` + `d2c36e0` + `e09a165` + `208a35e` + `eb6611e` — добавлена read-only команда `otz nekretnine-shadow-audit` и узкий модуль
+  `src/scrapers/shadow_audit.py`. Он не открывает DB-сессию, не запускает orchestrator/stale sweep и не
+  отправляет Telegram; сравнивает bounded sample list snapshot против legacy detail, считает coverage,
+  skipped pages, fallback/mismatch/detail/proxy errors и пишет sanitized JSON без полных URL/адресов/секретов.
+  Отчёт теперь самодостаточно маркирует `run_id`, `source=nekretnine`, `mode=shadow` и явные гарантии
+  `no_db_writes`/`no_telegram_sends`/`no_stale_sweep`; это проверяется offline fake-scraper tests.
+  Generic fallback дополнительно требует полный frozen bot-visible набор полей и валидные XXL CDN URLs,
+  чтобы неполный snapshot не классифицировался как complete при отсутствии platform helper.
+  Общий pure `src/scrapers/snapshot_parity.py` теперь задаёт один и тот же normalized contract для audit
+  и orchestrator telemetry, включая `external_id`, URL, address/title и photo IDs.
+  Photo IDs извлекаются из numeric path segment, а не из имени `xxl.jpg`; отдельный negative test ловит
+  разные photo IDs.
+- Proxy pool теперь действительно failover-ит `primary → secondary → metered` после исчерпания
+  browser challenge/reload и fail-closed останавливается после исчерпания кандидатов. В report попадают
+  только числовые proxy counters и число неудачных слотов; recoverable challenge отделён от residual error.
+- Проверка: **1143 passed, 55 skipped, 34 warnings**; shadow/proxy/parser/CLI batch — 57 focused tests, telemetry follow-up — 16 focused tests,
+  shadow/parity contract follow-up — 8 focused tests;
+  `pipeline-probe` — `golden-0001`, confidence `1.000`, `phash`; `git diff --check` — чисто.
+
+На exact `ed52475` B0 получил три независимых PASS, а затем cross-review нашёл и закрыл contract drift
+в `e09a165`/`208a35e`; последующий security review обнаружил и исправил ошибку извлечения photo IDs в
+`eb6611e`. На exact `eb6611e` локальный detached gate зелёный: 1143 passed / 55 skipped, 1198 collected,
+probe, parity дважды, protected diff, syntax и diff-check. Финальный trio на exact implementation SHA
+`eb6611e` / docs HEAD `c0f1089` дал full QA PASS, security/no-write PASS и REVIEW_PASS. Поэтому B0/B1/B2
+закрыты. Chrome-шаг завершён: IPRoyal показывает `order #80637001 was processed` для ISP Dedicated,
+Serbia, 1 proxy, 1 Day (24 hours), Standard fraud score, final price `$2.00`. Выдан один proxy endpoint;
+его credentials не выводятся в чат, заметки или репозиторий. Автопродление на checkout не отображалось.
+Следующий gate — trial smoke/read-only observers; production env и activation остаются отдельными gates.
+
+### 0.0.2. External action status — 2026-08-26
+
+- Использован **только Chrome**; встроенный браузер в этом шаге не использовался.
+- Авторизованный IPRoyal dashboard подтвердил live order: ISP Dedicated, Serbia, quantity 1, 24 hours,
+  Standard fraud score, без extras; exact checkout total `$2.00`; order `#80637001` processed.
+- Payment method: сохранённая Visa `****7348`; card data, пароль, OTP и KYC не вводились и не копировались.
+- Выданный proxy credential оставлен только на экране IPRoyal. В Chrome также открыт штатный `Proxy Tester`,
+  но sensitive credential туда пока не вводился. Для smoke нужен либо локальный ввод Дмитрием, либо отдельное
+  action-time разрешение на передачу credential в IPRoyal Proxy Tester.
+- После action-time разрешения IPRoyal Proxy Tester прошёл provider-level smoke: location Serbia, HTTP|HTTPS,
+  status `200`, speed `217ms`; credential после теста очищен из поля Chrome и не сохранён.
+- Read-only `https://rentbelgrad.com/healthz` через Chrome не открылся: `ERR_BLOCKED_BY_CLIENT`. Это Chrome-side
+  limitation, не доказательство неисправности production. Production `.env`, restart, deploy и DB/Telegram
+  side effects не выполнялись.
+- Для следующего plan gate Дмитрий сам вставляет выданный credential в production `NEKRETNINE_PROXY_PRIMARY_URL`;
+  после этого Captain запускает shadow audit и раздаёт три observer-проверки. Секрет остаётся user-controlled.
+
+### 0.0.3. Production continuation — 2026-08-26
+
+Фактическое продолжение вышеописанного gate выполнено Captain после явного разрешения Дмитрия:
+
+- Production host `3.121.163.130`; `.env` mode `600`, owner `otz:otz`; snapshot mode оставлен `shadow`.
+  В actual code contract используются `NEKRETNINE_PROXY_PRIMARY_URL`, `NEKRETNINE_PROXY_MODE` и
+  `NEKRETNINE_PROXY_METERED_URL`; старый `SCRAPER_PROXY_URL` добавляется как bounded legacy-rotating fallback.
+  TG-only hash не изменился: `ea516cda420c60f6c647c0da4aac9cc5d9ad6b9872cc71cfde5f3abb13241c0e`.
+- Узкий pool fix задеплоен одинаковым SHA локально и на production; local targeted tests — `53 passed`.
+  Services `otz-monitor`, `otz-site`, `caddy` active; production timers enabled.
+- DB backup `/opt/otz/data/backups/otz-before-snapshot-20260825-211756.db`; backup/current counts совпали
+  (`listings=73449`, `matches=358`, `inbound_posts=639`, `site_listings=254`, `leads=9`), quick/integrity
+  check обеих копий — `ok`; report подтвердил no DB writes/no Telegram/no stale sweep.
+- Retry report `/opt/otz/data/reports/nekretnine-shadow-20260826-0137-retry.json` — `STOP`: `3585/4916`
+  (`72.9%`), `skipped_pages=15`, sample `100`, fallback `13`, mismatches `0`, `browser_proxy_errors=44`,
+  `proxy_attempts=2`, `proxy_failovers=1`, оба слота исчерпаны. Active mode не включать.
+- В Chrome подготовлен следующий live quote: ISP Dedicated, Serbia, 2 IP, 30 Days, Standard, unlimited,
+  auto-renewal off, final `$6.00`, без tax/доплат; вкладка оставлена перед `Complete order`. Покупка не нажата:
+  перед финансовым списанием требуется отдельное action-time подтверждение.
+
+### 0.0.4. Additional ISP order and pool expansion — 2026-08-26
+
+- После отдельного подтверждения оплаты в Chrome IPRoyal подтвердил `order #80647128 was processed`:
+  ISP Dedicated, Serbia, 2 IP, 30 days; выданные credentials не записываются в чат, заметки или репозиторий.
+- В код добавлен secret-safe `NEKRETNINE_PROXY_ADDITIONAL_URLS` (comma/newline-separated): порядок теперь
+  `primary → secondary → additional-1..N → metered/legacy`, duplicate URL values отбрасываются, fail-closed
+  сохраняется. Код задеплоен, два новых слота добавлены в production `.env`; монитор не перезапущен до
+  зелёного shadow gate.
+- Локальная проверка после расширения pool: `76 passed` (proxy pool, Nekretnine scraper, shadow audit,
+  scrape metrics). Следующий шаг: задеплоить код и добавить два новых credential в additional slots через
+  защищённый action-time канал, затем повторить полный read-only shadow audit.
+
+### 0.0.5. Live parity blocker isolated — 2026-08-26
+
+- Полный Xvfb shadow report `/opt/otz/data/reports/nekretnine-shadow-20260826-0835-additional-pool-xvfb.json`:
+  `4888/4893` (`99.898%`), `skipped_pages=0`, `detail_errors=0`, `browser_proxy_errors=0`,
+  `no_db_writes/no_telegram_sends/no_stale_sweep=true`.
+- Остался только `snapshot_detail_mismatch`: 40 `address_raw` fields. Targeted payload inspection
+  показал, что list snapshot содержит location line, а detail payload у этих rows односторонне отдаёт
+  `address=null`; это не proxy failure и не конфликт двух адресов. Один price mismatch исчез при
+  повторной проверке и трактуется как live price change during a long crawl, не как parser regression.
+- Shared parity contract теперь принимает missing `address_raw` только в detail при непустом snapshot;
+  два непустых разных значения по-прежнему fail. Добавлен regression test; перед activation нужен
+  новый deploy и полный shadow audit с повторной проверкой price parity.
+
+### 0.0.6. Green shadow gate and controlled restart — 2026-08-26
+
+- После deploy `4b860e3` detached report `/opt/otz/data/reports/nekretnine-shadow-20260826-0845-parity-fix.json`
+  прошёл: `4888/4893` (`99.898%`), `skipped_pages=0`, `sample=100`, `complete=86`, `fallback=14`,
+  `mismatches=0`, `detail_errors=0`, `browser_proxy_errors=0`, `proxy_errors=0`, `failure_reasons=[]`.
+  Flags `no_db_writes`, `no_telegram_sends`, `no_stale_sweep` — `true`; proxy counters: `attempts=2`,
+  `failovers=1`, `challenges=1`, `failed_proxy_slots=1` (legacy rotating fallback remains exhausted but
+  no longer blocks the four static ISP candidates).
+- После green report выполнен controlled `systemctl restart otz-monitor`: `active/running`, `ExecMainStatus=0`,
+  `NRestarts=0`. Production `scrape-smoke --platform nekretnine` — `OK`, `previews=25`, `detail_ok=True`.
+  `otz-site`/`caddy` active and enabled, `/healthz` HTTP 200, Alembic `0011_keep_on_site (head)`, SQLite
+  `PRAGMA quick_check=ok`.
+- `NEKRETNINE_LIST_SNAPSHOT_MODE=shadow` оставлен намеренно. Следующий gate — наблюдение следующего healthy
+  run и отдельное решение по active; user-side blocker отсутствует.
 
 ---
 
@@ -577,6 +717,7 @@ ssh root@90.156.254.159 'otz-bg <subcommand> [args...]'
 | `daily-summary` | Ручной запуск утренней сводки |
 | `backfill-nekretnine-address` | Re-fetch только адресов для nekretnine listings |
 | `ship-log <file> --label X` | Послать tail файла в Saved Messages |
+| `nekretnine-shadow-audit --max-pages N --compare-details N --report PATH` | Read-only snapshot/detail audit; sanitized report, без DB/Telegram |
 
 После каждого `otz-bg` запуска **автоматически** прилетает tail (150 строк) в Saved Messages.
 
@@ -958,6 +1099,8 @@ src/
 ├── scrapers/
 │   ├── base.py                     # Scraper ABC, ListingPreview/Detail
 │   ├── orchestrator.py             # scrape_all_with_throttle, mark_stale_inactive, photo download
+│   ├── shadow_audit.py              # read-only snapshot/detail quality gate
+│   ├── proxy_pool.py                # secret-safe Nekretnine proxy slots/failover
 │   ├── nekretnine.py
 │   ├── cetiri_zida.py
 │   └── halooglasi.py               # playwright + stealth + xvfb

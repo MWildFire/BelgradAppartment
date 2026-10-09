@@ -1,0 +1,152 @@
+{
+  "checked_at": "2026-10-05T11:04:00.101889+00:00",
+  "scope": "approved local first transition fallback, synthetic fault injection, existing backup metadata only",
+  "base_commit": "e9dddefc185db99a60a37199c7efec367f801199",
+  "branch": "codex/renfinder-validation-20261005",
+  "fallback": {
+    "revision": "e9dddefc185db99a60a37199c7efec367f801199",
+    "packet": "renfinder-e9dddef-local-only.tar.gz",
+    "packet_sha256": "b2091cecf32a8d76974afbe32adbcb7d03f7c4cdb4f53db86ac61e87cb5ec97c",
+    "contract_head": "0016_identity_edges",
+    "independent_review_actual_old_helper": "passed"
+  },
+  "unit": {
+    "passed": 1816,
+    "skipped": 1,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 144.483
+  },
+  "browser": {
+    "passed": 54,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 59.159
+  },
+  "independent_review": {
+    "focused_passed": 73,
+    "open_reproduced_blockers": 0,
+    "agent": "/root/review_safety"
+  },
+  "first_transition_cases": 25,
+  "synthetic_preservation": [
+    "pending validation job",
+    "processing digest lease",
+    "confirmed identity edge",
+    "identity event",
+    "apartment identity",
+    "source watermark",
+    "sent delivery",
+    "unknown delivery",
+    "new photo",
+    "original legacy rollback archive"
+  ],
+  "interruption_boundaries": [
+    "candidate src/alembic/venv both rename boundaries",
+    "candidate release marker both rename boundaries",
+    "after migration commit before fallback",
+    "fallback src/venv/marker both rename boundaries",
+    "fallback health failure and retry through saved controller",
+    "two interruptions during candidate and legacy restore"
+  ],
+  "backup": {
+    "verified_at": "2026-10-05T10:49:50.718911+00:00",
+    "generation_id": "20261004-121413-8bbe54dd",
+    "generation_root": "/Users/mvstrike/Backups/RentBelgrad/offhost/generations/20261004-121413-8bbe54dd",
+    "receipt": "/Users/mvstrike/Backups/RentBelgrad/offhost/receipts/20261004-121413-8bbe54dd.json",
+    "created_at": "2026-10-04T12:14:39.266402+00:00",
+    "expires_36h": "2026-10-06T00:14:39.266402+00:00",
+    "manifest_sha256": "63479bf3f74a09ceb0a58bb6293c6ceb433fd1f2159beb4d0f3965a61a7c6d2b",
+    "manifest_matches_receipt": true,
+    "files": 391439,
+    "receipt_files_match": true,
+    "logical_bytes": 33681940784,
+    "backup_gate_passed_now": true,
+    "prior_restore_proof": {
+      "result": "data_restore_verified",
+      "offhost_verified": true,
+      "protected_recovery_verified": true,
+      "health_receipt_published": true,
+      "application": {
+        "apartment": 200,
+        "catalog": 200,
+        "network": "disabled",
+        "photo": 200,
+        "photo_decoded": true
+      }
+    },
+    "policy": {
+      "launch_attempt_interval_seconds": 21600,
+      "run_at_load": true,
+      "data_snapshot_interval_hours": "24",
+      "min_free_gib": "20",
+      "retained_verified_generations": 2,
+      "rotation_after_verified_promotion_only": true
+    },
+    "limitations": [
+      "Existing receipt proof and manifest identity verified; full media payload not rehashed again.",
+      "No protected payload opened; no new production transfer, snapshot or service change."
+    ],
+    "protected_proof_flags": {
+      "config_verified": [
+        "env",
+        "caddy"
+      ],
+      "encrypted_storage_verified": true,
+      "files_hash_verified": true,
+      "permissions_verified": true,
+      "protected_recovery_verified": true,
+      "live_authentication_checked": false,
+      "sessions_verified": 2,
+      "session_authorization_material_present": true
+    }
+  },
+  "library_before_update": {
+    "library_file_id": "libfile_ab7775a35a3081919d25a7d91e69e78a",
+    "verified_version": 1,
+    "duplicate_created": false
+  },
+  "actual_model_api_calls": 0,
+  "production_mutations": 0,
+  "new_production_data_transfers": 0,
+  "push_performed": false,
+  "limitations": [
+    "Synthetic service operations intercepted; real preflight and readiness remain release gates.",
+    "Partial0015 or unknown schema fail closed with writers stopped; operator repair required.",
+    "Local Linux ARM64 is not native AWS x86 CI.",
+    "Full media payload not rehashed again; verified existing manifest and restore receipt.",
+    "No model quality evaluation or paid transport."
+  ],
+  "artifact_sha256": {
+    "first-transition-unit-final.xml": "32d6b04dd89fbc27c2cad4e78549ab620a26576e7fdd10697fde056352d8f6e8",
+    "first-transition-unit-final.log": "d561e5d62a72e4b415ef16be48104d7752ce7e2b4503f3853a2c14377a04d070",
+    "first-transition-browser.xml": "520f24645ecad96ee54a249f06d3dc37307b6ab008326d759cda3b215f671d48",
+    "first-transition-browser.log": "a25a9b806781812c023013c96de6275dbf8e40e91554a3dcf2b0501824ca35a8",
+    "existing-backup-verified.json": "1cd7401aad395f585c2c105bcb20d1c12085b341c673ebf2020a8051b24f0c78",
+    "first-transition-linux-final.xml": "f5a9f32a5970e7eae0ff35fa69f079acadb61a8b9625793169b4c987dece5249",
+    "first-transition-linux-final.log": "5d0ce5ed4881c7a6a321bacb0ac2cf0c6cb37278dd9c01267370489e33e7874e"
+  },
+  "changed_source_sha256": {
+    "scripts/release.py": "d7dbd44f16f9732408a0bd28d6957ff8ca35682126d25eef4a306543339570cf",
+    "scripts/deploy_packet.py": "7adf7449bf600f096cae4199d061d8431c32848687ea8889bf7126689516d01e",
+    "tests/test_release.py": "ead863d03bfe0327870f8329bab5e5cba32b11fab8c82fef37d017fe96f03c5e",
+    "tests/test_release_http_readiness.py": "63634a2501bde01b8d4e4f70d05db396bdf65ca877c89e032f25bb3efe2ffd5b",
+    "tests/test_release_first_transition.py": "1dba16ae68bf5a81d8f4078fe593cea85a4698ac94d7dbde9e8d75aa6534db90"
+  },
+  "linux_release": {
+    "passed": 97,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 10.085,
+    "network": "none",
+    "architecture": "aarch64",
+    "image": "renfinder-readiness:py312-20261005-curl"
+  },
+  "checks": {
+    "changed_lint": "passed",
+    "shell": "passed",
+    "diff_check": "passed"
+  }
+}

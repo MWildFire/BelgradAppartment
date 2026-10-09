@@ -1,0 +1,36 @@
+{
+  "order_dependent_winner": {
+    "A_B": [
+      2,
+      2,
+      0.95,
+      "clip"
+    ],
+    "B_A": [
+      1,
+      2,
+      1.0,
+      "phash"
+    ]
+  },
+  "two_inbound_duplicates_one_listing_photo": {
+    "phash": 2,
+    "clip": 2
+  },
+  "existing_files_but_zero_image_blocks": 0,
+  "lost_active_sibling": {
+    "original_group": 1,
+    "active_sibling_group": null,
+    "members_seen_by_public_original": [
+      1
+    ],
+    "original_availability_after_regroup": "dead"
+  },
+  "lost_partial_digest": {
+    "input_shares": 2,
+    "saved_shares": [
+      "good"
+    ],
+    "next_backfill_min_id": 100
+  }
+}

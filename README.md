@@ -50,7 +50,7 @@ uv run uvicorn src.admin.app:app --host 127.0.0.1 --port 8000
 src/
 ├── config.py          # pydantic-settings
 ├── db/                # SQLAlchemy 2.x async + session
-├── scrapers/          # nekretnine, 4zida, halooglasi, cityexpert
+├── scrapers/          # nekretnine, 4zida, halooglasi, cityexpert + shadow audit
 ├── matching/          # pHash + CLIP fallback
 ├── telegram/          # monitor (Telethon) + publisher (Bot API)
 ├── post/              # генератор поста по шаблону
@@ -80,6 +80,7 @@ otz rematch-all --hamming N # сбросить статусы и пересчи�
 otz match <inbound_id>      # one-off матчинг конкретного inbound
 otz stats                   # текущее состояние БД
 otz site-liveness [--dry-run] # свип живости публичных карточек (снятие только когда мертво везде)
+otz nekretnine-shadow-audit --max-pages 500 --compare-details 100 --report data/reports/nekretnine-shadow-YYYYMMDD.json
 otz admin                   # запустить веб-просмотр (FastAPI)
 ```
 

@@ -21,6 +21,7 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import src.db.session as db_session
+from src.config import get_settings
 from src.db.models import Base, Listing, Platform
 from src.scrapers.base import ListingDetail, ListingPreview
 from src.scrapers.orchestrator import ScrapeResult, scrape_platform
@@ -86,6 +87,47 @@ class _FakeScraper:
         return ListingDetail(platform=self.platform, external_id=ext, url=url)
 
 
+class _SnapshotFake:
+    platform = Platform.NEKRETNINE
+
+    def __init__(self, snapshot: ListingDetail, detail: ListingDetail | None = None) -> None:
+        self.snapshot = snapshot
+        self.detail = detail or snapshot
+        self.proxy_metrics = {"proxy_challenges": 2, "proxy_failovers": 1, "proxy_errors": 0}
+        self.fetches = 0
+
+    async def list_recent(self, *, max_pages, known_ids):
+        return [
+            ListingPreview(
+                platform=self.platform,
+                external_id=self.snapshot.external_id,
+                url=self.snapshot.url,
+                snapshot=self.snapshot,
+            )
+        ]
+
+    async def fetch_detail(self, url: str) -> ListingDetail:
+        self.fetches += 1
+        return self.detail
+
+
+def _complete_snapshot(external_id: str = "snapshot-1", *, address_raw: str | None = "Address") -> ListingDetail:
+    return ListingDetail(
+        platform=Platform.NEKRETNINE,
+        external_id=external_id,
+        url=f"https://www.nekretnine.rs/oglasi/{external_id}/",
+        price_eur=700,
+        area_m2=50.0,
+        rooms=2.0,
+        district="Vračar",
+        address_raw=address_raw,
+        lat=44.8,
+        lon=20.46,
+        title="Flat",
+        photo_urls=["https://pic.nekretnine.rs/image/1001/xxl.jpg"],
+    )
+
+
 # --------------------------------------------------------------------------- parse_rate property
 
 
@@ -99,6 +141,27 @@ def test_parse_rate_zero_attempts_is_one():
     from ever alerting)."""
     r = ScrapeResult(platform=Platform.NEKRETNINE, details_attempted=0, details_parsed_ok=0)
     assert r.parse_rate == 1.0
+
+
+def test_cli_summary_includes_snapshot_and_proxy_telemetry(capsys):
+    from src.cli import _print_summary
+
+    _print_summary([
+        ScrapeResult(
+            platform=Platform.NEKRETNINE,
+            previewed=10,
+            snapshot_mode="active",
+            snapshots_seen=10,
+            snapshots_complete=9,
+            snapshot_fallbacks=1,
+            proxy_metrics={"proxy_challenges": 2, "proxy_failovers": 1, "proxy_errors": 0},
+        )
+    ])
+
+    output = capsys.readouterr().out
+    assert "snapshots=9/10" in output
+    assert "fallback=1" in output
+    assert "proxy(challenge=2,failover=1,errors=0)" in output
 
 
 # --------------------------------------------------------------------------- counter wiring
@@ -145,6 +208,64 @@ async def test_reseen_listings_do_not_inflate_attempts(factory):
     assert result.details_attempted == 2
     assert result.details_parsed_ok == 2
     assert result.updated == 4
+
+
+@pytest.mark.asyncio
+async def test_snapshot_and_proxy_telemetry_is_wired_to_scrape_result(factory, monkeypatch):
+    monkeypatch.setattr(get_settings(), "nekretnine_list_snapshot_mode", "active")
+    scraper = _SnapshotFake(_complete_snapshot())
+
+    result = await scrape_platform(
+        scraper, max_pages=1, max_new=None, download_photos=False, incremental=False
+    )
+
+    assert result.snapshot_mode == "active"
+    assert result.snapshots_seen == 1
+    assert result.snapshots_complete == 1
+    assert result.snapshots_incomplete == 0
+    assert result.snapshot_active_uses == 1
+    assert result.snapshot_fallbacks == 0
+    assert result.snapshot_fallback_rate == 0.0
+    assert result.details_attempted == 0
+    assert result.proxy_metrics == scraper.proxy_metrics
+    assert scraper.fetches == 0
+
+
+@pytest.mark.asyncio
+async def test_incomplete_snapshot_telemetry_counts_legacy_fallback(factory, monkeypatch):
+    monkeypatch.setattr(get_settings(), "nekretnine_list_snapshot_mode", "active")
+    incomplete = _complete_snapshot(address_raw=None)
+    scraper = _SnapshotFake(incomplete, detail=_complete_snapshot())
+
+    result = await scrape_platform(
+        scraper, max_pages=1, max_new=None, download_photos=False, incremental=False
+    )
+
+    assert result.snapshots_seen == 1
+    assert result.snapshots_complete == 0
+    assert result.snapshots_incomplete == 1
+    assert result.snapshot_fallbacks == 1
+    assert result.snapshot_fallback_rate == 1.0
+    assert result.details_attempted == 1
+    assert scraper.fetches == 1
+
+
+@pytest.mark.asyncio
+async def test_shadow_mismatch_count_is_exposed_in_scrape_result(factory, monkeypatch):
+    monkeypatch.setattr(get_settings(), "nekretnine_list_snapshot_mode", "shadow")
+    snapshot = _complete_snapshot()
+    detail = _complete_snapshot()
+    detail.price_eur = 725
+    scraper = _SnapshotFake(snapshot, detail=detail)
+
+    result = await scrape_platform(
+        scraper, max_pages=1, max_new=None, download_photos=False, incremental=False
+    )
+
+    assert result.snapshot_mode == "shadow"
+    assert result.snapshot_shadow_mismatches == 1
+    assert result.snapshot_active_uses == 0
+    assert result.details_attempted == 1
 
 
 # --------------------------------------------------------------------------- degradation guard

@@ -1,0 +1,65 @@
+"""Shared normalized parity contract for Nekretnine snapshot/detail comparisons."""
+
+from __future__ import annotations
+
+from typing import Any
+from urllib.parse import urlparse
+
+from src.scrapers.base import ListingDetail
+
+COMPARE_FIELDS = (
+    "external_id",
+    "url",
+    "price_eur",
+    "area_m2",
+    "rooms",
+    "district",
+    "address_raw",
+    "title",
+    "lat",
+    "lon",
+    "photo_ids",
+)
+
+
+def photo_ids(urls: list[str]) -> list[str]:
+    """Return stable photo IDs while ignoring URL presentation details."""
+    result: list[str] = []
+    for url in urls:
+        path_parts = [part for part in urlparse(url).path.split("/") if part]
+        if len(path_parts) >= 3 and path_parts[-3] == "image":
+            result.append(path_parts[-2])
+        else:
+            result.append(path_parts[-1] if path_parts else "unknown")
+    return result
+
+
+def normalized(detail: ListingDetail) -> dict[str, Any]:
+    return {
+        "external_id": detail.external_id,
+        "url": detail.url,
+        "price_eur": detail.price_eur,
+        "area_m2": detail.area_m2,
+        "rooms": detail.rooms,
+        "district": detail.district,
+        "address_raw": detail.address_raw,
+        "title": detail.title,
+        "lat": detail.lat,
+        "lon": detail.lon,
+        "photo_ids": photo_ids(detail.photo_urls),
+    }
+
+
+def mismatch_fields(left: ListingDetail, right: ListingDetail) -> list[str]:
+    left_values = normalized(left)
+    right_values = normalized(right)
+    mismatches: list[str] = []
+    for field in COMPARE_FIELDS:
+        # Nekretnine's detail payload can omit the street address while the list snapshot still
+        # carries the bot-visible location line. A complete snapshot wins this one-sided absence;
+        # two non-empty values must still match.
+        if field == "address_raw" and left_values[field] and right_values[field] is None:
+            continue
+        if left_values[field] != right_values[field]:
+            mismatches.append(field)
+    return mismatches

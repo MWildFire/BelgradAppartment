@@ -53,7 +53,7 @@ def test_upgrade_0011_adds_keep_on_site(tmp_path: Path) -> None:
     cfg = _alembic_cfg(db_path)
     command.upgrade(cfg, "0010_analytics")  # schema as it stands just before 0011
     _seed_site_listing_pre_0011(db_path)
-    command.upgrade(cfg, "head")  # apply 0011
+    command.upgrade(cfg, "0011_keep_on_site")  # apply 0011
 
     cols = _cols(db_path)
     assert "keep_on_site" in cols, "0011 must add site_listings.keep_on_site"
@@ -71,7 +71,7 @@ def test_upgrade_0011_adds_keep_on_site(tmp_path: Path) -> None:
 def test_downgrade_0011_removes_keep_on_site(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0011_keep_on_site")
     command.downgrade(cfg, "0010_analytics")
     assert "keep_on_site" not in _cols(db_path), "downgrade must drop the column"
 
@@ -79,7 +79,7 @@ def test_downgrade_0011_removes_keep_on_site(tmp_path: Path) -> None:
 def test_roundtrip_0011_up_down_up(tmp_path: Path) -> None:
     db_path = tmp_path / "mig.db"
     cfg = _alembic_cfg(db_path)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "0011_keep_on_site")
     command.downgrade(cfg, "0010_analytics")
-    command.upgrade(cfg, "head")  # must re-apply cleanly
+    command.upgrade(cfg, "0011_keep_on_site")  # must re-apply cleanly
     assert "keep_on_site" in _cols(db_path)

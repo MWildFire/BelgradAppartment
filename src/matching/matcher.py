@@ -1,33 +1,18 @@
-"""Match inbound posts (Telegram) against scraped listings (platforms).
-
-**Two-stage algorithm** (replaces the old pHash-only matcher — too brittle for watermarks):
-
-Stage 1 — Fast pHash pre-screen (best-effort optimisation):
-- For each inbound photo, count listings with at least one photo whose pHash Hamming
-  distance is ≤ `PHASH_MAX_HAMMING`. If any listing collects ≥2 such hits, we still
-  validate with CLIP, but the candidate pool is already narrowed.
-- Most matches don't need stage 2 — pHash alone catches bit-identical re-uploads.
-
-Stage 2 — CLIP cosine similarity (main signal):
-- Each photo has a 512-dim CLIP ViT-B/32 embedding stored as a BLOB in the DB.
-- For every (inbound, listing) pair, compute pairwise cosine similarity matrix
-  (cheap: O(Ni·Nl·512) ≈ negligible).
-- An inbound photo "matches" if its best similarity to any listing photo is ≥ `CLIP_SIMILARITY_THRESHOLD` (default 0.85).
-- If ≥ `MIN_MATCHED_PHOTOS` inbound photos have a match, the listing is a candidate.
-- Among candidates, the listing with the highest aggregate score wins.
-
-CLIP is robust to watermarks (nekretnine's logo overlay), JPEG re-encoding, mild cropping,
-and brightness shifts — which is exactly how owners' photos differ from platform-uploaded versions.
-"""
+"""Deterministic independent-photo matching with durable, fail-closed vision validation."""
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
-import math
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import select
+import numpy as np
+from numpy.typing import NDArray
+from sqlalchemy import select, update
 
 from src.config import get_settings
 from src.db import (
@@ -38,6 +23,8 @@ from src.db import (
     MatchStatus,
     get_session,
 )
+from src.db.models import ValidationJob
+from src.matching import validation_jobs
 from src.matching.candidates import (
     CandidateCache,
     CandidateRow,
@@ -48,12 +35,15 @@ from src.matching.candidates import (
 )
 from src.matching.clip_embed import unpack_embeddings
 from src.matching.inbound_parser import ParsedInbound, parse_inbound_text
+from src.matching.pairs import clip_pairs, phash_pairs
+from src.matching.validation_contracts import ValidationOutcome
 
 logger = logging.getLogger(__name__)
 
 # Status values for MatchResult.status
 STATUS_MATCHED = "matched"
 STATUS_NO_MATCH = "no_match"
+STATUS_PENDING = "validation_pending"
 
 # Method markers for MatchResult.method — describe HOW the candidate was chosen / rejected.
 METHOD_PHASH = "phash"
@@ -74,223 +64,319 @@ class MatchResult:
 
 
 async def match_inbound(inbound_id: int, cache: CandidateCache | None = None) -> MatchResult:
-    """Run the multi-stage matcher for one inbound post; persist Match on success.
-
-    Pipeline: pHash pre-screen → CLIP cosine → text cross-check → (optional) Claude LLM vision check.
-
-    `cache` — optional batch-level candidate snapshot (see candidates.py); default None keeps
-    the per-call candidates SELECT exactly as before (the live monitor path is unchanged).
-    The CPU scan itself always runs in a worker thread so the event loop stays responsive.
-    """
-    settings = get_settings()
-    clip_thr = settings.clip_similarity_threshold
-    min_photos = settings.min_matched_photos
-    phash_thr = settings.phash_max_hamming
-
-    async with get_session() as s:
-        inbound = await s.get(InboundPost, inbound_id)
-        if inbound is None:
+    """Claim → local scan → bounded validation → atomic result. Provider IO holds no session."""
+    async with get_session() as session:
+        if await session.get(InboundPost, inbound_id) is None:
             raise ValueError(f"InboundPost {inbound_id} not found")
-        if not inbound.photo_phashes:
-            inbound.status = InboundStatus.NO_MATCH
-            return MatchResult(inbound_id, None, 0, 0.0, STATUS_NO_MATCH)
-
         existing = (
-            await s.execute(
-                select(Match)
-                .where(Match.inbound_post_id == inbound_id)
-                .order_by(Match.matched_photo_count.desc())
+            (
+                await session.execute(
+                    select(Match)
+                    .where(
+                        Match.inbound_post_id == inbound_id,
+                    )
+                    .order_by(Match.id)
+                )
             )
-        ).scalars().first()
+            .scalars()
+            .first()
+        )
         if existing is not None:
             return MatchResult(
-                inbound_id, existing.listing_id, existing.matched_photo_count,
-                existing.confidence, STATUS_MATCHED, match_id=existing.id, method=existing.method,
+                inbound_id,
+                existing.listing_id,
+                existing.matched_photo_count,
+                existing.confidence,
+                STATUS_MATCHED,
+                existing.id,
+                existing.method,
             )
+    token = await validation_jobs.claim(inbound_id)
+    if token is None:
+        return MatchResult(inbound_id, None, 0, 0.0, STATUS_PENDING)
+    try:
+        return await _match_claimed(inbound_id, token, cache)
+    except Exception:
+        await validation_jobs.defer(inbound_id, token, "internal_error")
+        raise
 
-        inbound_phashes = list(inbound.photo_phashes)
-        inbound_embs = unpack_embeddings(inbound.photo_embeddings) if inbound.photo_embeddings else []
 
-        # Early exit: matched_photo_count can never exceed the number of inbound photos, so an
-        # inbound with fewer photos than min_matched_photos is a guaranteed NO_MATCH — skip the
-        # full listing scan (which costs seconds across ~20k active listings).
-        if max(len(inbound_phashes), len(inbound_embs)) < min_photos:
-            inbound.status = InboundStatus.NO_MATCH
-            logger.info(
-                "[match] inbound=%s NO_MATCH (only %d photo(s) < min_matched_photos=%d — scan skipped)",
-                inbound_id, max(len(inbound_phashes), len(inbound_embs)), min_photos,
-            )
-            return MatchResult(inbound_id, None, 0, 0.0, STATUS_NO_MATCH)
-
-        if cache is not None:
-            rows = cache.rows
+async def _match_claimed(
+    inbound_id: int,
+    token: str,
+    cache: CandidateCache | None,
+) -> MatchResult:
+    settings = get_settings()
+    async with get_session() as session:
+        inbound = await session.get(InboundPost, inbound_id)
+        assert inbound is not None
+        inbound_ints = parse_phashes(inbound.photo_phashes or [])
+        inbound_embs = (
+            unpack_embeddings(inbound.photo_embeddings) if inbound.photo_embeddings else []
+        )
+        if max(len(inbound_ints), len(inbound_embs)) < settings.min_matched_photos:
+            rows = []
         else:
-            # Lightweight scan rows only — photo_embeddings BLOBs (~20 KB/row, hundreds of MB
-            # total) are fetched separately in chunks during stage 2, never all at once.
-            db_rows = (await s.execute(candidate_scan_select())).all()
-            # Hex→int pHash parsing over ~20k rows is CPU — off the loop like the scan stages.
-            rows = await asyncio.to_thread(scan_rows_from_db, db_rows)
-
-        # Parse price/area from inbound caption — used to reject CLIP false-positives.
-        parsed = parse_inbound_text(inbound.raw_text)
-
-        # Stage 1 — pHash pre-screen for every listing. Plain 64-bit XOR+popcount: identical
-        # result to imagehash's hamming distance but ~40x faster — the old per-call
-        # hex_to_hash() parsing froze the event loop for 40-75s per inbound at 20k listings.
-        # Runs in a worker thread (pure CPU, no session) so the live monitor keeps ticking.
-        inbound_ints = parse_phashes(inbound_phashes)
-        ph_counts = await asyncio.to_thread(_phash_prescreen, inbound_ints, rows, phash_thr)
-
-        # Stage 2 — CLIP cosine for every listing that has embeddings: BLOBs fetched on the
-        # loop in bounded chunks, unpack + matmul per chunk handed to a worker thread.
+            rows = (
+                cache.rows
+                if cache is not None
+                else await asyncio.to_thread(
+                    scan_rows_from_db,
+                    (await session.execute(candidate_scan_select())).all(),
+                )
+            )
+        ph_counts = await asyncio.to_thread(
+            _phash_prescreen,
+            inbound_ints,
+            rows,
+            settings.phash_max_hamming,
+        )
         clip_results: dict[int, tuple[int, float]] = {}
+        blob_fingerprints: dict[int, str] = {}
         if inbound_embs:
             emb_ids = [row.id for row in rows if row.has_embs]
             for start in range(0, len(emb_ids), _CLIP_CHUNK):
-                chunk_ids = emb_ids[start:start + _CLIP_CHUNK]
-                blob_rows = (
-                    await s.execute(
-                        select(Listing.id, Listing.photo_embeddings)
-                        .where(Listing.id.in_(chunk_ids))
+                blobs = (
+                    await session.execute(
+                        select(Listing.id, Listing.photo_embeddings).where(
+                            Listing.id.in_(emb_ids[start : start + _CLIP_CHUNK]),
+                        )
                     )
                 ).all()
+                blob_fingerprints.update(
+                    {cid: hashlib.sha256(blob).hexdigest() for cid, blob in blobs if blob}
+                )
                 clip_results.update(
-                    await asyncio.to_thread(_clip_score_chunk, inbound_embs, blob_rows, clip_thr)
+                    await asyncio.to_thread(
+                        _clip_score_chunk,
+                        inbound_embs,
+                        blobs,
+                        settings.clip_similarity_threshold,
+                    )
                 )
-
-        # Stage 3 + winner selection — pure CPU, also off the loop.
-        best_id, best_count, best_score, best_method = await asyncio.to_thread(
-            _select_best, rows, ph_counts, clip_results, parsed, len(inbound_phashes), settings,
+        ranked = _rank_candidates(
+            rows,
+            ph_counts,
+            clip_results,
+            parse_inbound_text(inbound.raw_text),
+            len(inbound_ints),
+            settings,
         )
+        candidates: list[tuple[Listing, int, float, str]] = []
+        snapshot_changed = False
+        scan_rows = {row.id: row for row in rows}
+        seen_identities: set[int] = set()
+        overflow = False
+        for cid, count, score, method in ranked:
+            if count < settings.min_matched_photos:
+                continue
+            listing = await session.get(Listing, cid)
+            if listing is not None and listing.is_active and count >= settings.min_matched_photos:
+                scanned = scan_rows[cid]
+                changed = scanned.phash_ints != tuple(
+                    parse_phashes(listing.photo_phashes or [])
+                ) or any(
+                    getattr(scanned, name) != getattr(listing, name)
+                    for name in ("price_eur", "area_m2", "district", "is_primary")
+                )
+                if cid in blob_fingerprints:
+                    changed = (
+                        changed
+                        or blob_fingerprints[cid]
+                        != hashlib.sha256(listing.photo_embeddings or b"").hexdigest()
+                    )
+                if changed:
+                    snapshot_changed = True
+                    continue
+                identity = listing.dup_group_id or listing.id
+                if identity in seen_identities:
+                    continue
+                seen_identities.add(identity)
+                if len(candidates) == settings.llm_max_candidates:
+                    overflow = True
+                    break
+                candidates.append((listing, count, score, method))
+        # ORM objects are detached after this block (expire_on_commit=False).
 
-        best_listing: Listing | None = (
-            await s.get(Listing, best_id) if best_id is not None else None
+    if snapshot_changed:
+        await validation_jobs.defer(inbound_id, token, "candidate_snapshot_changed")
+        return MatchResult(inbound_id, None, 0, 0.0, STATUS_PENDING)
+    best = ranked[0] if ranked else (None, 0, 0.0, METHOD_CLIP)
+    outcomes: list[dict[str, Any]] = []
+    accepted: list[tuple[Listing, int, float, str]] = []
+    pending_reason: str | None = None
+    review = False
+    if candidates and (candidates[0][3] == METHOD_PHASH or not settings.enable_llm_validation):
+        accepted = [candidates[0]]
+    else:
+        try:
+            async with asyncio.timeout(settings.llm_total_timeout_seconds):
+                for listing, count, score, _method in candidates:
+                    outcome = await _run_llm_validation(inbound, listing, settings)
+                    outcomes.append({"listing_id": listing.id, **asdict(outcome)})
+                    if outcome.accepted:
+                        accepted.append((listing, count, score, METHOD_CLIP_LLM))
+                    elif outcome.verdict != "different":
+                        pending_reason = outcome.reason_code
+                        review = review or outcome.verdict in {"uncertain", "invalid_evidence"}
+        except TimeoutError:
+            pending_reason = "deadline_exceeded"
+
+    # A confirmed candidate is not unique while another candidate remains unresolved.
+    identities = {item[0].dup_group_id or item[0].id for item in accepted}
+    if overflow and not (accepted and accepted[0][3] == METHOD_PHASH):
+        pending_reason, review = "candidate_limit", True
+    if len(identities) > 1:
+        pending_reason, review = "multiple_identities", True
+    if pending_reason:
+        await validation_jobs.defer(
+            inbound_id, token, pending_reason, review=review, outcomes=outcomes
         )
-        if best_listing is None or best_count < min_photos:
-            inbound.status = InboundStatus.NO_MATCH
-            logger.info(
-                "[match] inbound=%s NO_MATCH (best_count=%d listings=%d threshold=%d phash≤%d clip≥%.2f)",
-                inbound_id, best_count, len(rows), min_photos, phash_thr, clip_thr,
+        return MatchResult(inbound_id, None, best[1], best[2], STATUS_PENDING)
+
+    # Consume the lease with a conditional write BEFORE creating a Match in the same transaction.
+    async with get_session() as session:
+        owned = (
+            await session.execute(
+                update(ValidationJob)
+                .where(
+                    ValidationJob.inbound_id == inbound_id,
+                    ValidationJob.lease_token == token,
+                    ValidationJob.lease_until > datetime.now(UTC),
+                )
+                .values(
+                    state="complete",
+                    outcomes=outcomes,
+                    lease_token=None,
+                    lease_until=None,
+                    next_retry_at=None,
+                    updated_at=datetime.now(UTC),
+                )
+                .returning(ValidationJob.inbound_id)
             )
-            return MatchResult(inbound_id, None, best_count, best_score, STATUS_NO_MATCH, method=best_method)
-
-        # Stage 4 — LLM final validation. Reads inbound + listing photos from disk and asks Claude
-        # whether they show the same apartment. Catches false positives that pass CLIP + text checks.
-        llm_method = best_method
-        if settings.enable_llm_validation and best_method == METHOD_CLIP:
-            llm_ok = await _run_llm_validation(inbound, best_listing, settings)
-            if llm_ok is False:
-                inbound.status = InboundStatus.NO_MATCH
-                logger.info(
-                    "[match] inbound=%s REJECTED by LLM (CLIP candidate was listing=%s/%s)",
-                    inbound_id, best_listing.platform.value, best_listing.external_id,
+        ).scalar_one_or_none()
+        if owned is None:
+            return MatchResult(inbound_id, None, best[1], best[2], STATUS_PENDING)
+        current = await session.get(InboundPost, inbound_id)
+        assert current is not None
+        if (
+            current.status != InboundStatus.NEW
+            or current.photo_phashes != inbound.photo_phashes
+            or current.photo_embeddings != inbound.photo_embeddings
+            or current.photo_evidence != inbound.photo_evidence
+            or current.raw_text != inbound.raw_text
+        ):
+            job = await session.get(ValidationJob, inbound_id)
+            assert job is not None
+            job.state, job.reason_code = "needs_review", "inbound_changed"
+            return MatchResult(inbound_id, None, best[1], best[2], STATUS_PENDING)
+        if accepted:
+            listing, count, score, method = accepted[0]
+            live = await session.get(Listing, listing.id)
+            changed = (
+                live is None
+                or not live.is_active
+                or any(
+                    getattr(live, name) != getattr(listing, name)
+                    for name in (
+                        "photo_phashes",
+                        "photo_embeddings",
+                        "photo_evidence",
+                        "price_eur",
+                        "area_m2",
+                        "district",
+                        "dup_group_id",
+                    )
                 )
-                return MatchResult(
-                    inbound_id, None, best_count, best_score, STATUS_NO_MATCH, method=METHOD_CLIP_LLM_REJECTED,
-                )
-            if llm_ok is True:
-                llm_method = METHOD_CLIP_LLM
-
-        confidence = round(best_score if best_method == METHOD_CLIP else best_count / max(len(inbound_phashes), 1), 3)
-        match = Match(
-            inbound_post_id=inbound_id,
-            listing_id=best_listing.id,
-            confidence=confidence,
-            matched_photo_count=best_count,
-            method=llm_method,
-            status=MatchStatus.PENDING,
-        )
-        s.add(match)
-        inbound.status = InboundStatus.MATCHED
-        await s.flush()
-        await s.refresh(match)
-        logger.info(
-            "[match] inbound=%s ↔ listing=%s/%s (matched=%d/%d, conf=%.2f, method=%s)",
-            inbound_id, best_listing.platform.value, best_listing.external_id,
-            best_count, len(inbound_phashes), confidence, llm_method,
-        )
-        return MatchResult(
-            inbound_id, best_listing.id, best_count, confidence, STATUS_MATCHED,
-            match_id=match.id, method=llm_method,
-        )
+            )
+            if changed:
+                job = await session.get(ValidationJob, inbound_id)
+                assert job is not None
+                job.state, job.reason_code = "pending", "candidate_changed"
+                return MatchResult(inbound_id, None, count, score, STATUS_PENDING)
+            confidence = round(score, 3)
+            match = Match(
+                inbound_post_id=inbound_id,
+                listing_id=listing.id,
+                confidence=confidence,
+                matched_photo_count=count,
+                method=method,
+                status=MatchStatus.PENDING,
+            )
+            session.add(match)
+            current.status = InboundStatus.MATCHED
+            await session.flush()
+            return MatchResult(
+                inbound_id, listing.id, count, confidence, STATUS_MATCHED, match.id, method
+            )
+        current.status = InboundStatus.NO_MATCH
+        method = METHOD_CLIP_LLM_REJECTED if outcomes else best[3]
+        return MatchResult(inbound_id, None, best[1], best[2], STATUS_NO_MATCH, method=method)
 
 
 async def _run_llm_validation(
-    inbound: InboundPost, listing: Listing, settings
-) -> bool | None:
-    """Call Claude vision API to confirm the match. Returns True/False, or None on transport error
-    (in which case we keep the CLIP candidate — fail-open rather than drop a possibly-good match).
-    """
-    from pathlib import Path
-
+    inbound: InboundPost,
+    listing: Listing,
+    settings: Any,
+) -> ValidationOutcome:
+    from src.matching.evidence import select_evidence
     from src.matching.llm_validator import LLMValidatorError, validate_match
 
-    inbound_paths = [Path(p) for p in (inbound.photo_paths or [])]
-    listing_photos_dir = (
-        settings.listings_photos_dir / listing.platform.value / listing.external_id
-    )
-    listing_paths: list[Path] = []
-    if listing_photos_dir.exists():
-        listing_paths = sorted(listing_photos_dir.glob("*.*"))
-
-    if not inbound_paths or not listing_paths:
-        logger.warning(
-            "[match] LLM validation skipped — missing photos on disk (inbound=%d listing=%d)",
-            len(inbound_paths), len(listing_paths),
-        )
-        return None
-
     try:
+        inbound_paths, listing_paths = await asyncio.to_thread(
+            select_evidence,
+            inbound,
+            listing,
+            settings,
+        )
         result = await validate_match(
             inbound_paths,
             listing_paths,
             inbound_id=inbound.id,
             listing_id=listing.id,
-            inbound_text=inbound.raw_text,
+            # Captions, contact details, addresses and free-form listing text are not sent.
             listing_meta={
-                "platform": listing.platform.value,
                 "price_eur": listing.price_eur,
                 "area_m2": listing.area_m2,
                 "rooms": listing.rooms,
-                "district": listing.district,
-                "address_raw": listing.address_raw,
-                "title": listing.title,
             },
         )
-    except LLMValidatorError as e:
-        logger.warning("[match] LLM validator failed (kept CLIP verdict): %s", e)
-        return None
+    except LLMValidatorError as exc:
+        return ValidationOutcome(exc.verdict, exc.reason_code)
     except Exception:
-        logger.exception("[match] LLM validator crashed (kept CLIP verdict)")
-        return None
-
-    if not result.is_same_apartment:
-        return False
-    if result.confidence < settings.llm_validation_min_confidence:
-        logger.info(
-            "[match] LLM said same but confidence %.2f < threshold %.2f → reject",
-            result.confidence, settings.llm_validation_min_confidence,
+        logger.warning(
+            "[match] validation unavailable inbound=%s listing=%s", inbound.id, listing.id
         )
-        return False
-    return True
+        return ValidationOutcome("unavailable", "validator_error")
+    if result.uncertain or result.confidence < settings.llm_validation_min_confidence:
+        return ValidationOutcome(
+            "uncertain",
+            "low_confidence",
+            result.confidence,
+            settings.llm_model,
+            result._audit.get("evidence_hash", ""),
+            result._audit.get("usage", {}),
+        )
+    return ValidationOutcome(
+        "same" if result.is_same_apartment else "different",
+        "model_verdict",
+        result.confidence,
+        settings.llm_model,
+        result._audit.get("evidence_hash", ""),
+        result._audit.get("usage", {}),
+    )
 
 
 async def match_all_pending(cache: CandidateCache | None = None) -> list[MatchResult]:
-    """Run matcher for every InboundPost in NEW status. Useful for batch backfill.
+    """Run matcher for automatically eligible NEW posts. Useful for batch backfill.
 
     Builds the candidate snapshot ONCE (unless the caller already passes one), so a batch
     of N inbounds does a single candidates SELECT instead of N full table scans.
     """
+    from src.matching.validation_queue import automatic_inbound_ids
+
+    ids = await automatic_inbound_ids()
     async with get_session() as s:
-        ids = list(
-            (
-                await s.execute(
-                    select(InboundPost.id)
-                    .where(InboundPost.status == InboundStatus.NEW)
-                    .order_by(InboundPost.received_at)
-                )
-            ).scalars().all()
-        )
         if ids and cache is None:
             cache = await load_candidate_cache(s)
     results: list[MatchResult] = []
@@ -312,23 +398,8 @@ _CLIP_CHUNK = 500
 def _count_phash_matches(
     inbound_ints: list[int], listing_ints: tuple[int, ...] | list[int], max_hamming: int
 ) -> int:
-    """How many inbound photos have at least one near-duplicate in the listing (pHash).
-
-    Hamming distance via int XOR + popcount — bit-identical to imagehash's `hash1 - hash2`
-    (both count differing bits of the same 64-bit hash) but ~40x faster, because it skips
-    re-parsing hex into numpy bool arrays on every one of the ~1M comparisons per inbound.
-    Hex→int parsing (with the same malformed-entry skipping as the old imagehash path)
-    happens once per scan row in candidates.parse_phashes.
-    """
-    if not inbound_ints or not listing_ints:
-        return 0
-    count = 0
-    for ia in inbound_ints:
-        for lb in listing_ints:
-            if (ia ^ lb).bit_count() <= max_hamming:
-                count += 1
-                break
-    return count
+    """Count independent one-to-one photo pairs; copies cannot meet the floor."""
+    return len(phash_pairs(inbound_ints, listing_ints, max_hamming))
 
 
 def _phash_prescreen(
@@ -343,7 +414,7 @@ def _phash_prescreen(
 
 
 def _clip_score_chunk(
-    inbound_embs: list, blob_rows: list, threshold: float
+    inbound_embs: list[NDArray[np.float32]], blob_rows: Sequence[Any], threshold: float
 ) -> dict[int, tuple[int, float]]:
     """Stage 2 for one pre-fetched chunk of (listing_id, blob). Pure CPU — worker thread."""
     out: dict[int, tuple[int, float]] = {}
@@ -361,92 +432,54 @@ def _clip_score_chunk(
     return out
 
 
+def _rank_candidates(
+    rows: list[CandidateRow],
+    ph_counts: dict[int, int],
+    clip_results: dict[int, tuple[int, float]],
+    parsed: ParsedInbound,
+    n_inbound_phashes: int,
+    settings: Any,
+) -> list[tuple[int, int, float, str]]:
+    ranked = []
+    for row in rows:
+        ph = ph_counts.get(row.id, 0)
+        cc, cs = clip_results.get(row.id, (0, 0.0))
+        # Choose each candidate's signal without reading any other candidate's score.
+        if ph >= cc and ph > 0:
+            count, score, method = ph, ph / max(n_inbound_phashes, 1), METHOD_PHASH
+        else:
+            count, score, method = cc, cs, METHOD_CLIP
+        if count == 0 or (method == METHOD_CLIP and not _passes_text_check(parsed, row, settings)):
+            continue
+        # Scores from different methods have different meanings. Method priority precedes score.
+        key = (count, method == METHOD_PHASH, round(score, 9), row.is_primary, -row.id)
+        ranked.append((key, (row.id, count, score, method)))
+    return [value for _, value in sorted(ranked, reverse=True)]
+
+
 def _select_best(
     rows: list[CandidateRow],
     ph_counts: dict[int, int],
     clip_results: dict[int, tuple[int, float]],
     parsed: ParsedInbound,
     n_inbound_phashes: int,
-    settings,
+    settings: Any,
 ) -> tuple[int | None, int, float, str]:
-    """Stage 3 text cross-check + winner selection. Pure CPU — runs in a worker thread.
-
-    NOTE: the pHash-vs-CLIP signal choice reads the RUNNING best_score, so it depends on
-    listing iteration order. Preserved bit-for-bit on purpose — determinization is
-    explicitly deferred to a separate PR.
-    """
-    best_id: int | None = None
-    best_count = 0
-    best_score = 0.0
-    best_method = METHOD_CLIP
-    best_is_primary = True
-
-    for row in rows:
-        ph_count = ph_counts.get(row.id, 0)
-        clip_count, clip_score = clip_results.get(row.id, (0, 0.0))
-        if ph_count == 0 and clip_count == 0 and clip_score == 0.0:
-            continue
-
-        # Pick the stronger signal per listing.
-        if clip_count > ph_count or (
-            clip_count == ph_count and clip_score > best_score
-        ):
-            cand_count, cand_score, cand_method = clip_count, clip_score, METHOD_CLIP
-        else:
-            cand_count, cand_score, cand_method = (
-                ph_count, float(ph_count) / max(n_inbound_phashes, 1), METHOD_PHASH
-            )
-
-        # Stage 3 — text cross-check (rejects CLIP false positives between unrelated apartments
-        # that happen to have similar-looking interiors). Only applies to CLIP-based candidates;
-        # pHash with ≥2 matches is already strong enough on its own.
-        if cand_method == METHOD_CLIP and not _passes_text_check(parsed, row, settings):
-            continue
-
-        # Track best across listings (prefer higher count; tie-break by score; A4 final
-        # tie-break: on an EXACT (count, score) tie, prefer the cross-platform-dedup primary
-        # so the site links the better representative. This only fires on exact ties, so it
-        # cannot change any non-tied outcome the matcher made before A4).
-        better = cand_count > best_count or (cand_count == best_count and cand_score > best_score)
-        primary_tiebreak = (
-            best_id is not None
-            and cand_count == best_count
-            # Float-tolerant tie: CLIP scores are order-sensitive NumPy means, so two genuinely
-            # tied candidates can differ in the last ULP — an exact == would silently skip the
-            # A4 primary preference. isclose treats those as the tie they are.
-            and math.isclose(cand_score, best_score, rel_tol=0.0, abs_tol=1e-9)
-            and row.is_primary
-            and not best_is_primary
-        )
-        if better or primary_tiebreak:
-            best_id = row.id
-            best_count = cand_count
-            best_score = cand_score
-            best_method = cand_method
-            best_is_primary = row.is_primary
-
-    return best_id, best_count, best_score, best_method
+    ranked = _rank_candidates(rows, ph_counts, clip_results, parsed, n_inbound_phashes, settings)
+    return ranked[0] if ranked else (None, 0, 0.0, METHOD_CLIP)
 
 
 def _clip_match(
-    inbound_embs: list, listing_embs: list, threshold: float
+    inbound_embs: list[NDArray[np.float32]],
+    listing_embs: list[NDArray[np.float32]],
+    threshold: float,
 ) -> tuple[int, float]:
-    """Pairwise cosine similarity, count inbound photos with best-listing-sim ≥ threshold.
-
-    Returns (count, mean_top_similarity).
-    """
-    import numpy as np
-
-    A = np.stack(inbound_embs)  # (Ni, 512)
-    B = np.stack(listing_embs)  # (Nl, 512)
-    sim = A @ B.T  # (Ni, Nl)
-    per_inbound_max = sim.max(axis=1)
-    count = int((per_inbound_max >= threshold).sum())
-    mean_top = float(per_inbound_max.mean())
-    return count, mean_top
+    pairs = clip_pairs(inbound_embs, listing_embs, threshold)
+    # Coverage-weighted confidence; unmatched inputs contribute zero.
+    return len(pairs), sum(score for _, _, score in pairs) / max(len(inbound_embs), 1)
 
 
-def _passes_text_check(parsed: ParsedInbound, listing, settings) -> bool:
+def _passes_text_check(parsed: ParsedInbound, listing: Any, settings: Any) -> bool:
     """Reject candidate if inbound caption is incompatible with the listing.
 
     `listing` is anything with price_eur/area_m2/district attributes — a Listing ORM object

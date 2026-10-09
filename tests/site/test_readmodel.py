@@ -107,16 +107,12 @@ async def test_pagination(site_db: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rented_hidden_by_default(site_db: str) -> None:
-    # C1 decision: default catalog HIDES rented (show_rented=False is the seeded default).
-    # listing 3 is rented (is_active=False) -> excluded from the default view.
+async def test_authorized_dead_card_remains_visible_with_truthful_status(site_db: str) -> None:
     items, total = await _list(site_db)
-    ids = {v.id for v in items}
-    assert 3 not in ids  # rented, hidden by default
-    assert ids == {1, 2}
-    assert total == 2
-    # the surviving rows expose is_rented for the badge; none of them is rented.
-    assert all(v.is_rented is False for v in items)
+    assert {v.id for v in items} == {1, 2, 3}
+    assert total == 3
+    assert next(v for v in items if v.id == 3).availability == "dead"
+    assert next(v for v in items if v.id == 3).is_rented is True
 
 
 @pytest.mark.asyncio
@@ -203,9 +199,9 @@ async def test_map_points_public_with_coords_only(site_db: str) -> None:
     points = await rm.map_points(database_url=site_db)
     ids = {p["id"] for p in points}
     # listing 2 has no coords -> excluded; listing 4 private -> excluded.
-    assert ids == {1, 3}
+    assert ids == {1, 3}  # authorized cards retained; availability is informational.
     p = next(x for x in points if x["id"] == 1)
-    assert set(p.keys()) == {"id", "lat", "lon", "price_eur", "rooms", "district", "for_vnj", "url"}
+    assert set(p.keys()) == {"id", "lat", "lon", "price_eur", "rooms", "district", "for_vnj", "url", "availability"}
     assert p["url"].endswith("/apt/1")
     assert "http" not in p["url"] or p["url"].startswith("http")  # url may be relative
 
@@ -223,13 +219,12 @@ async def test_similar_same_district_excluding_self(site_db: str) -> None:
     assert all(not v.is_rented for v in sims)
 
 
-# --- A4: cross-platform dedup — catalog hides non-primary group members ---
+# --- F04: cross-platform dedup — one stable representative among public overlays ---
 
 
 @pytest.mark.asyncio
-async def test_catalog_hides_non_primary_dupes(tmp_path) -> None:
-    """Two public site_listings whose underlying listings are the same dup group: only the
-    is_primary listing shows in the catalog (one card per apartment, not two)."""
+async def test_catalog_selects_one_public_representative(tmp_path) -> None:
+    """Two public overlays in one dup-group produce one card while retaining both direct URLs."""
     from datetime import UTC, datetime
 
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -271,8 +266,9 @@ async def test_catalog_hides_non_primary_dupes(tmp_path) -> None:
 
     items, total = await rm.list_public(Filters(), database_url=url)
     ids = {v.id for v in items}
-    # The non-primary duplicate (site_listing 2) is hidden; only the primary (1) shows.
+    # The oldest public overlay (1) represents the group in discovery surfaces.
     assert ids == {1}
     assert total == 1
-    # get_public on the hidden non-primary also returns None.
-    assert await rm.get_public(2, database_url=url) is None
+    # The public secondary keeps its direct URL, with its own overlay fields.
+    secondary = await rm.get_public(2, database_url=url)
+    assert secondary is not None and secondary.id == 2

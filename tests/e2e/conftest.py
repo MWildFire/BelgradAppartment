@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.e2e.offline_assets import offline_context
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS_DIR = Path(__file__).parent / "site" / "_artifacts"
 
@@ -105,7 +107,7 @@ async def _seed(url: str) -> None:
         s.add(Listing(
             id=3, platform=Platform.CETIRI_ZIDA, external_id="e3", url="http://x/3",
             price_eur=500, area_m2=28.0, rooms=0.0, district="Vracar",
-            lat=44.81, lon=20.48, is_active=False, photo_urls=["http://cdn/remote3.jpg"],
+            lat=44.81, lon=20.48, is_active=False, link_status="DEAD", photo_urls=["http://cdn/remote3.jpg"],
         ))
         # id=4 Zemun 3-room 1200€ — site_listing NOT public (must never appear).
         s.add(Listing(
@@ -228,7 +230,10 @@ def browser():  # type: ignore[no-untyped-def]
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, args=[
+            "--proxy-server=http://127.0.0.1:9",
+            "--proxy-bypass-list=127.0.0.1;localhost;[::1]",
+        ])
         try:
             yield browser
         finally:
@@ -238,7 +243,7 @@ def browser():  # type: ignore[no-untyped-def]
 @pytest.fixture
 def page(browser):  # type: ignore[no-untyped-def]
     """Fresh page per test (own context → isolated localStorage/cookies)."""
-    context = browser.new_context()
+    context = offline_context(browser)
     pg = context.new_page()
     try:
         yield pg

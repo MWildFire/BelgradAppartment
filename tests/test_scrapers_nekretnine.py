@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import httpx
 import pytest
@@ -16,9 +17,27 @@ import pytest
 import src.scrapers.nekretnine as nekretnine_mod
 from src.db.models import Platform
 from src.scrapers.nekretnine import NekretnineScraper
+from src.scrapers.proxy_pool import NoProxyAvailableError, ProxyCandidate, ProxyPool
 
 # Detail fixture is /oglasi/468187/ — "Dvosobni stan Kralja Petra I, Obrenovac Centar, Beograd".
 DETAIL_URL = "https://www.nekretnine.rs/oglasi/468187/"
+SNAPSHOT_FIXTURE = Path(__file__).parent / "fixtures" / "nekretnine" / "list_snapshot.json"
+
+
+def _snapshot_html() -> str:
+    payload = json.loads(SNAPSHOT_FIXTURE.read_text(encoding="utf-8"))
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {"queries": [{"state": {"data": payload}}]}
+            }
+        }
+    }
+    return (
+        '<html><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(data)}"
+        "</script></html>"
+    )
 
 
 def test_parse_list_returns_unique_listings(nekretnine_list_html: str) -> None:
@@ -50,6 +69,93 @@ def test_parse_list_drops_slug_url_in_favour_of_canonical() -> None:
     assert len(previews) == 1
     assert previews[0].url == "https://www.nekretnine.rs/oglasi/468187/"
     assert previews[0].external_id == "468187"
+
+
+def test_list_preview_contains_complete_snapshot() -> None:
+    previews = NekretnineScraper.parse_list(_snapshot_html())
+    snapshot = previews[0].snapshot
+    assert snapshot is not None
+    assert snapshot.external_id == "990001"
+    assert snapshot.url == "https://www.nekretnine.rs/oglasi/990001/"
+    assert snapshot.price_eur == 875
+    assert snapshot.area_m2 == 74.5
+    assert snapshot.rooms == 2.5
+    assert snapshot.district == "Vračar"
+    assert snapshot.address_raw == "Njegoševa 12"
+    assert snapshot.lat == 44.805
+    assert snapshot.lon == 20.47
+    assert snapshot.title == "Dvosoban stan Njegoševa"
+    assert NekretnineScraper.is_snapshot_complete(snapshot)
+
+
+def test_snapshot_photo_ids_become_ordered_unique_xxl_urls() -> None:
+    snapshot = NekretnineScraper.parse_list(_snapshot_html())[0].snapshot
+    assert snapshot is not None
+    assert snapshot.photo_urls == [
+        "https://pic.nekretnine.rs/image/5001/xxl.jpg",
+        "https://pic.nekretnine.rs/image/5002/xxl.jpg",
+        "https://pic.nekretnine.rs/image/5003/xxl.jpg",
+    ]
+
+
+def test_snapshot_missing_required_field_is_incomplete() -> None:
+    payload = json.loads(SNAPSHOT_FIXTURE.read_text(encoding="utf-8"))
+    del payload["results"][0]["realEstate"]["properties"][0]["location"]["address"]
+    data = {
+        "props": {
+            "pageProps": {
+                "dehydratedState": {"queries": [{"state": {"data": payload}}]}
+            }
+        }
+    }
+    html = (
+        '<html><script id="__NEXT_DATA__" type="application/json">'
+        f"{json.dumps(data)}"
+        "</script></html>"
+    )
+    snapshot = NekretnineScraper.parse_list(html)[0].snapshot
+    assert snapshot is not None
+    assert snapshot.address_raw is None
+    assert not NekretnineScraper.is_snapshot_complete(snapshot)
+
+
+def test_old_list_fixture_without_snapshot_fields_still_parses_preview() -> None:
+    previews = NekretnineScraper.parse_list(_list_html([990099]))
+    assert len(previews) == 1
+    assert previews[0].url == "https://www.nekretnine.rs/oglasi/990099/"
+    assert previews[0].title == "Stan 990099"
+    assert previews[0].snapshot is not None
+    assert not NekretnineScraper.is_snapshot_complete(previews[0].snapshot)
+
+
+def test_snapshot_never_uses_non_nekretnine_photo_host_as_direct_cdn() -> None:
+    snapshots = NekretnineScraper.parse_list(_snapshot_html())
+    for preview in snapshots:
+        assert all(
+            url.startswith("https://pic.nekretnine.rs/image/") and url.endswith("/xxl.jpg")
+            for url in (preview.snapshot.photo_urls if preview.snapshot else [])
+        )
+
+
+def test_list_snapshot_matches_detail_for_bot_visible_fields(
+    nekretnine_list_html: str, nekretnine_detail_html: str
+) -> None:
+    snapshot = NekretnineScraper.parse_list(nekretnine_list_html)[0].snapshot
+    detail = NekretnineScraper.parse_detail(DETAIL_URL, nekretnine_detail_html)
+    assert snapshot is not None
+    for field in (
+        "external_id",
+        "price_eur",
+        "area_m2",
+        "rooms",
+        "district",
+        "address_raw",
+        "lat",
+        "lon",
+        "title",
+        "photo_urls",
+    ):
+        assert getattr(snapshot, field) == getattr(detail, field), field
 
 
 def test_parse_list_handles_missing_payload() -> None:
@@ -179,6 +285,30 @@ def _make_scraper(handler) -> NekretnineScraper:
     return sc
 
 
+def test_proxy_slot_failover_is_bounded_and_fail_closed() -> None:
+    sc = _make_scraper(lambda _request: httpx.Response(200, text=""))
+    sc._proxy_pool = ProxyPool((
+        ProxyCandidate("primary", "static_isp", "http://p.example:1"),
+        ProxyCandidate("secondary", "static_isp", "http://s.example:2"),
+        ProxyCandidate("metered", "metered", "http://m.example:3"),
+    ))
+
+    assert sc._select_proxy().slot == "primary"
+    sc._mark_proxy_failure()
+    assert sc._select_proxy().slot == "secondary"
+    sc._mark_proxy_failure()
+    assert sc._select_proxy().slot == "metered"
+    sc._mark_proxy_failure()
+    with pytest.raises(NoProxyAvailableError):
+        sc._select_proxy()
+    assert sc.proxy_metrics["proxy_attempts"] == 0  # selection is not a network request
+    assert sc.proxy_metrics["proxy_failovers"] == 2
+    assert sc.proxy_metrics["proxy_challenges"] == 3
+    assert sc.proxy_metrics["proxy_errors"] == 0
+    assert sc.proxy_metrics["failed_proxy_slots"] == 3
+
+
+
 def _page_of(request: httpx.Request) -> int:
     return int(request.url.params.get("pag", "1"))
 
@@ -265,6 +395,7 @@ async def test_list_recent_segments_by_price_when_capped() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         p = request.url.params
+        assert p.get("criterio") == "data" and p.get("ordine") == "desc"
         page = int(p.get("pag", "1"))
         if "prezzoMinimo" in p:
             band_requests.append(f"{p.get('prezzoMinimo')}-{p.get('prezzoMassimo', 'inf')}")
@@ -383,7 +514,10 @@ async def test_list_recent_breaks_on_missing_payload() -> None:
     sc = _make_scraper(handler)
     previews = await sc.list_recent(max_pages=10)
     assert previews == []
-    assert sc._skipped_pages == 0, "a 200 with no payload is a structure change, not a fetch failure"
+    assert sc._skipped_pages == 0
+    assert sc._pages_failed == 1
+    assert not sc._crawl_complete
+    assert sc._crawl_stop_reason == "page_payload_missing"
 
 
 # ------------------------------------------------------------------ fetch_detail (offline retries)
@@ -508,6 +642,101 @@ async def test_playwright_fallback_reloads_challenge_until_detail_payload(
     assert html == nekretnine_detail_html
     assert context.page.waits == [7]
     assert context.page.closed
+
+
+@pytest.mark.asyncio
+async def test_playwright_fallback_closes_last_failed_context() -> None:
+    """A later detail must be able to select the next proxy after all retries fail."""
+
+    class Response:
+        status = 403
+
+    class Page:
+        async def goto(self, *_args, **_kwargs) -> Response:
+            return Response()
+
+        async def content(self) -> str:
+            return "<html>DataDome challenge</html>"
+
+        async def close(self) -> None:
+            pass
+
+    class Context:
+        def __init__(self) -> None:
+            self.closed = False
+            self.page = Page()
+
+        async def new_page(self) -> Page:
+            return self.page
+
+        async def close(self) -> None:
+            self.closed = True
+
+    sc = _make_scraper(lambda _request: httpx.Response(200))
+    contexts: list[Context] = []
+
+    async def fake_start() -> None:
+        context = Context()
+        contexts.append(context)
+        sc._pw_context = context
+
+    sc._start_browser = fake_start  # type: ignore[method-assign]
+    sc.pw_challenge_reloads = 0
+
+    assert await sc._playwright_html(_DETAIL_URL) is None
+    assert len(contexts) == 3
+    assert all(context.closed for context in contexts)
+    assert sc._pw_context is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page_limit,expected_sessions", [(2, 3), (0, 1)])
+async def test_long_browser_walk_recycles_session_without_exhausting_isp(
+    monkeypatch, nekretnine_detail_html: str, page_limit: int, expected_sessions: int,
+) -> None:
+    from types import SimpleNamespace
+
+    from src.config import get_settings
+    from src.scrapers.proxy_pool import ProxyCandidate, ProxyPool
+
+    monkeypatch.setattr(get_settings(), "nekretnine_browser_session_pages", page_limit)
+    class Page:
+        async def goto(self, *_args, **_kwargs):
+            return SimpleNamespace(status=200)
+        async def content(self):
+            return nekretnine_detail_html
+        async def close(self):
+            pass
+
+    class Context:
+        closed = False
+        async def new_page(self):
+            assert not self.closed
+            return Page()
+        async def close(self):
+            self.closed = True
+
+    sc = _make_scraper(lambda _request: httpx.Response(200))
+    sc._proxy_pool = ProxyPool((ProxyCandidate("primary", "static_isp", "http://proxy.invalid"),))
+    sc._failed_proxy_slots.add("secondary")
+    contexts = []
+    async def start():
+        assert sc._select_proxy().slot == "primary"
+        context = Context()
+        contexts.append(context)
+        sc._pw_context = context
+    sc._start_browser = start
+    try:
+        for _ in range(5):
+            assert await sc._playwright_html(_DETAIL_URL) == nekretnine_detail_html
+        assert len(contexts) == expected_sessions
+        assert all(c.closed for c in contexts[:-1])
+        assert sc._failed_proxy_slots == {"secondary"}
+        assert sc.proxy_metrics["proxy_failovers"] == 0
+        assert sc.proxy_metrics["browser_session_recycles"] == expected_sessions - 1
+    finally:
+        await sc.aclose()
+    assert all(c.closed for c in contexts)
 
 
 def test_browser_payload_check_accepts_list_pages(nekretnine_list_html: str) -> None:
@@ -736,3 +965,86 @@ async def test_fetch_page_200_never_uses_browser() -> None:
     sc._playwright_html = fake_pw  # type: ignore[method-assign]
     assert await sc._fetch_page(sc.list_url) is not None
     assert calls["pw"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["402", "407", "timeout", "proxy_error"])
+async def test_http_failure_moves_to_healthy_secondary(failure, nekretnine_detail_html):
+    slots = []
+    sc = None
+    def handler(request):
+        slots.append(sc._http_proxy_slot)
+        if sc._http_proxy_slot == "primary":
+            if failure == "timeout":
+                raise httpx.ReadTimeout("simulated", request=request)
+            if failure == "proxy_error":
+                raise httpx.ProxyError("simulated", request=request)
+            return httpx.Response(int(failure))
+        return httpx.Response(200, text=nekretnine_detail_html)
+    sc = _make_scraper(handler)
+    sc._proxy_pool = ProxyPool((ProxyCandidate("primary", "static_isp", "http://p.example:1"),
+                                ProxyCandidate("secondary", "static_isp", "http://s.example:2")))
+    result = await sc.fetch_detail(_DETAIL_URL)
+    assert result.title
+    assert slots == ["primary", "secondary"]
+    assert sc.proxy_metrics["http_attempts"] == sc.proxy_metrics["proxy_attempts"] == 2
+    assert sc.proxy_metrics["http_errors"] == sc.proxy_metrics["http_recovered_errors"] == 1
+    assert sc.proxy_metrics["http_residual_errors"] == 0
+
+
+@pytest.mark.asyncio
+async def test_all_http_slots_fail_once_without_direct_fallback():
+    slots = []
+    sc = None
+    def handler(request):
+        slots.append(sc._http_proxy_slot)
+        return httpx.Response(402)
+    sc = _make_scraper(handler)
+    sc._proxy_pool = ProxyPool((ProxyCandidate("primary", "static_isp", "http://p.example:1"),
+                                ProxyCandidate("secondary", "static_isp", "http://s.example:2")))
+    with pytest.raises(httpx.HTTPStatusError):
+        await sc.fetch_detail(_DETAIL_URL)
+    assert slots == ["primary", "secondary"]
+    assert sc.proxy_metrics["http_residual_errors"] == 1
+    assert sc.proxy_metrics["failed_proxy_slots"] == 2
+
+
+@pytest.mark.asyncio
+async def test_200_challenge_is_unknown_without_browser_or_retry():
+    sc = _make_scraper(lambda request: httpx.Response(200, text="<html>challenge</html>"))
+    async def forbidden(*args):
+        pytest.fail("200 challenge must not start an implicit browser")
+    sc._playwright_html = forbidden
+    with pytest.raises(ValueError):
+        await sc.fetch_detail(_DETAIL_URL)
+    assert sc.proxy_metrics["http_attempts"] == 1
+    assert sc.proxy_metrics["http_residual_errors"] == 1
+
+
+@pytest.mark.asyncio
+async def test_owned_http_client_is_rebuilt_for_secondary(monkeypatch, nekretnine_detail_html):
+    from src.config import get_settings
+    settings=get_settings()
+    monkeypatch.setattr(settings,"nekretnine_proxy_primary_url","http://p.example:1")
+    monkeypatch.setattr(settings,"nekretnine_proxy_secondary_url","http://s.example:2")
+    clients=[]
+    proxies=[]
+    def make_client(cls, *, proxy_override=None):
+        proxy=proxy_override or "http://p.example:1"
+        proxies.append(proxy)
+        def handler(request):
+            return httpx.Response(402) if proxy=="http://p.example:1" else httpx.Response(200,text=nekretnine_detail_html)
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        clients.append(client)
+        return client
+    monkeypatch.setattr(NekretnineScraper,"_make_client",classmethod(make_client))
+    sc=NekretnineScraper()
+    sc.retry_backoff_sec=0
+    try:
+        result=await sc.fetch_detail(_DETAIL_URL)
+        assert result.title
+        assert proxies==["http://p.example:1","http://s.example:2"]
+        assert clients[0].is_closed
+    finally:
+        await sc.aclose()
+    assert all(client.is_closed for client in clients)

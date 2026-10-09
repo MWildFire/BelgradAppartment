@@ -14,11 +14,13 @@ import json
 import logging
 import re
 from typing import Any, ClassVar
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
+
+from selectolax.parser import HTMLParser
 
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.base import ListingDetail, ListingPreview, Scraper, SourceListingRemovedError
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +70,7 @@ class CetiriZidaScraper(Scraper):
         known_ids = known_ids or set()
         seen: set[str] = set()
         previews: list[ListingPreview] = []
+        self.reset_crawl_evidence()
         self._skipped_pages = 0
         self._site_total = None
 
@@ -118,6 +121,7 @@ class CetiriZidaScraper(Scraper):
                 "[4zida] segmented walk done: %d collected vs site_total=%s",
                 len(previews), self._site_total,
             )
+        self.finish_crawl_evidence(len(previews))
         return previews
 
     async def _walk(
@@ -141,8 +145,10 @@ class CetiriZidaScraper(Scraper):
         # Never request past the site's hard pagination cap — deeper pages re-serve old content.
         limit = min(max_pages, self.page_cap)
 
+        search_page_ids = set()
         page = 1
         while page <= limit:
+            self.record_page_attempt(observed=len(previews))
             sep = "&" if "?" in base_url else "?"
             url = base_url if page == 1 else f"{base_url}{sep}strana={page}"
             html = await self._fetch_page(url)
@@ -152,6 +158,7 @@ class CetiriZidaScraper(Scraper):
                 # the skip so a partial under-run is surfaced rather than passing for healthy.
                 consecutive_failures += 1
                 self._skipped_pages += 1
+                self.record_crawl_failure("page_fetch_failed")
                 logger.warning(
                     "[4zida] page %d fetch failed (consecutive=%d, skipped_total=%d)",
                     page, consecutive_failures, self._skipped_pages,
@@ -162,6 +169,13 @@ class CetiriZidaScraper(Scraper):
                 page += 1
                 continue
             page_previews = self.parse_list(html)
+            page_ids = tuple(p.external_id for p in page_previews)
+            if page_ids and page_ids in search_page_ids:
+                self.record_crawl_failure("repeated_page")
+                break
+            search_page_ids.add(page_ids)
+            if is_base:
+                self.record_source_total(self._total_from_html(html))
             if search_total is None:
                 search_total = self._total_from_html(html)
                 if is_base and search_total is not None:
@@ -189,6 +203,7 @@ class CetiriZidaScraper(Scraper):
                     # how the first segmentation rollout silently collected 9% of 4zida.
                     consecutive_failures += 1
                     self._skipped_pages += 1
+                    self.record_crawl_failure("page_payload_missing")
                     logger.warning(
                         "[4zida] page %d: empty parse below expected end (page %d/%d) — soft "
                         "failure (consecutive=%d)",
@@ -201,7 +216,9 @@ class CetiriZidaScraper(Scraper):
                         await asyncio.sleep(self.retry_backoff_sec * consecutive_failures)
                     page += 1
                     continue
-                break  # structurally empty page = end of pagination
+                if search_total != 0:
+                    self.record_crawl_failure("unexpected_empty_page")
+                break  # only a source-confirmed empty search is complete
             # A page with real listings is the only success that resets the failure streak —
             # resetting on mere fetch-200 would let alternating soft-failures run forever.
             consecutive_failures = 0
@@ -210,6 +227,7 @@ class CetiriZidaScraper(Scraper):
             if known_ids and unknown_this_page == 0 and new_this_page > 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
+                    self._stopped_known = True
                     logger.info(
                         "[4zida] incremental early-stop at page %d", page,
                     )
@@ -230,26 +248,40 @@ class CetiriZidaScraper(Scraper):
 
     @staticmethod
     def _total_from_html(html: str) -> int | None:
-        """Parse the "6.947 oglasa" results-count header.
+        """Read the rendered counter, never approximate counts in SEO metadata.
 
-        Tolerates dot/comma/space/nbsp thousands separators — a separator change that made the
-        regex match only the trailing digits would silently understate the total, shrink the
-        walk bound and skip segmentation while still passing the coverage health check.
+        The current header splits the number and label across sibling strong/span
+        elements. Older pages put both in one strong element (or a paragraph).
+        Conflicting counters are unknown rather than a trusted crawl denominator.
         """
-        m = re.search(r"(\d[\d.,  ]*)\s*oglas", html)
-        if not m:
-            return None
-        digits = re.sub(r"\D", "", m.group(1))
-        if not digits:
-            return None
-        try:
-            return int(digits)
-        except ValueError:
-            return None
+        tree = HTMLParser(html)
+        counts: set[int] = set()
+        for node in tree.css("strong, p"):
+            ancestor = node.parent
+            excluded = False
+            while ancestor is not None:
+                if ancestor.tag in {
+                    "head", "script", "style", "template", "noscript", "a", "small",
+                }:
+                    excluded = True
+                    break
+                ancestor = ancestor.parent
+            if excluded:
+                continue
+            candidates = [node.text(separator=" ", strip=True)]
+            if node.tag == "strong" and node.parent is not None:
+                candidates.append(node.parent.text(separator=" ", strip=True))
+            for text in candidates:
+                match = re.fullmatch(r"(\d+(?:[.,\s]\d{3})*)\s+oglasa?", text)
+                if match:
+                    counts.add(int(re.sub(r"\D", "", match.group(1))))
+        return next(iter(counts)) if len(counts) == 1 else None
 
     async def fetch_detail(self, url: str) -> ListingDetail:
         resp = await self._client.get(url)
         resp.raise_for_status()
+        if resp.status_code == 200 and str(resp.url) == url and _explicit_not_found(url, resp.text):
+            raise SourceListingRemovedError()
         return self.parse_detail(url, resp.text)
 
     async def _fetch_page(self, url: str) -> str | None:
@@ -404,6 +436,33 @@ class CetiriZidaScraper(Scraper):
 
 
 # ---- shared utilities ----
+
+
+def _explicit_not_found(url: str, html: str) -> bool:
+    """Match the observed Next.js removal redirect, not a generic empty/challenge page.
+
+    4zida streams a 200 shell for removed ads with a meta redirect to that exact
+    URL's parent category and redirection=not-found. Duplicate identical tags are
+    emitted by the source. Any conflicting detail payload or redirect stays unknown.
+    """
+    parsed = urlsplit(url)
+    if (parsed.scheme != "https" or parsed.netloc != "www.4zida.rs"
+            or parsed.query or parsed.fragment
+            or not re.fullmatch(r"/izdavanje-stanova/[^/]+/[^/]+/[0-9a-f]{24}", parsed.path)):
+        return False
+    for block in _extract_json_ld(html):
+        kinds = block.get("@type", [])
+        kinds = [kinds] if isinstance(kinds, str) else kinds
+        if not isinstance(kinds, list) or any(
+            kind in ("Apartment", "RealEstateListing", "Offer") for kind in kinds
+        ):
+            return False
+    redirects = HTMLParser(html).css('meta[http-equiv="refresh"]')
+    expected = f"1;url={parsed.path.rsplit('/', 1)[0]}?redirection=not-found"
+    return bool(redirects) and all(
+        node.attributes.get("id") == "__next-page-redirect"
+        and node.attributes.get("content") == expected for node in redirects
+    )
 
 
 def _extract_json_ld(html: str) -> list[dict[str, Any]]:

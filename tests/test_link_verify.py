@@ -12,11 +12,12 @@ global session factory. HTTP is faked with httpx.MockTransport — no network.
 from __future__ import annotations
 
 import itertools
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import src.db.session as db_session
@@ -382,32 +383,42 @@ async def test_published_match_is_selected(factory):
 
 
 @pytest.mark.asyncio
-async def test_hide_helper_hides_public_card(factory):
-    """The pure hide helper flips is_public/is_featured False for a listing's public cards."""
+async def test_hide_helper_hides_public_card(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    """The shared helper hides an unpinned card only with explicit DEAD evidence and auto-hide enabled."""
     import src.db.session as db_session
 
     lid = await _seed_listing(
-        factory, url="https://nekretnine.rs/x/", site_listing=True,
+        factory, url="https://nekretnine.rs/x/", site_listing=True, is_active=False,
         site_public=True, site_featured=True,
     )
     async with db_session.get_session() as s:
-        n = await hide_site_listings_for_listing(s, lid)
+        await s.execute(update(Listing).where(Listing.id == lid).values(
+            link_status="DEAD", link_checked_at=datetime.now(UTC),
+        ))
+        n = await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert n == 1
     assert await _site_state(factory, lid) == (False, False)
 
 
 @pytest.mark.asyncio
-async def test_hide_helper_invalidates_cache_when_it_hides(factory):
+async def test_hide_helper_invalidates_cache_when_it_hides(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     """Hiding a card must bust the in-process read-model cache so it disappears at once."""
     import src.db.session as db_session
     from src.site import cache
 
     lid = await _seed_listing(
-        factory, url="https://nekretnine.rs/x/", site_listing=True, site_public=True,
+        factory, url="https://nekretnine.rs/x/", site_listing=True, is_active=False, site_public=True,
     )
     cache.catalog_cache.set(("k",), "v")
     async with db_session.get_session() as s:
-        await hide_site_listings_for_listing(s, lid)
+        await s.execute(update(Listing).where(Listing.id == lid).values(
+            link_status="DEAD", link_checked_at=datetime.now(UTC),
+        ))
+        await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert cache.catalog_cache.get(("k",)) is cache.MISS
 
 
@@ -440,7 +451,9 @@ async def test_hide_helper_idempotent_on_already_hidden(factory):
 
 
 @pytest.mark.asyncio
-async def test_404_hides_public_card(factory):
+async def test_404_hides_public_card(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
     )
@@ -457,7 +470,9 @@ async def test_404_hides_public_card(factory):
 
 
 @pytest.mark.asyncio
-async def test_410_hides_public_card(factory):
+async def test_410_hides_public_card(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
     )
@@ -529,7 +544,9 @@ async def test_404_already_hidden_card_hidden_count_zero(factory):
 
 
 @pytest.mark.asyncio
-async def test_404_clears_featured_flag(factory):
+async def test_404_clears_featured_flag(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
     """A hidden card must never remain the hero — is_featured is cleared too."""
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True,
@@ -561,7 +578,7 @@ async def test_make_side_client_uses_proxy_when_configured(monkeypatch):
             captured.update(kw)
 
     monkeypatch.setattr(orch.httpx, "AsyncClient", _Spy)
-    orch._make_side_client(headers={"User-Agent": "x"}, timeout=10.0)
+    orch._make_side_client(headers={"User-Agent": "x"}, timeout=10.0, use_proxy=True)
     assert captured["proxy"] == "http://eu-proxy:3128"
     assert captured["headers"] == {"User-Agent": "x"}
     assert captured["follow_redirects"] is True
@@ -585,19 +602,45 @@ async def test_make_side_client_no_proxy_when_unset(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypatch):
-    """T1-5 (call site): when verify_active_links owns its client (client=None), the HEAD checks must
-    exit via SCRAPER_PROXY_URL — under an IP block, HEAD-ing from the blocked VPS IP defeats the
-    whole reason to rent the proxy (every URL would come back 403 = inconclusive = nothing verified)."""
+async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypatch, nekretnine_detail_html):
+    """Owned checks use the source GET parser and its configured ISP, never the legacy HEAD route."""
     from src.config import get_settings
 
-    monkeypatch.setattr(get_settings(), "scraper_proxy_url", "http://eu-proxy:3128")
+    monkeypatch.setattr(get_settings(), "nekretnine_proxy_primary_url", "http://eu-proxy:3128")
 
     captured: dict = {}
 
     class _SpyClient:
         def __init__(self, **kw):
             captured.update(kw)
+
+        async def get(self, url, **kw):
+            return httpx.Response(200, text=nekretnine_detail_html, request=httpx.Request("GET", url))
+
+        async def aclose(self):
+            return None
+
+    monkeypatch.setattr(orch.httpx, "AsyncClient", _SpyClient)
+
+    await _seed_listing(factory, url="https://www.nekretnine.rs/oglasi/468187/")
+    stats = await verify_active_links()
+    assert captured.get("proxy") == "http://eu-proxy:3128"
+    assert stats.checked == 1
+
+    assert stats.errors == 0
+
+
+@pytest.mark.asyncio
+async def test_verify_links_owned_client_bypasses_proxy_for_other_platform(factory, monkeypatch):
+    """A direct source must not depend on the paid proxy during the weekly liveness sweep."""
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "scraper_proxy_url", "http://eu-proxy:3128")
+    captured: list[dict] = []
+
+    class _SpyClient:
+        def __init__(self, **kw):
+            captured.append(kw)
 
         async def head(self, url, **kw):
             return httpx.Response(200, request=httpx.Request("HEAD", url))
@@ -606,10 +649,17 @@ async def test_verify_links_owned_client_routes_through_proxy(factory, monkeypat
             return None
 
     monkeypatch.setattr(orch.httpx, "AsyncClient", _SpyClient)
+    await _seed_listing(
+        factory,
+        url="https://cityexpert.rs/live/",
+        external_id="cityexpert-ext1",
+        platform=Platform.CITYEXPERT,
+    )
 
-    await _seed_listing(factory, url="https://nekretnine.rs/live/")
-    stats = await verify_active_links()  # client=None → owns_client path builds via _make_side_client
-    assert captured.get("proxy") == "http://eu-proxy:3128"
+    stats = await verify_active_links()
+
+    assert len(captured) == 1
+    assert captured[0]["proxy"] is None
     assert stats.checked == 1
 
 
@@ -632,3 +682,71 @@ async def test_404_kill_switch_off_leaves_card_public(factory, monkeypatch):
     assert stats.site_listings_hidden == 0
     assert await _is_active(factory, lid) is False
     assert await _site_state(factory, lid) == (True, False)  # card untouched
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("protection", ["pinned", "sibling", "warn_only", "cap"])
+async def test_first_404_honors_shared_publication_protection(factory, monkeypatch, protection):
+    from src.config import get_settings
+    from sqlalchemy import update
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", protection != "warn_only")
+    monkeypatch.setattr(get_settings(), "site_liveness_max_hides", 0 if protection == "cap" else 10)
+    monkeypatch.setattr(get_settings(), "nightly_auto_hide_site_listings", True)
+    lid = await _seed_listing(factory, url="https://example.test/gone", site_listing=True)
+    async with factory() as session:
+        if protection == "pinned":
+            await session.execute(update(SiteListing).values(keep_on_site=True))
+        elif protection == "sibling":
+            await session.execute(update(Listing).where(Listing.id == lid).values(dup_group_id=lid))
+            session.add(Listing(platform=Platform.CETIRI_ZIDA, external_id="sibling", url="https://example.test/live", is_active=True, dup_group_id=lid, photo_urls=[], photo_phashes=[]))
+        await session.commit()
+    stats = await verify_active_links(client=_client(lambda request: httpx.Response(404)))
+    assert stats.deactivated == 1 and stats.site_listings_hidden == 0
+    assert await _site_state(factory, lid) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_verify_global_cap_and_inactive_unknown_sibling(factory, monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    monkeypatch.setattr(get_settings(), "site_liveness_max_hides", 1)
+    for i in range(3):
+        await _seed_listing(factory, url=f"https://example.test/{i}", external_id=str(i), site_listing=True)
+    stats = await verify_active_links(client=_client(lambda request: httpx.Response(404)))
+    assert stats.site_listings_hidden == 1
+    async with factory() as session:
+        assert sum((await session.execute(select(SiteListing.is_public))).scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_bounded_link_queue_does_not_starve_later_ids(factory):
+    for i in range(5):
+        await _seed_listing(factory, url=f"https://example.test/{i}", external_id=str(i))
+    paths = []
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(403)
+    async with _client(handler) as client:
+        first = await verify_active_links(client=client, limit=2)
+        second = await verify_active_links(client=client, limit=2)
+    assert first.checked == second.checked == 2
+    assert len(set(paths)) == 4
+    async with factory() as session:
+        rows = (await session.execute(select(Listing))).scalars().all()
+        assert sum(row.link_checked_at is not None for row in rows) == 4
+        assert all(row.link_status == "INCONCLUSIVE" and row.link_next_retry_at for row in rows if row.link_checked_at)
+
+
+@pytest.mark.asyncio
+async def test_verify_dry_run_leaves_links_and_publications_unchanged(factory, monkeypatch):
+    from src.config import get_settings
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lid = await _seed_listing(factory, url="https://example.test/gone", site_listing=True)
+    stats = await verify_active_links(client=_client(lambda request: httpx.Response(404)), dry_run=True)
+    assert stats.deactivated == 1 and stats.site_listings_hidden == 0
+    assert await _is_active(factory, lid)
+    assert await _site_state(factory, lid) == (True, False)
+    async with factory() as session:
+        row = (await session.execute(select(Listing))).scalar_one()
+        assert row.link_checked_at is None and row.link_status is None

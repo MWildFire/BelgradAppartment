@@ -291,3 +291,71 @@ async def test_fetch_detail_hits_property_view_api(cityexpert_detail_json: str) 
     assert detail.external_id == "28075"
     assert detail.price_eur == 1500
     assert detail.url == DETAIL_URL  # stored URL stays the browsable public one
+
+
+@pytest.mark.parametrize("status", ["FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT", "PUBLISH-PAUSED-OVERLOADED"])
+def test_retained_unavailable_detail_is_not_active(cityexpert_detail_json, status):
+    from src.scrapers.base import SourceListingInactiveError
+
+    payload = json.loads(cityexpert_detail_json)
+    payload["status"] = status
+    assert payload["price"] and payload["size"] and payload["onsite"]
+    with pytest.raises(SourceListingInactiveError):
+        CityExpertScraper.parse_detail(DETAIL_URL, json.dumps(payload))
+
+
+@pytest.mark.parametrize("status", [None, "", "UNKNOWN", "DRAFT", "published", 101, [], {}])
+def test_unconfirmed_status_never_becomes_verified(cityexpert_detail_json, status):
+    payload = json.loads(cityexpert_detail_json)
+    payload["status"] = status
+    with pytest.raises(ValueError, match="availability_unconfirmed"):
+        CityExpertScraper.parse_detail(DETAIL_URL, json.dumps(payload))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("propId", 999), ("propId", "28075"), ("propId", None), ("propId", True),
+    ("cityId", 2), ("cityId", "1"), ("cityId", None), ("cityId", True),
+    ("rentOrSale", "s"), ("rentOrSale", None),
+])
+@pytest.mark.parametrize("status", ["PUBLISHED", "FINISHED"])
+def test_wrong_detail_identity_never_changes_availability(cityexpert_detail_json, field, value, status):
+    payload = json.loads(cityexpert_detail_json)
+    payload.update(status=status)
+    payload[field] = value
+    with pytest.raises(ValueError, match="identity_unconfirmed"):
+        CityExpertScraper.parse_detail(DETAIL_URL, json.dumps(payload))
+
+
+@pytest.mark.parametrize("url", [
+    DETAIL_URL.replace("https:", "http:"),
+    DETAIL_URL.replace("cityexpert.rs", "cityexpert.rs.example.com"),
+    DETAIL_URL.replace("cityexpert.rs", "user@cityexpert.rs"),
+    DETAIL_URL.replace("cityexpert.rs", "cityexpert.rs:443"),
+    DETAIL_URL.replace("izdavanje-nekretnina", "prodaja-nekretnina"),
+    DETAIL_URL + "?unknown=1", DETAIL_URL + "#unknown",
+])
+def test_inactive_signal_requires_canonical_rental_context(cityexpert_detail_json, url):
+    payload = json.loads(cityexpert_detail_json)
+    payload["status"] = "FINISHED"
+    with pytest.raises(ValueError, match="identity_unconfirmed"):
+        CityExpertScraper.parse_detail(url, json.dumps(payload))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["FINISHED", "NOT-AVAILABLE", "KAPARISANA-RENT", "PUBLISH-PAUSED-OVERLOADED"])
+async def test_fetch_inactive_api_propagates_without_retry(cityexpert_detail_json, status):
+    from src.scrapers.base import SourceListingInactiveError
+
+    payload = json.loads(cityexpert_detail_json)
+    payload["status"] = status
+    requested = []
+    def handler(request):
+        requested.append(str(request.url))
+        return httpx.Response(200, json=payload)
+    sc = _make_scraper(handler)
+    try:
+        with pytest.raises(SourceListingInactiveError):
+            await sc.fetch_detail(DETAIL_URL)
+    finally:
+        await sc._client.aclose()
+    assert requested == ["https://cityexpert.rs/api/PropertyView/28075/r"]

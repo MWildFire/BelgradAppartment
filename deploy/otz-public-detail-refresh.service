@@ -1,0 +1,16 @@
+# Bounded public-only data refresh. This command has no message/publication paths.
+[Unit]
+Description=Render Finder public detail refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=otz
+Group=otz
+WorkingDirectory=/opt/otz
+EnvironmentFile=/opt/otz/.env
+ExecStart=/usr/bin/xvfb-run -a /opt/otz/.venv/bin/python -m src.cli refetch-details --public-only
+TimeoutStartSec=45min
+StandardOutput=append:/var/log/otz/public-detail-refresh.log
+StandardError=append:/var/log/otz/public-detail-refresh.log

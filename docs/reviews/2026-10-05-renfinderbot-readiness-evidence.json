@@ -1,0 +1,301 @@
+{
+  "checked_at": "2026-10-05T10:19:25.919218+00:00",
+  "scope": "local readiness + authenticated read-only production preflight",
+  "base_commit": "3a3f68041a722f78d26bffd81a4deff463a91a5c",
+  "branch": "codex/renfinder-validation-20261005",
+  "actual_model_api_calls": 0,
+  "production_mutations": 0,
+  "push_performed": false,
+  "server": {
+    "checked_at": "2026-10-05T10:14:32.134338+00:00",
+    "python": "3.12.3",
+    "architecture": "x86_64",
+    "writes_requested": false,
+    "release": {
+      "revision": "4235abf9da9ea33d0c07aede0ae42f02dcdd1e7a",
+      "created_at": "2026-09-28T05:49:16.786079+00:00",
+      "format": 1
+    },
+    "packages": {
+      "torch": "2.12.0+cpu",
+      "torchvision": "0.27.0+cpu",
+      "open-clip-torch": "3.3.0",
+      "anthropic": "0.103.1",
+      "openai": null,
+      "SQLAlchemy": "2.0.49",
+      "alembic": "1.18.4",
+      "telethon": "1.43.2"
+    },
+    "source_hashes": {
+      "src/matching/matcher.py": "8471206d00dc4ec5175533653b74b39949c7a9d0cb2fa086b6114a9b347099e9",
+      "src/matching/llm_validator.py": "48fb0a3409ea71492826b4c6e9b6eaa10968e77e152f1723dd1c893e9ff2dee5",
+      "src/matching/clip_embed.py": "098c5f3eedf045a256e7133d0b5881c5aac007e71f91a2d388f8a5aad5a24cba",
+      "src/telegram/monitor.py": "49ca8a708537b5de72b8ea26758065dffc0bb825fbd77e79ad5a506aedbfe00d",
+      "src/config.py": "c7b03e0294d7d4d00b00310d6f465332539887d174e55916827262a94c08b3ac",
+      "scripts/release.py": "b9a0e5ac8a500191ffc1d983d1396fe55b8e32a8c2e97550e5adda8d46b76329",
+      "uv.lock": "b9c48d75e848b48623e0a7c24c7293f6b49240fce1f5313f8f5b7dcd2ad2e866"
+    },
+    "source_defaults": {
+      "clip_similarity_threshold": 0.92,
+      "enable_llm_validation": true,
+      "llm_validation_min_confidence": 0.7
+    },
+    "schema": [
+      "0014_group_availability_index"
+    ],
+    "work_tables": {
+      "validation_jobs": false,
+      "digest_work_items": false,
+      "listing_identity_edges": false
+    },
+    "aggregates": {
+      "inbound_posts": {
+        "MATCHED": 460,
+        "NO_MATCH": 364
+      },
+      "matches": {
+        "PENDING": 1,
+        "PUBLISHED": 459
+      },
+      "match_deliveries": {
+        "sent": 132
+      }
+    },
+    "units": {
+      "otz-monitor": {
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "ActiveState": "active",
+        "SubState": "running"
+      },
+      "otz-site": {
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "ActiveState": "active",
+        "SubState": "running"
+      },
+      "otz-admin": {
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "ActiveState": "active",
+        "SubState": "running"
+      },
+      "otz-subscription-bot": {
+        "Result": "success",
+        "ExecMainStatus": "0",
+        "ActiveState": "inactive",
+        "SubState": "dead"
+      },
+      "otz-nightly-refresh.timer": {
+        "Result": "success",
+        "ActiveState": "active",
+        "SubState": "waiting"
+      },
+      "otz-weekly-full-refresh.timer": {
+        "Result": "success",
+        "ActiveState": "active",
+        "SubState": "waiting"
+      }
+    },
+    "llm_audit": {
+      "exists": true,
+      "records": 191,
+      "malformed": 0,
+      "models": {
+        "claude-haiku-4-5": 191
+      },
+      "outcomes": {
+        "legacy_different": 100,
+        "legacy_same": 91
+      },
+      "usage": {},
+      "missing_usage": 191,
+      "first": "2026-08-12T18:04:36+0000",
+      "last": "2026-10-05T07:58:13+0000",
+      "latency_count": 191,
+      "latency_p50_ms": 3308,
+      "latency_p95_ms": 5887
+    }
+  },
+  "server_revision_files_verified": {
+    "src/matching/matcher.py": true,
+    "src/matching/llm_validator.py": true,
+    "src/matching/clip_embed.py": true,
+    "src/telegram/monitor.py": true,
+    "src/config.py": true,
+    "scripts/release.py": true,
+    "uv.lock": true
+  },
+  "clip_arm64": {
+    "result": "synthetic_execution_passed",
+    "quality_evaluation": false,
+    "actual_api_calls": 0,
+    "system": "Linux",
+    "architecture": "aarch64",
+    "python": "3.12.15",
+    "torch": "2.12.0+cpu",
+    "torchvision": "0.27.0+cpu",
+    "open_clip": "3.3.0",
+    "model": "ViT-B-32",
+    "pretrained": "openai",
+    "encoder_changed": false,
+    "synthetic_photo_sha256": [
+      "ac76a743d056c07f1bbcf439001ab3e71bba60f9891b20a8afb7d7b72f59ae07",
+      "db63f419adaf5ebcf19cee4182db30cd16bfa895e4a4f21e88f87780d3364d96"
+    ],
+    "cold_seconds": 1.857,
+    "batch_three_seconds": 0.528,
+    "same_image_cosine": 0.9999997615814209,
+    "warnings": [
+      "QuickGELU mismatch between final model config (quick_gelu=False) and pretrained tag 'openai' (quick_gelu=True)."
+    ],
+    "checks": [
+      "finite",
+      "shape_512",
+      "normalized",
+      "batch_parity",
+      "float16_roundtrip"
+    ]
+  },
+  "clip_x86_64": {
+    "result": "synthetic_execution_passed",
+    "quality_evaluation": false,
+    "actual_api_calls": 0,
+    "system": "Linux",
+    "architecture": "x86_64",
+    "python": "3.12.15",
+    "torch": "2.12.0+cpu",
+    "torchvision": "0.27.0+cpu",
+    "open_clip": "3.3.0",
+    "model": "ViT-B-32",
+    "pretrained": "openai",
+    "encoder_changed": false,
+    "synthetic_photo_sha256": [
+      "ac76a743d056c07f1bbcf439001ab3e71bba60f9891b20a8afb7d7b72f59ae07",
+      "db63f419adaf5ebcf19cee4182db30cd16bfa895e4a4f21e88f87780d3364d96"
+    ],
+    "cold_seconds": 25.399,
+    "batch_three_seconds": 20.735,
+    "same_image_cosine": 1.0,
+    "warnings": [
+      "QuickGELU mismatch between final model config (quick_gelu=False) and pretrained tag 'openai' (quick_gelu=True)."
+    ],
+    "checks": [
+      "finite",
+      "shape_512",
+      "normalized",
+      "batch_parity",
+      "float16_roundtrip"
+    ]
+  },
+  "rehearsal": {
+    "result": "synthetic_rehearsal_passed",
+    "production_authorization": false,
+    "actual_external_calls": 0,
+    "actual_system_commands": 0,
+    "database_revisions": [
+      "0016_identity_edges"
+    ],
+    "preserved_rows": {
+      "match_deliveries": 2,
+      "inbound_posts": 2,
+      "validation_jobs": 1,
+      "digest_work_items": 1,
+      "listing_identity_edges": 1,
+      "identity_events": 1,
+      "apartment_identities": 1,
+      "source_channels": 1
+    },
+    "delivery_states": [
+      "sent",
+      "unknown"
+    ],
+    "photo_sha256": "94339f13115a0aad551be759c3d8375332b9a5db0754769235a09b30cf101b89",
+    "checks": [
+      "committed_wal_backup",
+      "migration_0014_to_head",
+      "sqlite_integrity_fk",
+      "restore_logical_equality",
+      "restored_photo_decode",
+      "downgrade_denied",
+      "incompatible_rollback_denied",
+      "compatible_code_rollback_keeps_new_work"
+    ],
+    "limitations": [
+      "synthetic only",
+      "not off-host",
+      "no production configuration/session",
+      "no HTTP restore",
+      "both compatible builds use current worktree code"
+    ]
+  },
+  "tests": {
+    "unit": {
+      "passed": 1791,
+      "skipped": 1,
+      "warnings": 42,
+      "seconds": 123.5
+    },
+    "browser": {
+      "passed": 54,
+      "seconds": 57.02
+    },
+    "linux_critical": {
+      "passed": 129,
+      "warnings": 6
+    },
+    "linux_release": {
+      "passed": 48,
+      "warnings": 3
+    },
+    "independent_budget": {
+      "passed": 21,
+      "persistent_halt_reopen": "passed"
+    },
+    "independent_final_release": {
+      "passed": 49,
+      "stale_contract_repro": "rejected_before_stop_swap_migration_restart"
+    },
+    "mypy_before": {
+      "errors": 261,
+      "files": 36,
+      "source_files": 95
+    },
+    "mypy_after": {
+      "errors": 231,
+      "files": 32,
+      "source_files": 97
+    },
+    "mypy_focused_clean": [
+      "eval_budget.py",
+      "guarded_eval.py",
+      "candidates.py",
+      "monitor.py",
+      "digest_parser.py",
+      "orchestrator.py"
+    ],
+    "new_lint_diagnostics": 0,
+    "shell": "passed",
+    "diff_check": "passed"
+  },
+  "artifact_sha256": {
+    "linux-clip-smoke.json": "aec1113decf5ba112506237596a803b39ec82e8110fe5bf45d10d9fc2bc7dd02",
+    "linux-amd64-clip-smoke.json": "b6db3de69d76f12cd4c5c629b0ecb75e5f57e211b936c5b8b75a1df9c4c1bacc",
+    "unit-final-rerun.log": "83732c278d72c9eecaa5831aff7768b96f1ca46595f8051ad90dd774bc1a5718",
+    "browser-final.log": "661c0307a8f8a8c185594bd8cd146775a6b2c328a8a1ec225811c3e072ccea19",
+    "linux-focused-tests-final.log": "dbed775dfdbe44ec7662d3d9bbac2399e93fbeee4f8d264e0d9b1513b95af3dc",
+    "linux-release-tests-final.log": "58b774bbbdc619e014118ede9367b0bc82344a601c083d84d3390eada455f97c",
+    "mypy-final.txt": "12c382655e60d32d2ae18952c9ac0619c86bc4f1d6a19e90949b3c2217b73cfe",
+    "rehearsal-final/receipt.json": "afd3d3ce39039024507df984d5f1e4f1bb72f93b81447cc94420edd4381b82f2"
+  },
+  "limitations": [
+    "No live provider transport",
+    "Token/price upper bound still required before paid eval",
+    "Synthetic CLIP smoke is not accuracy evaluation",
+    "x86_64 runs under local emulation, not AWS latency benchmark",
+    "Container Python3.12.15 vs production3.12.3",
+    "No real production data restore or off-host recovery proof",
+    "First deployment blocked until a verified queue-aware fallback strategy exists",
+    "No push/deploy/model-data-spend approval"
+  ]
+}

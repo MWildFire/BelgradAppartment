@@ -45,7 +45,7 @@
     "@type": "Offer",
     "price": {{ item.price_eur }},
     "priceCurrency": "EUR",
-    "availability": {{ ("https://schema.org/InStock" if not item.is_rented else "https://schema.org/SoldOut")|tojson }},
+    {% if item.availability != "unknown" %}"availability": {{ ("https://schema.org/InStock" if not item.is_rented else "https://schema.org/SoldOut")|tojson }},{% endif %}
     "businessFunction": "https://purl.org/goodrelations/v1#LeaseOut",
     "url": "{{ site_base_url }}/apt/{{ item.id }}"
   }
@@ -98,11 +98,14 @@
       <div class="apt-badges">
         {% if item.for_vnj %}<span class="badge vnj">✓ подходит для ВНЖ</span>{% endif %}
         {% if item.for_white_card %}<span class="badge wc">белый картон</span>{% endif %}
-        {% if item.is_rented %}<span class="badge rented">снято</span>{% endif %}
+        {% if item.is_rented %}<span class="badge rented">снято</span>{% elif item.availability == "unknown" %}<span class="badge">Актуальность уточняется</span>{% endif %}
       </div>
 
       {# C1: a rented listing stays visible (social proof) but we tell the visitor it's taken and
          steer them to similar / a fresh search instead of letting them quietly send a dead lead. #}
+      {% if item.availability == "unknown" %}
+        <p role="status">Актуальность уточняется. Перед просмотром подтвердим, свободна ли квартира.</p>
+      {% endif %}
       {% if item.is_rented %}
         <div class="rented-banner" role="status">
           <b>Эта квартира уже снята.</b>

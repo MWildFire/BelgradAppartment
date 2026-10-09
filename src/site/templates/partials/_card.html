@@ -37,7 +37,7 @@
       <div class="flag">
         {% if item.for_vnj %}<span class="badge vnj">✓ ВНЖ</span>{% endif %}
         {% if item.for_white_card %}<span class="badge wc">белый картон</span>{% endif %}
-        {% if item.is_rented %}<span class="badge rented">снято</span>{% endif %}
+        {% if item.is_rented %}<span class="badge rented">снято</span>{% elif item.availability == "unknown" %}<span class="badge">Актуальность уточняется</span>{% endif %}
       </div>
     </div>
     <div class="body">

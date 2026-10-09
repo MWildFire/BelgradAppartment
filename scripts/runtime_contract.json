@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "migration_heads": ["0016_identity_edges"],
+  "compatible_revisions": ["0016_identity_edges"],
+  "semantics": ["fail_closed_validation", "durable_digest", "identity_edges"]
+}

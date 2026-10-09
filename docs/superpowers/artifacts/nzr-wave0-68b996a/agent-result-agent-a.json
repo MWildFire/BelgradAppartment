@@ -1,0 +1,13 @@
+{
+  "lane": "P0 / Agent A / snapshot_parser",
+  "base_sha": "68b996a8c23da5f7dd5607f54d7b296980725b48",
+  "worktree": "/Users/mvstrike/Projects/BelgradAppartment/.claude/worktrees/nzr-p0-a",
+  "initial_status": "PASS",
+  "final_review_status": "STOPPED_PRE_CORRECTION_REVIEW",
+  "changed_files": [],
+  "captain_resolution": "Corrected golden corpus to actual parsed list/detail fixture values and locally reverified parser/render hashes.",
+  "tests": "not run by Agent A; Captain baseline 1108 passed, 55 skipped",
+  "protected_hashes_unchanged": true,
+  "side_effects": "none",
+  "fresh_independent_pass": false
+}

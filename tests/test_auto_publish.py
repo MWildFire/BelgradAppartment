@@ -298,9 +298,14 @@ class _FakeBot:
         self.session = _FakeBotSession()
         self.sent: list[int] = []
 
-    async def send_media_group(self, *, chat_id: int, media):  # type: ignore[no-untyped-def]
+    async def send_photo(self, *, chat_id: int, photo, caption):
         self.sent.append(chat_id)
-        return [_FakeMessage(555)]
+        return _FakeMessage(555)
+
+    async def send_media_group(self, *, chat_id: int, media):  # type: ignore[no-untyped-def]
+        assert 2 <= len(media) <= 10
+        self.sent.append(chat_id)
+        return [_FakeMessage(555 + i) for i in range(len(media))]
 
 
 async def _seed_match_with_real_photo(db, tmp_path, *, raw_text="", status=MatchStatus.PENDING):
@@ -442,7 +447,7 @@ class _FakeUserbotClient:
     """Minimal Telethon client stand-in for _send_match_via_userbot."""
 
     async def get_me(self):  # type: ignore[no-untyped-def]
-        return type("Me", (), {"username": "darya"})()
+        return type("Me", (), {"username": "darya", "id": 12345})()
 
     async def send_file(self, recipient, *, file, caption):  # type: ignore[no-untyped-def]
         return [_FakeMessage(777)]

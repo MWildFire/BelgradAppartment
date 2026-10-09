@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -55,8 +56,29 @@ class Settings(BaseSettings):
     # --- Scrapers ---
     scrape_list_interval_min: int = 30
     scrape_recheck_interval_hours: int = 6
+    scrape_incremental_source_budget_sec: int = 600
+    scrape_incremental_run_budget_sec: int = 28800
+    scrape_source_budget_sec: int = 1800
+    scrape_item_budget_sec: int = 90
+    scrape_run_budget_sec: int = 34200
+    scrape_lock_wait_sec: int = 60
     scraper_user_agent: str = ""
-    scraper_proxy_url: str = ""
+    # Legacy proxy surface retained for all existing scrapers. Keep credentials out of repr/logs.
+    scraper_proxy_url: str = Field(default="", repr=False)
+    # Optional dedicated route for 4zida only; never affects other sources or photo traffic.
+    cetiri_zida_proxy_url: str = Field(default="", repr=False)
+    # Nekretnine list/detail browser pool. Empty candidates preserve the current direct local/test
+    # behavior; the Nekretnine scraper must fail closed when a required pool is selected.
+    nekretnine_list_snapshot_mode: Literal["legacy", "shadow", "active"] = "legacy"
+    nekretnine_proxy_mode: Literal["legacy_rotating", "static_isp"] = "legacy_rotating"
+    nekretnine_proxy_allow_legacy_fallback: bool = False
+    # Bound browser session lifetime on long ISP walks; 0 is an explicit rollback.
+    nekretnine_browser_session_pages: int = Field(default=100, ge=0)
+    nekretnine_proxy_primary_url: str = Field(default="", repr=False)
+    nekretnine_proxy_secondary_url: str = Field(default="", repr=False)
+    # Comma/newline-separated extra static ISP candidates, kept out of repr/logs.
+    nekretnine_proxy_additional_urls: str = Field(default="", repr=False)
+    nekretnine_proxy_metered_url: str = Field(default="", repr=False)
 
     # --- Live-smoke probe (A2: markup-change protection) ---
     # Healthy list page must yield >= this many previews (mirrors Scraper.MIN_PREVIEWS).
@@ -73,13 +95,15 @@ class Settings(BaseSettings):
     # Every step is disableable via env (=0 → skip) and fault-isolated at runtime:
     # a step failure adds a 🚨 line to the nightly summary, only the base scrape is fatal.
     # Broken rows (active, no photo hashes) re-fetched per night; 0 = skip.
-    nightly_heal_limit: int = 500
-    nightly_detail_refresh: int = 200  # active rows for rolling detail re-fetch per night; 0 = skip
+    nightly_heal_limit: int = 200
+    nightly_detail_refresh: int = 2400  # due rows for verified detail refresh; 0 = skip
+    # Complete inventory each night, including recent successes; backoff/budgets still apply.
+    nightly_detail_refresh_all: bool = False
     nightly_prune_embeddings: bool = True  # NIGHTLY_PRUNE_EMBEDDINGS=0 → skip embeddings prune
-    # A3 liveness sweep: HEAD-check active matched listings (potentially on the site) and
+    # A3 liveness sweep: read active matched source pages (potentially on the site) and
     # deactivate ones that 404/410, so a public card never links to a removed page.
     nightly_verify_links: bool = True  # NIGHTLY_VERIFY_LINKS=0 → skip the liveness sweep
-    nightly_verify_links_limit: int = 1000  # cap listings HEAD-checked per night
+    nightly_verify_links_limit: int = 250  # cap matched source checks per night
     nightly_metrics: bool = True  # NIGHTLY_METRICS=0 → skip daily_metrics snapshot + drop alert
     # X1 auto-publish: when a match is delivered (PENDING→PUBLISHED), auto-expose its card on
     # the site. auto_publish_on_send is the runtime kill switch on the delivery hot path (set
@@ -100,18 +124,22 @@ class Settings(BaseSettings):
     # D3 — safety cap on auto-hides per night (mirrors the price-drop cap); overflow → notice
     # candidates instead of being hidden, so a bad night can't wipe the whole showcase.
     site_liveness_max_hides: int = 10
+    site_liveness_budget_sec: int = 600
     # C2: nightly saved-search digest — new public listings × active subscriptions → notices
     # (idempotent via subscription_matches). NIGHTLY_NOTIFY_SUBSCRIPTIONS=0 → skip the step.
     nightly_notify_subscriptions: bool = True
     # Only listings created within this window are candidates (a fresh subscription doesn't get
     # blasted with the whole back-catalog; subscription_matches still guards against re-sends).
     subscription_notify_since_hours: int = 24
-    # Wall-clock budget SHARED by heal+rolling: once exhausted both stop and report skipped rows,
-    # so a night of slow Cloudflare-challenged refetches can't overrun (the 2026-06-16 SIGTERM).
-    nightly_refetch_budget_sec: int = 7200  # 2h
-    # Per-listing hard cap on fetch_detail — one pathological page (goto+poll+recycle retries)
+    # Wall-clock budget shared by heal, rolling refresh and link checks; leftovers flow forward.
+    # Slow challenged sources stop with an explicit skipped/error outcome at the deadline.
+    nightly_refetch_budget_sec: int = 25200  # 7h shared by heal/rolling/links
+    # Per-listing hard cap includes detail fetch, required photos and embeddings; a slow page
     # can otherwise burn minutes; this bounds it regardless of the scraper's internal retries.
     refetch_per_fetch_timeout_sec: int = 90
+    # Public-only queue at 11:30/17:30/23:30 UTC; no publication or message transports.
+    public_detail_refresh_limit: int = Field(default=500, ge=1)
+    public_detail_refresh_budget_sec: int = Field(default=2400, ge=1)
 
     # --- Price-drop alerts (W3-G3, consumed in _nightly_refresh) ---
     price_drop_alerts: bool = True  # PRICE_DROP_ALERTS=0 → no alerts
@@ -163,6 +191,10 @@ class Settings(BaseSettings):
     # LLM-based final validation through Claude API. Requires ANTHROPIC_API_KEY.
     enable_llm_validation: bool = True
     llm_validation_min_confidence: float = 0.7
+    llm_model: str = "claude-haiku-4-5"
+    llm_max_candidates: int = Field(default=3, ge=1, le=3)
+    llm_total_timeout_seconds: float = Field(default=45.0, gt=0, le=60)
+    llm_request_timeout_seconds: float = Field(default=20.0, gt=0, le=30)
     anthropic_api_key: str = ""
 
     # --- Public web catalog (Stage W) ---

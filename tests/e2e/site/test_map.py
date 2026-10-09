@@ -58,8 +58,10 @@ def test_map_price_buckets_and_vnj_toggle(page, site_server: str) -> None:
     """
     base = site_server
 
-    # Confirm the seed gives us exactly the points we reason about below (1 ВНЖ + 1 non-ВНЖ).
+    # Both explicitly public cards remain visible; id=3 carries an accurate dead status.
     points = page.request.get(f"{base}/api/map.json").json()["points"]
+    assert {p["id"] for p in points} == {1, 3}
+    assert next(p for p in points if p["id"] == 3)["availability"] == "dead"
     vnj_points = [p for p in points if p["for_vnj"]]
     assert len(points) == 2, f"expected 2 coord points, got {len(points)}"
     assert len(vnj_points) == 1, f"expected 1 ВНЖ point, got {len(vnj_points)}"

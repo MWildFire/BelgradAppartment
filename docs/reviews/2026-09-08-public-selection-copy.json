@@ -1,0 +1,937 @@
+{
+  "no_db_writes": true,
+  "no_telegram_sends": true,
+  "before": {
+    "cards": 31,
+    "unique_apartments": 29
+  },
+  "after": {
+    "cards": 168,
+    "unique_apartments": 168
+  },
+  "newly_visible": [
+    {
+      "site_listing_id": 6,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 7,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 9,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 10,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 12,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 13,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 14,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 27,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 30,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 36,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 37,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 41,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 54,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 59,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 63,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 64,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 65,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 66,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 67,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 72,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 74,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 78,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 79,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 81,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 82,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 84,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 86,
+      "reason": "active_sibling"
+    },
+    {
+      "site_listing_id": 96,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 97,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 98,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 101,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 104,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 108,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 111,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 114,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 116,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 120,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 121,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 124,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 125,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 126,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 127,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 128,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 129,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 130,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 132,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 134,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 137,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 142,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 146,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 150,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 151,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 152,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 153,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 155,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 156,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 157,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 158,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 159,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 160,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 161,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 162,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 163,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 164,
+      "reason": "active_sibling"
+    },
+    {
+      "site_listing_id": 165,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 166,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 167,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 169,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 170,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 172,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 173,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 174,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 175,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 176,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 177,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 179,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 182,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 183,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 184,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 185,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 186,
+      "reason": "active_sibling"
+    },
+    {
+      "site_listing_id": 187,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 189,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 190,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 191,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 192,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 193,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 194,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 195,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 196,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 197,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 198,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 199,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 200,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 201,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 202,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 203,
+      "reason": "active_sibling"
+    },
+    {
+      "site_listing_id": 205,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 206,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 208,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 209,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 210,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 214,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 215,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 216,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 218,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 219,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 220,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 221,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 223,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 224,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 225,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 227,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 229,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 230,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 231,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 232,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 233,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 234,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 235,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 236,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 237,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 239,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 241,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 242,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 243,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 246,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 249,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 250,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 252,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 253,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 256,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 258,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 262,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 263,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 264,
+      "reason": "public_secondary"
+    },
+    {
+      "site_listing_id": 265,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 266,
+      "reason": "unknown_retained"
+    },
+    {
+      "site_listing_id": 267,
+      "reason": "public_secondary"
+    }
+  ],
+  "newly_visible_reasons": {
+    "unknown_retained": 120,
+    "public_secondary": 15,
+    "active_sibling": 4
+  },
+  "no_longer_visible_apartments": 0,
+  "representative_ids": [
+    6,
+    7,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    27,
+    30,
+    36,
+    37,
+    41,
+    54,
+    55,
+    58,
+    59,
+    63,
+    64,
+    65,
+    66,
+    67,
+    72,
+    74,
+    78,
+    79,
+    81,
+    82,
+    84,
+    86,
+    96,
+    97,
+    98,
+    101,
+    104,
+    108,
+    110,
+    111,
+    112,
+    114,
+    116,
+    117,
+    118,
+    120,
+    121,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    132,
+    134,
+    135,
+    137,
+    142,
+    143,
+    145,
+    146,
+    148,
+    149,
+    150,
+    151,
+    152,
+    153,
+    155,
+    156,
+    157,
+    158,
+    159,
+    160,
+    161,
+    162,
+    163,
+    164,
+    165,
+    166,
+    167,
+    169,
+    170,
+    171,
+    172,
+    173,
+    174,
+    175,
+    176,
+    177,
+    178,
+    179,
+    180,
+    182,
+    183,
+    184,
+    185,
+    186,
+    187,
+    189,
+    190,
+    191,
+    192,
+    193,
+    194,
+    195,
+    196,
+    197,
+    198,
+    199,
+    200,
+    201,
+    202,
+    203,
+    204,
+    205,
+    206,
+    208,
+    209,
+    210,
+    211,
+    212,
+    213,
+    214,
+    215,
+    216,
+    217,
+    218,
+    219,
+    220,
+    221,
+    223,
+    224,
+    225,
+    226,
+    227,
+    229,
+    230,
+    231,
+    232,
+    233,
+    234,
+    235,
+    236,
+    237,
+    238,
+    239,
+    241,
+    242,
+    243,
+    244,
+    245,
+    246,
+    249,
+    250,
+    251,
+    252,
+    253,
+    254,
+    255,
+    256,
+    257,
+    258,
+    259,
+    262,
+    263,
+    264,
+    265,
+    266,
+    267
+  ],
+  "public_direct_ids": [
+    6,
+    7,
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    27,
+    30,
+    36,
+    37,
+    41,
+    54,
+    55,
+    58,
+    59,
+    63,
+    64,
+    65,
+    66,
+    67,
+    71,
+    72,
+    74,
+    75,
+    78,
+    79,
+    81,
+    82,
+    84,
+    86,
+    92,
+    96,
+    97,
+    98,
+    101,
+    104,
+    108,
+    110,
+    111,
+    112,
+    114,
+    116,
+    117,
+    118,
+    120,
+    121,
+    124,
+    125,
+    126,
+    127,
+    128,
+    129,
+    130,
+    132,
+    134,
+    135,
+    137,
+    142,
+    143,
+    145,
+    146,
+    147,
+    148,
+    149,
+    150,
+    151,
+    152,
+    153,
+    154,
+    155,
+    156,
+    157,
+    158,
+    159,
+    160,
+    161,
+    162,
+    163,
+    164,
+    165,
+    166,
+    167,
+    168,
+    169,
+    170,
+    171,
+    172,
+    173,
+    174,
+    175,
+    176,
+    177,
+    178,
+    179,
+    180,
+    181,
+    182,
+    183,
+    184,
+    185,
+    186,
+    187,
+    188,
+    189,
+    190,
+    191,
+    192,
+    193,
+    194,
+    195,
+    196,
+    197,
+    198,
+    199,
+    200,
+    201,
+    202,
+    203,
+    204,
+    205,
+    206,
+    207,
+    208,
+    209,
+    210,
+    211,
+    212,
+    213,
+    214,
+    215,
+    216,
+    217,
+    218,
+    219,
+    220,
+    221,
+    222,
+    223,
+    224,
+    225,
+    226,
+    227,
+    228,
+    229,
+    230,
+    231,
+    232,
+    233,
+    234,
+    235,
+    236,
+    237,
+    238,
+    239,
+    240,
+    241,
+    242,
+    243,
+    244,
+    245,
+    246,
+    247,
+    248,
+    249,
+    250,
+    251,
+    252,
+    253,
+    254,
+    255,
+    256,
+    257,
+    258,
+    259,
+    260,
+    261,
+    262,
+    263,
+    264,
+    265,
+    266,
+    267
+  ],
+  "active_secondary_cards": 20,
+  "active_secondary_apartments": 16,
+  "available_via_sibling_cards": 7,
+  "unknown_retained_cards": 126,
+  "dead_retained_cards": 0
+}

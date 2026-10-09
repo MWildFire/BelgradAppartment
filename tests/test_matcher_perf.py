@@ -9,6 +9,8 @@ pHash-vs-CLIP signal choices, same (deliberately order-dependent) selection beha
 from __future__ import annotations
 
 import random
+import pytest
+
 
 import numpy as np
 from sqlalchemy import event, select
@@ -325,6 +327,11 @@ def _track_candidate_selects(engine) -> dict:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def isolate_algorithm(monkeypatch):
+    monkeypatch.setattr(get_settings(), "enable_llm_validation", False)
+
+
 async def test_match_inbound_equals_old_reference_end_to_end():
     """New (threaded) path vs verbatim old pipeline on a fixture covering all stages."""
     async with fresh_db() as (_engine, factory):
@@ -388,12 +395,12 @@ async def test_phash_prescreen_equiv_random():
             assert new_counts.get(lid, 0) == old_counts.get(lid, 0), f"trial={trial} lid={lid}"
 
 
-async def test_select_best_equiv_random():
+async def test_select_best_order_invariant_random():
     """Stage 3 + winner selection vs old loop, randomized, incl. reversed iteration order."""
     settings = get_settings()
     rnd = random.Random(99)
 
-    for trial in range(100):
+    for _trial in range(100):
         n = rnd.randint(1, 25)
         rows = [
             CandidateRow(
@@ -415,15 +422,14 @@ async def test_select_best_equiv_random():
             price_bucket_max=rnd.choice([None, 800]),
         )
         n_ph = rnd.randint(1, 6)
-        fake_phashes = ["x"] * n_ph  # old loop only takes len() of this
+        forward = _select_best(rows, ph_counts, clip_results, parsed, n_ph, settings)
+        reverse = _select_best(list(reversed(rows)), ph_counts, clip_results, parsed, n_ph, settings)
+        shuffled = list(rows)
+        rnd.shuffle(shuffled)
+        assert forward == reverse == _select_best(shuffled, ph_counts, clip_results, parsed, n_ph, settings)
 
-        for order in (rows, list(reversed(rows))):
-            old = _old_select_loop(order, ph_counts, clip_results, parsed, fake_phashes, settings)
-            new = _select_best(order, ph_counts, clip_results, parsed, n_ph, settings)
-            assert new == old, f"trial={trial}"
 
-
-async def test_select_best_preserves_order_dependent_quirk():
+async def test_select_best_fixes_order_dependent_quirk():
     """The pHash-vs-CLIP choice reads the RUNNING best_score → method depends on row order.
     This quirk is intentionally preserved (determinization deferred); pin it down.
     """
@@ -439,11 +445,8 @@ async def test_select_best_preserves_order_dependent_quirk():
     rev_old = _old_select_loop([row_b, row_a], ph_counts, clip_results, parsed, ["x"] * 4, settings)
     rev_new = _select_best([row_b, row_a], ph_counts, clip_results, parsed, 4, settings)
 
-    assert fwd_new == fwd_old
-    assert rev_new == rev_old
-    # B wins in both orders, but its method flips with iteration order — the quirk.
-    assert fwd_new[3] == METHOD_PHASH
-    assert rev_new[3] == METHOD_CLIP
+    assert fwd_old != rev_old  # documents the old bug
+    assert fwd_new == rev_new == (2, 2, 0.5, METHOD_PHASH)
 
 
 # ---------------------------------------------------------------------------

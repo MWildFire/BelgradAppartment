@@ -173,15 +173,15 @@ async def test_build_health_trend_window_is_seven_days(db):
 @pytest.mark.asyncio
 async def test_build_health_deactivated_last_24h(db):
     now = _now()
-    # inactive + recently touched → counts as deactivated-24h
+    # inactive + recently confirmed inactive → counts as deactivated-24h
     await _seed_listing(db, platform=Platform.NEKRETNINE, external_id="d1", is_active=False,
-                        details_refreshed_at=now - timedelta(hours=2))
-    # inactive but touched long ago → NOT in the 24h window
+                        deactivated_at=now - timedelta(hours=2))
+    # inactive but confirmed inactive long ago → NOT in the 24h window
     await _seed_listing(db, platform=Platform.NEKRETNINE, external_id="d2", is_active=False,
-                        details_refreshed_at=now - timedelta(days=3))
+                        deactivated_at=now - timedelta(days=3))
     # active → never counted
     await _seed_listing(db, platform=Platform.NEKRETNINE, external_id="d3", is_active=True,
-                        details_refreshed_at=now - timedelta(hours=1))
+                        deactivated_at=now - timedelta(hours=1))
 
     async with db() as s:
         report = await build_health(s)

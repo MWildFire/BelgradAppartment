@@ -381,6 +381,21 @@ def _pager(request: Request, total: int, page: int) -> dict[str, object]:
 # --------------------------------------------------------------------------- routes
 
 
+@router.get("/readyz")
+async def readiness() -> JSONResponse:
+    from sqlalchemy import select
+
+    from src.db.models import Listing
+    from src.site.db import read_session
+
+    try:
+        async with read_session() as session:
+            await session.execute(select(Listing.details_succeeded_at).limit(1))
+        return JSONResponse({"status": "ready"})
+    except Exception:
+        return JSONResponse({"status": "not_ready"}, status_code=503)
+
+
 @router.get("/healthz")
 async def healthz() -> JSONResponse:
     return JSONResponse({"status": "ok"})

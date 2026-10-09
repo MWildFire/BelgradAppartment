@@ -1,38 +1,24 @@
-"""A4 — cross-platform listing dedup by pHash (periodic batch job, NOT the per-inbound path).
+"""Cross-platform identity from independent photo evidence.
 
-The same apartment is often posted on several platforms with different prices/slugs/photos.
-`find_cross_platform_dupes()` groups ACTIVE listings that are the same apartment, picks a
-"primary" representative per group, and tags every member with a shared `dup_group_id` +
-`is_primary` flag. It NEVER merges rows — it only tags, so a human (or the site / the matcher
-tie-break) can prefer the primary while the raw listings stay intact.
-
-Same-apartment relation (symmetric): two listings are the same apartment iff they share
-≥ `dedup_min_shared_photos` photos whose pHash Hamming distance ≤ `dedup_max_hamming`.
-A single shared photo is too weak — agency/stock photos get reused across unrelated listings,
-so the default minimum is 2. Groups are the connected components of that relation (union-find),
-which makes grouping transitive: A~B and B~C put A, B, C in one group even if A and C share no
-photo directly.
-
-Primary selection within a group: prefer most photos → has coords → lowest id (stable final
-tiebreak). All members get `dup_group_id` = min listing id in the group; the primary keeps
-`is_primary=True`, the rest are demoted to False. Singletons stay ungrouped (dup_group_id NULL,
-is_primary True).
-
-The O(N²) pHash comparison is pure CPU and runs via `asyncio.to_thread`, exactly like the
-matcher's scan stages, so the event loop stays responsive.
+The indexed scan proposes direct, evidenced links, subject to a fixed edge budget. The durable
+ledger retains accepted links across activity and photo changes, with explicit review
+and revocation. Materialized group keys use historical Listing anchors; primary selection
+prefers an active source. A shared stock photo alone never creates an edge.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from src.config import get_settings
 from src.db import Listing, get_session
 from src.matching.candidates import parse_phashes
+from src.matching.pairs import phash_pairs
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +31,8 @@ class DedupRow:
     phash_ints: tuple[int, ...]
     photo_count: int
     has_coords: bool
+    is_active: bool = True
+    manifest_sha: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,19 +58,8 @@ class DedupStats:
 def _shares_enough_photos(
     a: tuple[int, ...], b: tuple[int, ...], max_hamming: int, min_shared: int
 ) -> bool:
-    """True iff ≥ min_shared photos of `a` each have a near-duplicate (Hamming ≤ max_hamming)
-    in `b`. XOR + popcount, identical to imagehash's hamming but ~40x faster (see matcher)."""
-    if len(a) < min_shared or not b:
-        return False
-    shared = 0
-    for ia in a:
-        for ib in b:
-            if (ia ^ ib).bit_count() <= max_hamming:
-                shared += 1
-                break
-        if shared >= min_shared:
-            return True
-    return False
+    """Only independent one-to-one photo pairs count as identity evidence."""
+    return len(phash_pairs(a, b, max_hamming)) >= min_shared
 
 
 class _UnionFind:
@@ -112,7 +89,7 @@ class _UnionFind:
         self.size[ra] += self.size[rb]
 
 
-def _group_rows(
+def _group_rows_quadratic(
     rows: list[DedupRow], max_hamming: int, min_shared: int
 ) -> list[list[DedupRow]]:
     """Connected components of the same-apartment relation. Pure CPU (O(N²) over rows × photos).
@@ -142,9 +119,94 @@ def _group_rows(
     return [members for members in buckets.values() if len(members) >= 2]
 
 
+
+def _find_photo_edges(
+    rows: list[DedupRow], max_hamming: int, min_shared: int
+) -> list[tuple[int, int]]:
+    """Find the same connected components using an exact photo candidate index.
+
+    Split 64 bits into h+1 disjoint chunks. Two hashes at distance <=h must share
+    at least one whole chunk, so candidate retrieval cannot discard a matching
+    photo. Every candidate still receives the original XOR/popcount check.
+    """
+    if (
+        not 0 <= max_hamming <= 8
+        or min_shared <= 0
+        or any(h < 0 or h >= 1 << 64 for row in rows for h in row.phash_ints)
+    ):
+        # Preserve the existing semantics for unusual configurations or malformed ints.
+        uf = _UnionFind(len(rows))
+        edges = []
+        for i, a in enumerate(rows):
+            for j in range(i + 1, len(rows)):
+                if _shares_enough_photos(
+                    a.phash_ints, rows[j].phash_ints, max_hamming, min_shared,
+                ):
+                    uf.union(i, j)
+                    edges.append((min(a.id, rows[j].id), max(a.id, rows[j].id)))
+                    if len(edges) > 25000:
+                        raise RuntimeError("identity_edge_budget")
+        return edges
+
+    owners: dict[int, set[int]] = defaultdict(set)
+    for i, row in enumerate(rows):
+        for h in row.phash_ints:
+            owners[h].add(i)
+
+    parts = max_hamming + 1
+    slices = [
+        (64 * i // parts, (1 << (64 * (i + 1) // parts - 64 * i // parts)) - 1)
+        for i in range(parts)
+    ]
+    buckets: list[dict[int, list[int]]] = [defaultdict(list) for _ in slices]
+    for h in owners:
+        for index, (shift, mask) in zip(buckets, slices, strict=True):
+            index[(h >> shift) & mask].append(h)
+
+    targets_by_hash: dict[int, tuple[int, ...]] = {}
+    uf = _UnionFind(len(rows))
+    edges = []
+    for i, row in enumerate(rows):
+        if len(row.phash_ints) < min_shared:
+            continue
+        possible: set[int] = set()
+        for h in set(row.phash_ints):
+            if h not in targets_by_hash:
+                candidates: set[int] = set()
+                for index, (shift, mask) in zip(buckets, slices, strict=True):
+                    candidates.update(index[(h >> shift) & mask])
+                targets: set[int] = set()
+                for candidate in candidates:
+                    if (h ^ candidate).bit_count() <= max_hamming:
+                        targets.update(owners[candidate])
+                targets_by_hash[h] = tuple(targets)
+            possible.update(targets_by_hash[h])
+        for j in sorted(possible):
+            if j > i and _shares_enough_photos(
+                row.phash_ints, rows[j].phash_ints, max_hamming, min_shared,
+            ):
+                uf.union(i, j)
+                edges.append((min(row.id, rows[j].id), max(row.id, rows[j].id)))
+                if len(edges) > 25000:
+                    raise RuntimeError("identity_edge_budget")
+
+    return edges
+
+
+def _group_rows(rows: list[DedupRow], max_hamming: int, min_shared: int) -> list[list[DedupRow]]:
+    uf = _UnionFind(len(rows))
+    positions = {row.id: i for i, row in enumerate(rows)}
+    for left, right in _find_photo_edges(rows, max_hamming, min_shared):
+        uf.union(positions[left], positions[right])
+    groups: dict[int, list[DedupRow]] = defaultdict(list)
+    for i, row in enumerate(rows):
+        groups[uf.find(i)].append(row)
+    return [members for members in groups.values() if len(members) >= 2]
+
+
 def _pick_primary(members: list[DedupRow]) -> DedupRow:
     """Primary = most photos → has coords → lowest id (stable final tiebreak)."""
-    return max(members, key=lambda r: (r.photo_count, r.has_coords, -r.id))
+    return max(members, key=lambda r: (r.is_active, r.photo_count, r.has_coords, -r.id))
 
 
 def _compute_assignments(
@@ -178,83 +240,34 @@ def _compute_assignments(
 
 
 async def find_cross_platform_dupes(
-    *, max_hamming: int | None = None, min_shared_photos: int | None = None, write: bool = True
+    *, max_hamming: int | None = None, min_shared_photos: int | None = None, write: bool = True,
+    review_edge: tuple[int, int, bool, str] | None = None,
 ) -> DedupStats:
-    """Group ACTIVE listings that are the same apartment and tag dup_group_id + is_primary.
+    """Reconcile durable evidenced identities; active primary is a separate selection.
 
-    Idempotent: every run first resets all active listings to ungrouped (dup_group_id NULL,
-    is_primary True), then re-tags from the current photo sets — so listings that left a group
-    (e.g. one went inactive, or photos changed) are cleaned up automatically.
-
-    `write=False` computes the grouping but persists nothing (safe read-only — used by the
-    `dupes-report` CLI so it can be run any time without mutating the DB).
+    review_edge=(left, right, confirmed, reason) explicitly changes one edge. Revoking
+    a triangle edge may leave another connecting path; returned groups show the result.
     """
+    from src.matching.identity import reconcile
+
+    if review_edge is not None and not write:
+        raise ValueError("An edge review requires write=True")
     settings = get_settings()
     max_h = settings.dedup_max_hamming if max_hamming is None else max_hamming
     min_shared = settings.dedup_min_shared_photos if min_shared_photos is None else min_shared_photos
-
-    async with get_session() as s:
-        db_rows = (
-            await s.execute(
-                select(
-                    Listing.id,
-                    Listing.photo_phashes,
-                    Listing.photo_urls,
-                    Listing.lat,
-                    Listing.lon,
-                ).where(Listing.is_active.is_(True))
-            )
-        ).all()
-
-        rows = [
-            DedupRow(
-                id=r.id,
-                phash_ints=tuple(parse_phashes(r.photo_phashes)) if r.photo_phashes else (),
-                photo_count=len(r.photo_urls) if r.photo_urls else 0,
-                has_coords=r.lat is not None and r.lon is not None,
-            )
-            for r in db_rows
-        ]
-
-        # Heavy O(N²) comparison off the event loop (same pattern as matcher scan stages).
-        assignments, groups, demoted = await asyncio.to_thread(
-            _compute_assignments, rows, max_h, min_shared
-        )
-
-        if write:
-            # Reset all active listings to ungrouped, then apply the fresh assignments. Reset +
-            # re-tag (rather than diffing) keeps the job idempotent and self-healing.
-            await s.execute(
-                update(Listing)
-                .where(Listing.is_active.is_(True))
-                .values(dup_group_id=None, is_primary=True)
-            )
-            # Batch the re-tag: group the assignments by their (dup_group_id, is_primary) value
-            # and issue ONE UPDATE … WHERE id IN (…) per distinct value (≤ 2 per group) instead
-            # of one UPDATE per listing (N+1).
-            by_value: dict[tuple[int, bool], list[int]] = {}
-            for listing_id, gid, is_primary in assignments:
-                by_value.setdefault((gid, is_primary), []).append(listing_id)
-            for (gid, is_primary), ids in by_value.items():
-                await s.execute(
-                    update(Listing)
-                    .where(Listing.id.in_(ids))
-                    .values(dup_group_id=gid, is_primary=is_primary)
-                )
-        else:
-            # Read-only: roll back any session state so nothing is persisted.
-            await s.rollback()
-
-    stats = DedupStats(
-        active_scanned=len(rows),
-        groups_found=len(groups),
-        listings_grouped=len(assignments),
-        listings_demoted=demoted,
-        groups=tuple(groups),
+    async with get_session() as session:
+        db_rows = (await session.execute(select(
+            Listing.id, Listing.photo_phashes, Listing.photo_urls, Listing.lat, Listing.lon,
+            Listing.is_active, Listing.photo_evidence,
+        ).order_by(Listing.id))).all()
+    rows = [DedupRow(
+        id=r.id, phash_ints=tuple(parse_phashes(r.photo_phashes or [])),
+        photo_count=len(r.photo_urls or []), has_coords=r.lat is not None and r.lon is not None,
+        is_active=r.is_active, manifest_sha=tuple(p["sha256"] for p in r.photo_evidence or []),
+    ) for r in db_rows]
+    edges = await asyncio.to_thread(_find_photo_edges, rows, max_h, min_shared)
+    assignments, groups, demoted = await reconcile(
+        rows, edges, max_h, min_shared, write=write, review_edge=review_edge,
     )
-    logger.info(
-        "[dedup] scanned=%d groups=%d grouped=%d demoted=%d (hamming≤%d, min_shared=%d)",
-        stats.active_scanned, stats.groups_found, stats.listings_grouped,
-        stats.listings_demoted, max_h, min_shared,
-    )
-    return stats
+    return DedupStats(sum(r.is_active for r in rows), len(groups), len(assignments),
+                      demoted, tuple(groups))

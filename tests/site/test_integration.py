@@ -274,9 +274,9 @@ def test_map_json_only_public_with_coords(client):
     assert r.status_code == 200
     body = r.json()
     assert "points" in body
-    # listings 1 + 3 are public with coords; 2 has no coords; 4 is private.
+    # Only available public listing 1 has coords; 2 has no coords; 3 is rented; 4 private.
     ids = sorted(p["id"] for p in body["points"])
-    assert ids == [1, 3]
+    assert ids == [1, 3]  # public authorization retains the annotated dead card.
     for p in body["points"]:
         assert p["url"] == f"/apt/{p['id']}"
         assert p["lat"] is not None and p["lon"] is not None

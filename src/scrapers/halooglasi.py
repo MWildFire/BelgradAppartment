@@ -19,13 +19,20 @@ import json
 import logging
 import re
 from typing import Any, ClassVar
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urljoin, urlsplit, urlunsplit
 
 import httpx
+from selectolax.parser import HTMLParser
 
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers.base import ListingDetail, ListingPreview, Scraper
+from src.scrapers.base import (
+    ListingDetail,
+    ListingPreview,
+    Scraper,
+    SourceListingInactiveError,
+    SourceListingRemovedError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,18 @@ IMG_BASE = "https://img.halooglasi.com"
 
 _LIST_VAR = "QuidditaEnvironment.serverListData"
 _DETAIL_VAR = "QuidditaEnvironment.CurrentClassified"
+_RENTAL_PATH = "/nekretnine/izdavanje-stanova"
+_REMOVED_NOTICE = (
+    "Nažalost, oglas nije pronađen. Oglas je obrisan ili ste pronašli neispravan link. "
+    "Pogledajte druge oglase u ovoj kategoriji."
+)
+_INACTIVE_NOTICE = "Žao nam je, predmet vašeg interesovanja više nije u ponudi"
+_INACTIVE_VISIBILITY = """
+if (classified.StateId == '101' || classified.StateId == '106')
+    document.getElementById('divExpired1').parentNode.removeChild(document.getElementById('divExpired1'));
+else
+    document.getElementById('divExpired1inner').style.display = 'block';
+"""
 
 # Cloudflare interstitial fingerprints. 'Sačekajte trenutak' is the Serbian 'Just a moment' — the
 # context runs at locale sr-RS, so that is the title the site actually serves us; matching only the
@@ -101,7 +120,6 @@ class HalooglasiScraper(Scraper):
         settings = get_settings()
         self.list_url = settings.halooglasi_list_url
         self._user_data_dir = settings.data_dir / "playwright" / "halooglasi"
-        self._user_data_dir.mkdir(parents=True, exist_ok=True)
         self._pw = None
         self._context = None
         self._skipped_pages = 0
@@ -117,6 +135,15 @@ class HalooglasiScraper(Scraper):
         self._headless = os.environ.get("HALOOGLASI_HEADLESS", "false").lower() == "true"
 
     async def __aenter__(self) -> HalooglasiScraper:
+        await super().__aenter__()
+        try:
+            return await self._start_browser_context()
+        except BaseException:
+            await self.aclose()
+            raise
+
+    async def _start_browser_context(self) -> HalooglasiScraper:
+        self._user_data_dir.mkdir(parents=True, exist_ok=True)
         from playwright.async_api import async_playwright
         from playwright_stealth import Stealth
 
@@ -153,16 +180,23 @@ class HalooglasiScraper(Scraper):
             # (e.g. nightly _run_all) treats this platform as failed, not the whole run.
             await self._pw.stop()
             self._pw = None
+            await super().aclose()
             raise
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
-        if self._context is not None:
-            await self._context.close()
-            self._context = None
-        if self._pw is not None:
-            await self._pw.stop()
-            self._pw = None
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        try:
+            if self._context is not None:
+                await self._context.close()
+                self._context = None
+            if self._pw is not None:
+                await self._pw.stop()
+                self._pw = None
+        finally:
+            await super().aclose()
 
     async def list_recent(
         self,
@@ -178,10 +212,12 @@ class HalooglasiScraper(Scraper):
         consecutive_failures = 0
         known_ids = known_ids or set()
         consecutive_full_known = 0
+        self.reset_crawl_evidence()
         self._skipped_pages = 0
         self._site_total = None
 
         for page_num in range(1, max_pages + 1):
+            self.record_page_attempt(observed=len(previews))
             url = self.list_url if page_num == 1 else f"{self.list_url}?page={page_num}"
 
             # Single-page retry with browser restart on Chromium network errors. A returned page
@@ -217,6 +253,7 @@ class HalooglasiScraper(Scraper):
             if not html or _LIST_VAR not in html:
                 consecutive_failures += 1
                 self._skipped_pages += 1
+                self.record_crawl_failure("page_fetch_failed")
                 logger.warning("[halooglasi] page %d: no data after retries (consec_fail=%d, skipped=%d)",
                                page_num, consecutive_failures, self._skipped_pages)
                 if consecutive_failures >= 5:
@@ -227,12 +264,14 @@ class HalooglasiScraper(Scraper):
             if page_num == 1:
                 self._last_list_html = html  # for the A2 smoke fingerprint (see __init__)
 
-            if self._site_total is None:
-                data = _extract_json_var(html, _LIST_VAR)
-                if isinstance(data, dict):
-                    tc = data.get("TotalCount")
-                    if isinstance(tc, int) and tc > 0:
-                        self._site_total = tc
+            data = _extract_json_var(html, _LIST_VAR)
+            if not isinstance(data, dict) or not isinstance(data.get("Ads"), list):
+                self.record_crawl_failure("page_payload_missing")
+                break
+            self.record_source_total(data.get("TotalCount"))
+            if data.get("PageNumber") != page_num:
+                self.record_crawl_failure("pagination_mismatch")
+                break
 
             page_previews = self.parse_list(html)
             added = 0
@@ -246,18 +285,23 @@ class HalooglasiScraper(Scraper):
                 if prev.external_id not in known_ids:
                     unknown_this_page += 1
             if added == 0:
-                # Empty page = end of pagination.
+                if self._site_total != len(previews):
+                    self.record_crawl_failure("unexpected_empty_or_repeated_page")
                 break
             if known_ids and unknown_this_page == 0:
                 consecutive_full_known += 1
                 if consecutive_full_known >= early_stop_full_known_pages:
+                    self._stopped_known = True
                     logger.info(
                         "[halooglasi] incremental early-stop at page %d", page_num,
                     )
                     break
             else:
                 consecutive_full_known = 0
+            if type(data.get("TotalPages")) is int and page_num >= data["TotalPages"]:
+                break
             await asyncio.sleep(1.5)
+        self.finish_crawl_evidence(len(previews))
         return previews
 
     async def _recycle_browser(self) -> None:
@@ -298,6 +342,8 @@ class HalooglasiScraper(Scraper):
                         "detail data marker missing (challenge or soft error page)"
                     )
                 return self.parse_detail(url, html)
+            except SourceListingRemovedError:
+                raise
             except _MarkerMissing as e:
                 # Deliberately NO _recycle_browser() here. A challenged attempt leaves the
                 # profile holding the cf_clearance Cloudflare just granted, and the next navigation
@@ -342,8 +388,35 @@ class HalooglasiScraper(Scraper):
         mirror_url = self._smsprint_url(url)
         if mirror_url is None:
             return ""
+        # The print site appends every visited ad to ViewedAds_YYYYMMDD. Unlike a
+        # browser, httpx retains this cookie beyond the browser's size limit; a
+        # long crawl eventually sends >16 KB and IIS rejects every request with
+        # HTTP 400. Viewing history is not needed to read public listing payloads.
+        # Keep the ASP.NET session and all unrelated cookies intact.
+        for cookie in list(self._client.cookies.jar):
+            if (
+                re.fullmatch(r"ViewedAds_\d{8}", cookie.name)
+                and cookie.domain.lstrip(".") in {"halooglasi.com", "smsprint.halooglasi.com"}
+            ):
+                self._client.cookies.delete(cookie.name, domain=cookie.domain, path=cookie.path)
         try:
             response = await self._client.get(mirror_url)
+            if (
+                ready_marker == _DETAIL_VAR
+                and response.status_code == 404
+                and response.history
+                and all(r.url.host == "smsprint.halooglasi.com" for r in response.history)
+                and response.url.host == "smsprint.halooglasi.com"
+                and response.url.path == "/404"
+                and parse_qs(response.url.query.decode()).get("aspxerrorpath")
+                == [urlsplit(mirror_url).path]
+                and not _is_challenge(response.text)
+                and _DETAIL_VAR not in response.text
+            ):
+                # The print application explicitly redirected this exact listing to its
+                # error page. Do not spend the per-card browser timeout on that response,
+                # and do not expose its mirror-only 404 as canonical evidence of removal.
+                raise _MarkerMissing("print detail redirected to error page; availability unknown")
             response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.info("[halooglasi] smsprint unavailable for %s: %s", url, type(exc).__name__)
@@ -351,6 +424,20 @@ class HalooglasiScraper(Scraper):
         if ready_marker in response.text:
             logger.debug("[halooglasi] loaded %s via smsprint", url)
             return response.text
+        if ready_marker == _DETAIL_VAR and _explicit_print_not_found(url, response):
+            raise SourceListingRemovedError()
+        if (
+            ready_marker == _DETAIL_VAR
+            and response.history
+            and response.url.host == "smsprint.halooglasi.com"
+            and response.url.path.rstrip("/") == "/nekretnine/izdavanje-stanova"
+            and _LIST_VAR in response.text
+        ):
+            # A removed/unavailable print page redirects to the catalogue. Retrying the
+            # challenged canonical host cannot validate this response. Keep the stored
+            # listing unchanged and let the normal UNKNOWN/backoff policy record the gap;
+            # a mirror redirect alone is never evidence for deactivation.
+            raise _MarkerMissing("print detail redirected to catalogue; availability unknown")
         logger.warning("[halooglasi] smsprint response missing marker '%s' for %s", ready_marker, url)
         return ""
 
@@ -472,6 +559,17 @@ class HalooglasiScraper(Scraper):
                 url=url,
             )
 
+        # The source keeps full JSON/photos on expired or withdrawn HTTP200 pages.
+        # Its own banner visibility depends on StateId; the mere presence of the
+        # banner text is insufficient because healthy raw HTML includes it hidden.
+        state = ad.get("StateId")
+        if type(state) is not int or state != 101:
+            if _explicit_inactive_detail(url, html, ad):
+                raise SourceListingInactiveError()
+            raise _MarkerMissing(
+                "detail source state is not confirmed active; availability unknown"
+            )
+
         external_id = str(ad.get("Id") or _external_id_from_url(url))
         other: dict[str, Any] = ad.get("OtherFields") or {}
 
@@ -534,6 +632,96 @@ class HalooglasiScraper(Scraper):
 
 
 # --- helpers ---
+
+
+def _explicit_inactive_detail(url: str, html: str, ad: dict[str, Any]) -> bool:
+    parts = urlsplit(url)
+    match = re.fullmatch(_RENTAL_PATH + r"/[a-z0-9-]+/([0-9]{13})", parts.path)
+    if (
+        parts.scheme != "https"
+        or parts.netloc not in {"www.halooglasi.com", "halooglasi.com"}
+        or parts.fragment
+        or parts.query not in {"", "kid=1", "kid=3", "kid=4"}
+        or match is None
+        or str(ad.get("Id")) != match.group(1)
+        or type(ad.get("StateId")) is not int
+        or ad["StateId"] not in {105, 111, 112}
+        or _is_challenge(html)
+    ):
+        return False
+    doc = HTMLParser(html)
+    notices = doc.css("div#divExpired1 div#divExpired1inner.info-box-expired")
+    if len(notices) != 1:
+        return False
+    node = notices[0]
+    while node is not None:
+        attrs = node.attributes
+        style = dict(
+            (key.strip().lower(), value.strip().lower())
+            for item in attrs.get("style", "").split(";")
+            for key, separator, value in [item.partition(":")] if separator
+        )
+        if "hidden" in attrs or attrs.get("aria-hidden") == "true":
+            return False
+        if node != notices[0] and (
+            style.get("display") == "none" or style.get("visibility") == "hidden"
+        ):
+            return False
+        node = node.parent
+    titles = notices[0].css(".expired-text > span.title")
+    if len(titles) != 1 or " ".join(titles[0].text().split()) != _INACTIVE_NOTICE:
+        return False
+    # Raw print HTML still has the source's self-removing script. Rendered browser
+    # HTML instead retains the explicit style set by that same script.
+    display = None
+    for item in notices[0].attributes.get("style", "").split(";"):
+        key, separator, value = item.partition(":")
+        if separator and key.strip().lower() == "display":
+            display = value.strip().lower()
+    visible = display == "block"
+    binding = " ".join(_INACTIVE_VISIBILITY.split())
+    return visible or any(
+        binding in " ".join(script.text().split()) for script in doc.css("script")
+    )
+
+
+def _explicit_print_not_found(url: str, response: httpx.Response) -> bool:
+    """Recognize the source's explicit removal notice, never a bare mirror redirect.
+
+    Observed removed listings return one 301 to the rental catalogue with this
+    notice. A healthy listing with an outdated slug instead returns a 302 to its
+    current detail URL. Keep every other redirect/error in the UNKNOWN path.
+    """
+    original = urlsplit(url)
+    destination = _RENTAL_PATH + "?referrer=oglas"
+    if (
+        original.scheme != "https"
+        or original.netloc not in {"www.halooglasi.com", "halooglasi.com"}
+        or original.fragment
+        or original.query not in {"", "kid=1", "kid=3", "kid=4"}
+        or re.fullmatch(_RENTAL_PATH + r"/[a-z0-9-]+/[0-9]{13}", original.path) is None
+        or response.status_code != 200
+        or str(response.url) != SMSPRINT_BASE_URL + destination
+        or len(response.history) != 1
+        or _DETAIL_VAR in response.text
+        or _is_challenge(response.text)
+    ):
+        return False
+    redirect = response.history[0]
+    if (
+        redirect.status_code != 301
+        or redirect.request.method != "GET"
+        or str(redirect.url) != HalooglasiScraper._smsprint_url(url)
+        or redirect.headers.get("location") != destination
+    ):
+        return False
+    payload = _extract_json_var(response.text, _LIST_VAR)
+    if not isinstance(payload, dict) or not isinstance(payload.get("Ads"), list):
+        return False
+    notices = HTMLParser(response.text).css(
+        "div.info-box-expired.info-box-expired-full"
+    )
+    return len(notices) == 1 and " ".join(notices[0].text().split()) == _REMOVED_NOTICE
 
 
 def _extract_json_var(html: str, var_path: str) -> Any:

@@ -1,0 +1,117 @@
+{
+  "task": "Nekretnine Zero-Regression",
+  "plan": "docs/superpowers/plans/2026-08-24-nekretnine-zero-regression-isp-migration.md",
+  "captured_at": "2026-08-24T16:40:33+04:00",
+  "initial_head": "99b7b2214a7f930b2dc64fc12ccf247240bb9989",
+  "integration_branch": "codex/nzr-integration",
+  "checkpoint_commits": {
+    "hardening": "ffce9e3",
+    "docs": "68b996a8c23da5f7dd5607f54d7b296980725b48",
+    "baseline_sha": "68b996a8c23da5f7dd5607f54d7b296980725b48"
+  },
+  "initial_dirty_files": [
+    "deploy/otz-admin.service",
+    "deploy/otz-site.service",
+    "scripts/vps_install.sh",
+    "src/cli.py",
+    "src/scrapers/base.py",
+    "src/scrapers/nekretnine.py",
+    "src/scrapers/orchestrator.py",
+    "src/site/liveness.py",
+    "tests/test_link_verify.py",
+    "tests/test_scrapers_base.py"
+  ],
+  "initial_docs_files": [
+    "HANDOFF.md",
+    "docs/superpowers/plans/2026-08-24-nekretnine-zero-regression-isp-migration.md"
+  ],
+  "initial_dirty_diff": {
+    "tracked_files_in_initial_diff": 11,
+    "production_hardening_files": 10,
+    "insertions": 326,
+    "deletions": 103,
+    "sha256": "a2fdebed9c303ad78112284f4d0ec02880ff3ac9b407e4a8eb048103f69349da",
+    "git_diff_check": "PASS",
+    "post_checkpoint_status": "clean",
+    "post_checkpoint_empty_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "protected_blob_hashes": {
+    "src/telegram/monitor.py": "d5fefef04597ad3842396c5995870cbf6b816642",
+    "src/jobs/pipeline.py": "5606de46bacd90455f0ed2e86593e1171a0a33d6",
+    "src/telegram/bot_delivery.py": "633dce29aa74ef9e992a0f877440e6045ec439d1",
+    "src/telegram/delivery.py": "aea0c082c69e7ee025490491eb2e8d7d0610dcb6",
+    "src/post/template.py": "6e8f8935a0b22ee0fcabb742995d2b8b296a683e",
+    "src/matching/candidates.py": "76c2c4f8b2a02cb077730dc1d6a23de19e3d9396",
+    "src/matching/clip_embed.py": "2b5af2de7ae73b5f87e108f3e2cb97b496c2f3b2",
+    "src/matching/dedup.py": "1031e8f8dfd733c338dab768631a799fc77207df",
+    "src/matching/inbound_parser.py": "f404a5c4dd94291e05e6d00f587a1001cd012207",
+    "src/matching/llm_validator.py": "dd897bb0b7f2e446f9e79243e5f65113e41c4c43",
+    "src/matching/matcher.py": "3d3b40d03778c8967179d938e8770bd13248498d",
+      "src/matching/phash.py": "349e73800f888f048b23584f2eb1387484d3f2f7",
+      "src/matching/__init__.py": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+  },
+  "baseline_validation": {
+    "unit_command": ".venv/bin/python -m pytest tests/ -q -p no:cacheprovider",
+    "unit_result": "1108 passed, 55 skipped, 34 warnings in 27.26s",
+    "pipeline_probe_command": ".venv/bin/python -m src.cli pipeline-probe",
+    "pipeline_probe_result": "PASS; listing=golden-0001; confidence=1.000; method=phash",
+    "test_collection_delta": "not reduced"
+  },
+  "production_read_only_preflight": {
+    "host": "3.121.163.130",
+    "public_endpoints": {
+      "https://rentbelgrad.com/healthz": 200,
+      "https://rentbelgrad.com/": 200,
+      "https://rentbelgrad.com/catalog": 200,
+      "https://rentbelgrad.com/api/map.json": 200,
+      "https://admin.rentbelgrad.com/": 401
+    },
+    "alembic": "0011_keep_on_site (head)",
+    "database": {
+      "path": "/opt/otz/data/otz.db",
+      "quick_check": "ok",
+      "row_counts": {
+        "listings": 73334,
+        "matches": 347,
+        "site_listings": 243
+      }
+    },
+    "services": {
+      "otz-site": "active/running",
+      "otz-admin": "active/running",
+      "otz-monitor": "active/running",
+      "otz-nightly-refresh": "inactive/dead; Result=success; ExecMainStatus=0",
+      "otz-weekly-full-refresh": "inactive/dead; Result=success; ExecMainStatus=0",
+      "otz-scrape-smoke": "inactive/dead; Result=success; ExecMainStatus=0"
+    },
+    "timers": [
+      "otz-nightly-refresh.timer",
+      "otz-weekly-full-refresh.timer",
+      "otz-scrape-smoke.timer",
+      "otz-daily-summary.timer"
+    ],
+    "historical_log_note": "Older nightly timeout and weekly SIGTERM entries exist; latest observed runs completed successfully."
+  },
+  "worker_status": {
+    "agent_a_snapshot_parser": "PASS initial audit; final golden cross-review STOPPED on pre-correction corpus mismatch; Captain corrected and locally reverified",
+    "agent_b_proxy_config": "PASS initial audit; final freeze cross-review STOPPED before plan wording resolution; Captain amended plan",
+    "agent_c_zero_regression_qa": "PASS for baseline/tests; final review STOPPED on pre-correction/stale artifact state; fresh review unavailable due worker thread limit"
+  },
+  "plan_contradiction_resolution": {
+    "finding": "Existing H1 hardening routes Nekretnine verify-links through the configured proxy, while the original migration wording said liveness remained direct/unchanged.",
+    "evidence": [
+      "HANDOFF.md §0.-7 records SCRAPER_PROXY_URL in verify-links client.",
+      "src/scrapers/orchestrator.py in checkpoint ffce9e3 passes use_proxy for Nekretnine verify-links.",
+      "The migration must not alter liveness algorithm/DB semantics or broaden transport scope."
+    ],
+    "resolution": "Plan §2.4/§2.5 now freezes current transport: Nekretnine verify-links proxy path is preserved; other platform HEAD and direct CDN paths remain direct; snapshot proxy selectors do not enter liveness.",
+    "plan_updated_before_p1": true
+  },
+  "golden_manifest": {
+    "path": "docs/superpowers/artifacts/nzr-wave0-68b996a/render-golden-manifest.json",
+    "sha256": "b38c4615364eca1a9e783c275e01275aceb61fd5f8bfc0a4383de28a6cd7d738",
+    "status": "IMMUTABLE_WAVE0_GOLDEN"
+  },
+  "b0_status": "STOPPED_PENDING_FRESH_INDEPENDENT_QA_PASS",
+  "secrets": "No credentials, proxy URLs, tokens, cookies, or .env contents recorded."
+}

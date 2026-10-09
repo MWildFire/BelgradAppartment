@@ -38,23 +38,26 @@ async def send_subscription_digest_telegram(
     chat_id: int | None,
     listings: Sequence[SiteListingView],
     unsubscribe_url: str,
-) -> None:
-    """Send one digest message to `chat_id`. No-op for an empty digest or unconfigured bot.
+) -> bool:
+    """Return True only for a confirmed message ID; empty/unconfigured returns False.
 
-    Raises on a real send failure so the matcher counts it and skips recording the ledger.
+    A real failure raises for queued retry or explicit ambiguity reconciliation.
     """
     if not listings:
-        return
+        return False
     if chat_id is None:
         logger.warning("subscription telegram digest requested with no chat_id — skipping")
-        return
+        return False
     settings = get_settings()
     if not settings.tg_bot_token:
         logger.info("TG_BOT_TOKEN not set, skipping subscription telegram digest")
-        return
+        return False
 
     bot = Bot(token=settings.tg_bot_token)
     try:
-        await bot.send_message(chat_id=chat_id, text=_digest_text(listings, unsubscribe_url))
+        message = await bot.send_message(
+            chat_id=chat_id, text=_digest_text(listings, unsubscribe_url)
+        )
+        return isinstance(getattr(message, "message_id", None), int) and message.message_id > 0
     finally:
         await bot.session.close()

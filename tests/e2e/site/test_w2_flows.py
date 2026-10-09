@@ -372,7 +372,9 @@ def test_reduced_motion_honored_on_fab(page, browser, site_server: str) -> None:
     site.css gates the FAB hover/enter motion behind a (prefers-reduced-motion:no-preference)
     or a (reduce) override; under emulated reduce, the computed transition must collapse to none.
     """
-    context = browser.new_context(reduced_motion="reduce")
+    from tests.e2e.offline_assets import offline_context
+
+    context = offline_context(browser, reduced_motion="reduce")
     pg = context.new_page()
     try:
         pg.goto(f"{site_server}/", wait_until="networkidle")

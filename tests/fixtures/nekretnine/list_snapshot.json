@@ -1,0 +1,45 @@
+{
+  "results": [
+    {
+      "realEstate": {
+        "id": 990001,
+        "title": "Dvosoban stan Njegoševa",
+        "price": {"value": 875},
+        "properties": [
+          {
+            "rooms": "2,5",
+            "surface": "74,5 m²",
+            "location": {
+              "address": "Njegoševa 12",
+              "latitude": 44.805,
+              "longitude": 20.47,
+              "macrozone": "Vračar",
+              "microzone": ""
+            },
+            "multimedia": {
+              "photos": [
+                {"id": 5001, "urls": {"small": "https://pic.nekretnine.rs/image/5001/xxs-c.jpg"}},
+                {"id": 5002, "urls": {"small": "https://cdn.example.test/image/5002/xxs-c.jpg"}},
+                {"id": 5001, "urls": {"small": "https://pic.nekretnine.rs/image/5001/xxs-c.jpg"}},
+                {"id": 5003, "urls": {"small": "https://pic.nekretnine.rs/image/5003/xxs-c.jpg"}},
+                {"urls": {"large": "https://cdn.example.test/image/5004/xxl.jpg"}}
+              ]
+            }
+          }
+        ]
+      },
+      "seo": {
+        "anchor": "Dvosoban stan Njegoševa",
+        "url": "https://www.nekretnine.rs/oglasi/990001/dvosoban-stan-njegoseva/"
+      }
+    },
+    {
+      "realEstate": {
+        "id": 990002,
+        "title": "Nepotpun oglas",
+        "properties": [{"surface": "40 m²"}]
+      },
+      "seo": {"anchor": "Nepotpun oglas"}
+    }
+  ]
+}

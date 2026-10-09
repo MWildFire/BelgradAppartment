@@ -196,6 +196,7 @@ def fake_anthropic(monkeypatch):
     class _Messages:
         async def parse(self, **kwargs):
             class _Response:
+                stop_reason = "end_turn"
                 parsed_output = DuplicateCheck(
                     is_same_apartment=True, confidence=0.66, reasoning="ok"
                 )
@@ -206,16 +207,26 @@ def fake_anthropic(monkeypatch):
         def __init__(self, **kwargs):
             self.messages = _Messages()
 
+        async def close(self):
+            pass
+
     monkeypatch.setattr(anthropic, "AsyncAnthropic", _Client)
 
 
 def _make_photos(tmp_path: Path) -> tuple[list[Path], list[Path]]:
-    inb = tmp_path / "inbound" / "5" / "777" / "0.jpg"
-    lst = tmp_path / "listings" / "NEKRETNINE" / "ext-1" / "000.jpg"
-    for p in (inb, lst):
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_bytes(b"\xff\xd8fake-jpeg")
-    return [inb], [lst]
+    from PIL import Image
+
+    sides = []
+    for directory in (tmp_path / "inbound" / "5" / "777",
+                      tmp_path / "listings" / "NEKRETNINE" / "ext-1"):
+        directory.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for index, color in enumerate(("red", "blue")):
+            path = directory / f"{index}.jpg"
+            Image.new("RGB", (32, 32), color).save(path)
+            paths.append(path)
+        sides.append(paths)
+    return sides[0], sides[1]
 
 
 async def test_validate_match_emits_decision_line(tmp_path, monkeypatch, fake_anthropic):
@@ -296,10 +307,13 @@ async def test_matcher_llm_stage_passes_db_ids_to_decision_log(db, tmp_path, mon
         listing_photo.parent.mkdir(parents=True, exist_ok=True)
         listing_photo.write_bytes(b"\xff\xd8fake-jpeg")
 
+        from src.matching import evidence
+        photos = _make_photos(tmp_path / "wiring")
+        monkeypatch.setattr(evidence, "select_evidence", lambda *args: photos)
         ok = await _run_llm_validation(inbound, listing, settings)
         expected_ids = (inbound.id, listing.id)
 
-    assert ok is True
+    assert ok.accepted
     assert None not in expected_ids  # DB really assigned ids — guard against vacuous pass
     lines = (tmp_path / "logs" / "llm_decisions.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1

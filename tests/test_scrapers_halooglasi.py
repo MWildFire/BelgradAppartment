@@ -30,7 +30,7 @@ CHALLENGE_HTML = (
 )
 GOOD_DETAIL_HTML = (
     "<html><body><script>QuidditaEnvironment.CurrentClassified = "
-    '{"Id":"5425647413192","Title":"Zemun"};</script></body></html>'
+    '{"Id":"5425647413192","StateId":101,"Title":"Zemun"};</script></body></html>'
 )
 
 
@@ -134,6 +134,337 @@ async def test_smsprint_fetch_requires_the_expected_payload_marker() -> None:
     finally:
         await scraper.aclose()
     assert _DETAIL_VAR in html
+
+
+@pytest.mark.asyncio
+async def test_print_catalogue_redirect_stays_unknown_without_browser_retry() -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/nekretnine/izdavanje-stanova":
+            return httpx.Response(302, headers={"location": "/nekretnine/izdavanje-stanova"})
+        return httpx.Response(200, text="QuidditaEnvironment.serverListData = {};")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()  # No browser method can be called on this sentinel.
+    try:
+        with pytest.raises(_MarkerMissing, match="availability unknown"):
+            await scraper.fetch_detail(_DETAIL_URL)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
+
+
+@pytest.mark.asyncio
+async def test_long_print_walk_does_not_accumulate_view_history_or_discard_session() -> None:
+    seen_sizes: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cookies = request.headers.get("cookie", "")
+        seen_sizes.append(len(cookies))
+        assert "ASP.NET_SessionId=session" in cookies
+        assert "preferences=keep" in cookies
+        assert "ViewedAds_20260915" not in cookies
+        return httpx.Response(200, text=GOOD_DETAIL_HTML, headers={
+            "set-cookie": "ViewedAds_20260915=" + "1234567890123," * 1300 + "; Path=/",
+        })
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client.cookies.set("ASP.NET_SessionId", "session", domain="smsprint.halooglasi.com")
+    client.cookies.set("preferences", "keep", domain=".halooglasi.com")
+    client.cookies.set("ViewedAds_20260914", "old", domain=".halooglasi.com")
+    client.cookies.set("ViewedAds_20260915", "unrelated", domain="example.com")
+    scraper = HalooglasiScraper(client=client)
+    try:
+        for _ in range(10):
+            assert _DETAIL_VAR in await scraper._fetch_via_smsprint(
+                _DETAIL_URL, ready_marker=_DETAIL_VAR,
+            )
+        assert max(seen_sizes) < 100
+        assert client.cookies.get("ViewedAds_20260915", domain="example.com") == "unrelated"
+    finally:
+        await scraper.aclose()
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_print_error_redirect_records_unknown_without_browser_or_dead_evidence() -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/404":
+            return httpx.Response(302, headers={"location": f"/404?aspxerrorpath={request.url.path}"})
+        return httpx.Response(404, text="Page unavailable")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()
+    try:
+        # An HTTPStatusError(404) could be interpreted as removal by the caller;
+        # this response must instead enter its ordinary UNKNOWN/backoff path.
+        with pytest.raises(_MarkerMissing, match="availability unknown"):
+            await scraper.fetch_detail(_DETAIL_URL)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["direct", "other_path", "other_host", "other_origin", "challenge", "payload"])
+async def test_unconfirmed_print_errors_keep_canonical_fallback(case: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/404" and case != "direct":
+            origin = "/unrelated" if case == "other_origin" else request.url.path
+            host = "https://example.com" if case == "other_host" else ""
+            path = "/missing" if case == "other_path" else "/404"
+            if request.url.path != "/missing":
+                return httpx.Response(302, headers={"location": f"{host}{path}?aspxerrorpath={origin}"})
+        body = CHALLENGE_HTML if case == "challenge" else GOOD_DETAIL_HTML if case == "payload" else "Missing"
+        return httpx.Response(404, text=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    try:
+        assert await scraper._fetch_via_smsprint(_DETAIL_URL, ready_marker=_DETAIL_VAR) == ""
+    finally:
+        await scraper.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [GOOD_DETAIL_HTML, CHALLENGE_HTML, ""])
+async def test_print_slug_redirect_preserves_payload_or_browser_fallback(body: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/updated-slug/123":
+            return httpx.Response(302, headers={"location": "/updated-slug/123"})
+        return httpx.Response(200, text=body)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    try:
+        result = await scraper._fetch_via_smsprint(_DETAIL_URL, ready_marker=_DETAIL_VAR)
+        assert result == (body if _DETAIL_VAR in body else "")
+    finally:
+        await scraper.aclose()
+
+
+_REMOVED_HTML = (
+    '<div class="info-box-expired info-box-expired-full">'
+    '<div class="glyphicon glyphicon-exclamation-sign"></div>\n'
+    'Nažalost, oglas nije pronađen. Oglas je obrisan ili ste pronašli neispravan link. '
+    'Pogledajte druge oglase u ovoj kategoriji.\n</div>'
+    '<script>QuidditaEnvironment.serverListData = {"Ads": []};</script>'
+)
+_REMOVED_DEST = "/nekretnine/izdavanje-stanova?referrer=oglas"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ["", "?kid=1", "?kid=3", "?kid=4"])
+async def test_explicit_print_removal_is_propagated_without_browser(query: str) -> None:
+    from src.scrapers.base import SourceListingRemovedError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.query != b"referrer=oglas":
+            return httpx.Response(301, headers={"location": _REMOVED_DEST})
+        return httpx.Response(200, text=_REMOVED_HTML)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True)
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()
+    try:
+        with pytest.raises(SourceListingRemovedError):
+            await scraper.fetch_detail(_DETAIL_URL.split("?")[0] + query)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
+
+
+@pytest.mark.parametrize("case", [
+    "no_history", "extra_hop", "302", "different_origin", "post", "absolute_location",
+    "other_host", "http", "port", "fragment", "wrong_id", "wrong_path", "extra_query",
+    "duplicate_query", "unknown_query", "final_host", "final_query", "final_fragment", "status",
+    "no_notice", "wrong_notice", "duplicate_notice", "text_only", "no_payload",
+    "bad_payload", "bad_ads", "detail_payload", "challenge",
+])
+def test_ambiguous_print_signals_never_prove_removal(case: str) -> None:
+    from src.scrapers.halooglasi import _explicit_print_not_found
+
+    url = _DETAIL_URL
+    replacements = {
+        "other_host": ("www.halooglasi.com", "example.com"),
+        "http": ("https:", "http:"),
+        "port": (".com/", ".com:8443/"),
+        "fragment": ("?kid=4", "?kid=4#fragment"),
+        "wrong_id": ("5425647413192", "123"),
+        "wrong_path": ("izdavanje-stanova", "prodaja-stanova"),
+        "extra_query": ("kid=4", "kid=4&x=1"),
+        "duplicate_query": ("kid=4", "kid=4&kid=4"),
+        "unknown_query": ("kid=4", "kid=999"),
+    }
+    if case in replacements:
+        url = url.replace(*replacements[case])
+    origin = HalooglasiScraper._smsprint_url(url) or url
+    if case == "different_origin":
+        origin = origin.replace("5425647413192", "5425647413193")
+    destination = "https://smsprint.halooglasi.com" + _REMOVED_DEST
+    if case == "final_host":
+        destination = destination.replace("smsprint.halooglasi.com", "example.com")
+    if case == "final_query":
+        destination += "&other=1"
+    if case == "final_fragment":
+        destination += "#fragment"
+    redirect = httpx.Response(
+        302 if case == "302" else 301,
+        request=httpx.Request("POST" if case == "post" else "GET", origin),
+        headers={"location": destination if case == "absolute_location" else _REMOVED_DEST},
+    )
+    history = [] if case == "no_history" else [redirect, redirect] if case == "extra_hop" else [redirect]
+    body = _REMOVED_HTML
+    if case == "no_notice":
+        body = body.replace("info-box-expired-full", "other")
+    elif case == "wrong_notice":
+        body = body.replace("obrisan", "dostupan")
+    elif case == "duplicate_notice":
+        body += _REMOVED_HTML
+    elif case == "text_only":
+        body = body.replace('<div class="info-box-expired info-box-expired-full">', "<span>")
+    elif case == "no_payload":
+        body = body.split("<script>")[0]
+    elif case == "bad_payload":
+        body = body.replace('{"Ads": []}', '{invalid}')
+    elif case == "bad_ads":
+        body = body.replace('{"Ads": []}', '{"Ads": null}')
+    elif case == "detail_payload":
+        body += GOOD_DETAIL_HTML
+    elif case == "challenge":
+        body += CHALLENGE_HTML
+    response = httpx.Response(
+        503 if case == "status" else 200, text=body, history=history,
+        request=httpx.Request("GET", destination),
+    )
+    assert not _explicit_print_not_found(url, response)
+
+
+_OBSERVED_VISIBILITY_SCRIPT = """
+if (classified.StateId == '101' || classified.StateId == '106')
+    document.getElementById('divExpired1').parentNode.removeChild(document.getElementById('divExpired1'));
+else
+    document.getElementById('divExpired1inner').style.display = 'block';
+"""
+
+
+def _inactive_detail_html(state: object = 112, *, rendered: bool = False) -> str:
+    import json
+
+    ad = {"Id": "5425647413192", "StateId": state, "Title": "Still retained",
+          "OtherFields": {"cena_d": 600, "kvadratura_d": 40}, "ImageURLs": ["/slike/one.jpg"]}
+    style = ' style="display: block;"' if rendered else ""
+    binding = "" if rendered else "<script>" + _OBSERVED_VISIBILITY_SCRIPT + "</script>"
+    return (
+        '<script>QuidditaEnvironment.CurrentClassified = ' + json.dumps(ad) + ';</script>'
+        '<div id="divExpired1"><div id="divExpired1inner" class="info-box-expired row"' + style + '>'
+        '<div class="expired-text"><span class="title">'
+        'Žao nam je, predmet vašeg interesovanja više nije u ponudi</span></div>'
+        '</div></div>' + binding
+    )
+
+
+@pytest.mark.parametrize("state", [105, 111, 112])
+@pytest.mark.parametrize("rendered", [False, True])
+def test_retained_inactive_detail_is_not_an_active_listing(state: int, rendered: bool) -> None:
+    from src.scrapers.base import SourceListingInactiveError
+
+    with pytest.raises(SourceListingInactiveError):
+        HalooglasiScraper.parse_detail(_DETAIL_URL, _inactive_detail_html(state, rendered=rendered))
+
+
+def test_healthy_detail_with_hidden_expired_template_remains_healthy() -> None:
+    detail = HalooglasiScraper.parse_detail(_DETAIL_URL, _inactive_detail_html(101))
+    assert detail.price_eur == 600 and detail.area_m2 == 40 and len(detail.photo_urls) == 1
+
+
+@pytest.mark.parametrize("state", [None, 106, 999, "112", True])
+def test_waiting_or_unknown_detail_state_is_not_confirmed_active_or_dead(state: object) -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    with pytest.raises(_MarkerMissing, match="availability unknown"):
+        HalooglasiScraper.parse_detail(_DETAIL_URL, _inactive_detail_html(state))
+
+
+@pytest.mark.parametrize("case", [
+    "other_host", "http", "query", "fragment", "wrong_id", "wrong_path", "notice_text",
+    "notice_id", "no_visibility", "changed_binding", "duplicate_notice", "challenge",
+])
+def test_ambiguous_retained_state_never_proves_removal(case: str) -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    url, html = _DETAIL_URL, _inactive_detail_html()
+    replacements = {
+        "other_host": ("www.halooglasi.com", "example.com"),
+        "http": ("https:", "http:"), "query": ("kid=4", "unknown=1"),
+        "fragment": ("?kid=4", "?kid=4#fragment"),
+        "wrong_id": ("5425647413192", "5425647413193"),
+        "wrong_path": ("izdavanje-stanova", "prodaja-stanova"),
+    }
+    if case in replacements:
+        url = url.replace(*replacements[case])
+    elif case == "notice_text":
+        html = html.replace("više nije u ponudi", "u ponudi")
+    elif case == "notice_id":
+        html = html.replace('id="divExpired1inner"', 'id="other"')
+    elif case == "no_visibility":
+        html = html.replace(_OBSERVED_VISIBILITY_SCRIPT, "")
+    elif case == "changed_binding":
+        html = html.replace("StateId == '101'", "StateId == '112'")
+    elif case == "duplicate_notice":
+        html += _inactive_detail_html()
+    elif case == "challenge":
+        html += CHALLENGE_HTML
+    with pytest.raises(_MarkerMissing, match="availability unknown"):
+        HalooglasiScraper.parse_detail(url, html)
+
+
+@pytest.mark.asyncio
+async def test_browser_inactive_detail_does_not_retry_or_recycle() -> None:
+    from src.scrapers.base import SourceListingInactiveError
+
+    scraper = _scraper_with(_FakePage([_inactive_detail_html(rendered=True)]))
+    with pytest.raises(SourceListingInactiveError):
+        await scraper.fetch_detail(_DETAIL_URL)
+
+
+@pytest.mark.parametrize("case", ["last_display_none", "hidden", "hidden_parent", "aria_hidden"])
+def test_hidden_rendered_notice_is_not_removal_evidence(case: str) -> None:
+    from src.scrapers.halooglasi import _MarkerMissing
+
+    html = _inactive_detail_html(rendered=True)
+    if case == "last_display_none":
+        html = html.replace("display: block;", "display: block; display: none;")
+    elif case == "hidden":
+        html = html.replace('id="divExpired1inner"', 'id="divExpired1inner" hidden')
+    elif case == "hidden_parent":
+        html = html.replace('id="divExpired1"', 'id="divExpired1" style="display: none;"')
+    else:
+        html = html.replace('id="divExpired1"', 'id="divExpired1" aria-hidden="true"')
+    with pytest.raises(_MarkerMissing, match="availability unknown"):
+        HalooglasiScraper.parse_detail(_DETAIL_URL, html)
+
+
+@pytest.mark.asyncio
+async def test_mirror_inactive_detail_never_falls_back_to_browser() -> None:
+    from src.scrapers.base import SourceListingInactiveError
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(200, text=_inactive_detail_html())
+    ))
+    scraper = HalooglasiScraper(client=client)
+    scraper._context = object()
+    try:
+        with pytest.raises(SourceListingInactiveError):
+            await scraper.fetch_detail(_DETAIL_URL)
+    finally:
+        scraper._context = None
+        await scraper.aclose()
 
 
 class _FakePage:

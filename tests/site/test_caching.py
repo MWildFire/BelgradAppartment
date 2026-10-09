@@ -187,9 +187,9 @@ def _counting_load_rows(monkeypatch):
     real = readmodel._load_rows
     calls = {"n": 0}
 
-    async def counting(database_url):
+    async def counting(database_url, **kwargs):
         calls["n"] += 1
-        return await real(database_url)
+        return await real(database_url, **kwargs)
 
     monkeypatch.setattr(readmodel, "_load_rows", counting)
     return calls

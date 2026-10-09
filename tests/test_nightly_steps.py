@@ -8,6 +8,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+from PIL import Image
 from sqlalchemy import select
 
 import src.db.session as db_session
@@ -84,11 +86,30 @@ def make_fake_scraper(platform: Platform, details: dict[str, ListingDetail], fai
 
 def detail_for(listing_url: str, platform: Platform, **kw) -> ListingDetail:
     ext = listing_url.rsplit("/", 1)[-1]
+    kw.setdefault("area_m2", 50)
+    kw.setdefault("photo_urls", ["https://example.test/image.jpg"])
     return ListingDetail(platform=platform, external_id=ext, url=listing_url, **kw)
 
 
-async def fake_download_photos(detail: ListingDetail):
-    return ([Path("/tmp/fake.jpg")], ["ff00ff00ff00ff00"], None)
+async def fake_download_photos(detail: ListingDetail, *, target_dir: Path | None = None):
+    folder = target_dir or (
+        orchestrator.get_settings().listings_photos_dir / detail.platform.value / detail.external_id
+    )
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for index, url in enumerate(detail.photo_urls):
+        path = folder / f"{index:03d}{orchestrator._guess_extension(url)}"
+        Image.new("RGB", (8, 8), "blue").save(path)
+        paths.append(path)
+    return paths, ["ff00ff00ff00ff00"] * len(paths), None
+
+
+@pytest.fixture(autouse=True)
+def isolated_complete_media(tmp_path, monkeypatch):
+    settings = orchestrator.get_settings()
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "listings_photos_dir", tmp_path / "listings")
+    monkeypatch.setattr(orchestrator, "_download_photos", fake_download_photos)
 
 
 # ------------------------------------------------------------------ W2-C1 heal
@@ -499,6 +520,32 @@ def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False, deadlines: lis
     return calls
 
 
+@pytest.mark.parametrize("errors", [0, 2])
+async def test_all_inventory_step_overrides_zero_quota_and_reports_backoff(monkeypatch, errors):
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import orchestrator
+
+    settings = get_settings()
+    calls = _canned_step_stubs(monkeypatch)
+    monkeypatch.setattr(settings, "nightly_heal_limit", 500)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh_all", True)
+
+    async def all_rows(*, limit, deadline, all_listings):
+        assert limit == 0 and all_listings and deadline > 0
+        return orchestrator.RollingRefreshResult(
+            4001, 4001-errors, errors, [], inventory_count=4004, retry_deferred=3,
+        )
+
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", all_rows)
+    lines, *_ = await _run_nightly_steps()
+    line = next(line for line in lines if "деталей обновлено" in line)
+    assert "4001" in line and "4004" in line and "3" in line
+    assert line.startswith("🚨")
+    assert not any(call.startswith("heal:") for call in calls)
+
+
 async def test_run_nightly_steps_assembles_summary_lines(monkeypatch):
     from src.cli import _run_nightly_steps
     from src.config import get_settings
@@ -510,7 +557,7 @@ async def test_run_nightly_steps_assembles_summary_lines(monkeypatch):
     monkeypatch.setattr(settings, "nightly_metrics", True)
     calls = _canned_step_stubs(monkeypatch)
 
-    lines, price_changes, alerts = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
 
     assert calls == ["heal:500", "rolling:200", "metrics", "prune"]
     assert "heal: исправлено 5 / осталось 2" in lines
@@ -553,7 +600,7 @@ async def test_run_nightly_steps_surfaces_site_sync_lines(monkeypatch):
     monkeypatch.setattr(orchestrator, "verify_active_links", verify_with_hidden)
     monkeypatch.setattr(orchestrator, "auto_publish_new_listings", backfill_exposes_three)
 
-    lines, _price_changes, _alerts = await _run_nightly_steps()
+    lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
 
     assert any("скрыто карточек с сайта: 2" in ln for ln in lines), lines
     assert any("авто-публикация на сайт: 3" in ln for ln in lines), lines
@@ -570,7 +617,7 @@ async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
     monkeypatch.setattr(settings, "nightly_metrics", True)
     calls = _canned_step_stubs(monkeypatch, heal_raises=True)
 
-    lines, price_changes, alerts = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
 
     assert "🚨 heal-шаг упал — см. логи" in lines
     # The remaining steps still ran after the failure.
@@ -580,8 +627,8 @@ async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
     assert alerts  # drop alert from metrics still emitted
 
 
-async def test_run_nightly_steps_shares_one_deadline_for_heal_and_rolling(monkeypatch):
-    """Heal and rolling must receive the SAME deadline so they jointly respect one budget."""
+async def test_run_nightly_steps_reserves_rolling_time_inside_total_budget(monkeypatch):
+    """Heal must stop before rolling reaches the shared total deadline."""
     from src.cli import _run_nightly_steps
     from src.config import get_settings
 
@@ -597,7 +644,8 @@ async def test_run_nightly_steps_shares_one_deadline_for_heal_and_rolling(monkey
 
     assert len(deadlines) == 2
     assert deadlines[0] is not None
-    assert deadlines[0] == deadlines[1]  # one shared deadline
+    assert deadlines[0] < deadlines[1]  # later work retains a reserved slice
+    assert deadlines[1] - deadlines[0] <= settings.nightly_refetch_budget_sec
 
 
 async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):
@@ -622,10 +670,12 @@ async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):
     monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
 
-    lines, _price_changes, _alerts = await _run_nightly_steps()
+    lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
 
-    assert "heal: исправлено 2 / осталось 3, пропущено по бюджету: 3" in lines
-    assert "деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6" in lines
+    assert any(line.startswith("🚨 heal: исправлено 2 / осталось 3, пропущено по бюджету: 3")
+               for line in lines)
+    assert any(line.startswith("🚨 деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6")
+               for line in lines)
 
 
 async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
@@ -642,7 +692,7 @@ async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
     monkeypatch.setattr(settings, "nightly_notify_subscriptions", False)  # C2
     calls = _canned_step_stubs(monkeypatch)
 
-    lines, price_changes, alerts = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
 
     assert calls == []
     assert lines == []
@@ -722,3 +772,20 @@ async def test_photo_coverage_by_platform(db):
     assert coverage["NEKRETNINE"] == (1, 2)
     assert coverage["CETIRI_ZIDA"] == (0, 1)
     assert coverage["HALOOGLASI"] == (0, 0)
+
+
+async def test_completed_refresh_with_source_timeout_is_reported_degraded(monkeypatch):
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    _canned_step_stubs(monkeypatch)
+    monkeypatch.setattr(get_settings(), 'nightly_detail_refresh', 2)
+
+    async def deadline_after_commit(*, limit, deadline=None):
+        return orchestrator.RollingRefreshResult(
+            selected=2, refreshed=2, errors=0, price_changes=[],
+            source_errors={'NEKRETNINE': 'TimeoutError'},
+        )
+
+    monkeypatch.setattr(orchestrator, 'rolling_detail_refresh', deadline_after_commit)
+    result = await _run_nightly_steps(notify=False)
+    assert any(line.startswith('🚨') and 'обновлено: 2' in line for line in result.summary_lines)
