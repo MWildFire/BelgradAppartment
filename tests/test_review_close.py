@@ -120,17 +120,19 @@ async def test_close_as_duplicate_marks_inbound_without_creating_match(db):
 
 
 @pytest.mark.parametrize(
-    ("job_state", "lease_until", "inbound_status", "match_status"),
+    ("job_state", "live_lease", "inbound_status", "match_status"),
     [
-        ("pending", None, InboundStatus.NEW, None),
-        ("needs_review", datetime.now(UTC) + timedelta(minutes=5), InboundStatus.NEW, None),
-        ("needs_review", None, InboundStatus.MATCHED, None),
-        ("needs_review", None, InboundStatus.NEW, MatchStatus.REJECTED),
+        ("pending", False, InboundStatus.NEW, None),
+        ("needs_review", True, InboundStatus.NEW, None),
+        ("needs_review", False, InboundStatus.MATCHED, None),
+        ("needs_review", False, InboundStatus.NEW, MatchStatus.REJECTED),
     ],
 )
 async def test_close_refuses_unless_case_is_open_unleased_and_unmatched(
-    db, job_state, lease_until, inbound_status, match_status
+    db, job_state, live_lease, inbound_status, match_status
 ):
+    # Computed inside the test: a lease fixed at collection time expires in a long suite run.
+    lease_until = datetime.now(UTC) + timedelta(hours=1) if live_lease else None
     iid, _ = await seed_case(
         inbound_status=inbound_status,
         job_state=job_state,
