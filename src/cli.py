@@ -658,6 +658,40 @@ def retry_validation(inbound_id: int) -> None:
     )
 
 
+@cli.group("review")
+def review() -> None:
+    """Operator decisions for unresolved matching cases; local DB only, no provider or delivery."""
+
+
+@review.command("close")
+@click.argument("inbound_id", type=int)
+@click.option("--as", "decision", type=click.Choice(["NO_MATCH", "DUPLICATE"]), required=True)
+@click.option("--reason", required=True, help="Причина решения; сохраняется в журнале кейса.")
+def review_close(inbound_id: int, decision: str, reason: str) -> None:
+    """Close a needs_review inbound as NO_MATCH or DUPLICATE without sending anything."""
+    from src.matching.review_queue import ReviewError, close_review
+
+    try:
+        run_cooperatively(close_review(inbound_id, decision, reason))
+    except ReviewError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"inbound={inbound_id} closed as {decision}")
+
+
+@review.command("reject-match")
+@click.argument("match_id", type=int)
+@click.option("--reason", required=True, help="Причина отклонения; сохраняется в матче.")
+def review_reject_match(match_id: int, reason: str) -> None:
+    """Reject a PENDING match that was never sent; PUBLISHED matches stay with the admin tool."""
+    from src.matching.review_queue import ReviewError, reject_match
+
+    try:
+        outcome = run_cooperatively(reject_match(match_id, reason))
+    except ReviewError as error:
+        raise click.ClickException(str(error)) from error
+    click.echo(f"match={match_id} {outcome}")
+
+
 @cli.command("match")
 @click.argument("inbound_id", type=int)
 def match_one(inbound_id: int) -> None:
