@@ -198,14 +198,15 @@ async def test_public_queue_keeps_source_fairness_backoff_and_own_cursor(db, mon
     assert not (tmp_path / "state/freshness/rolling_cursor.json").exists()
 
 
-def test_public_cli_bounds_queue_and_reports_degraded_without_notifications(monkeypatch):
+def test_public_cli_bounds_queue_and_reports_item_errors_as_warning(monkeypatch):
     refresh = AsyncMock(return_value=orch.RollingRefreshResult(3, 2, 1, []))
     monkeypatch.setattr(orch, "rolling_detail_refresh", refresh)
     result = CliRunner().invoke(
         commands.cli, ["refetch-details", "--public-only", "--limit=3", "--budget-sec=1"]
     )
-    assert result.exit_code == 1
+    assert result.exit_code == 0
     assert "verified=2" in result.output
+    assert "⚠️ Ошибки: 1" in result.output
     kwargs = refresh.call_args.kwargs
     assert kwargs["public_only"] and kwargs["limit"] == 3
     assert kwargs["deadline"] > 0

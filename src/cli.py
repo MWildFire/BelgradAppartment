@@ -1046,7 +1046,10 @@ async def _dupes_report_nightly_line() -> str:
             f"дубли (report-only): групп {stats.groups_found}, "
             f"объявлений {stats.listings_grouped} — {path.name}"
         )
-    except Exception:
+    except Exception as error:
+        if isinstance(error, RuntimeError) and str(error) == "identity_edge_budget":
+            # The bounded edge guard stopped the report: a known limit, not a failed step.
+            return "⚠️ дубли: отчёт пропущен, лимит рёбер (identity_edge_budget)"
         logging.getLogger(__name__).exception("nightly step failed: dupes-report")
         return "🚨 dupes-report шаг упал — см. логи"
 
@@ -1063,7 +1066,7 @@ async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None =
         sent = await send_liveness_notice(report) if notify else False
         note = " — нотис отправлен" if sent else ""
         errors = getattr(report, "errors", 0)
-        prefix = "🚨 " if errors else ""
+        prefix = "⚠️ " if errors else ""
         note += (f", проверок {getattr(report, 'checked', 0)}, "
                  f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
@@ -1628,6 +1631,16 @@ async def _nightly_refresh(
             finish_refresh(token, error=error)
 
 
+def _nightly_unhealthy(*, dead, low_coverage, degraded, parse_degraded, sweep_reasons,
+                       maintenance_failed, results) -> bool:
+    """Exit 1 only for real failures: dead platform, incomplete coverage, failed steps (🚨).
+
+    Item errors (⚠️ Ошибки: N) and budget skips stay warnings in the summary and do not fail.
+    """
+    return bool(dead or low_coverage or degraded or parse_degraded or sweep_reasons
+                or maintenance_failed or any(r.outcome in {"failed", "degraded"} for r in results))
+
+
 async def _nightly_refresh_impl(
     max_pages: int,
     inactive_after_days: int,
@@ -1835,9 +1848,10 @@ async def _nightly_refresh_impl(
     maintenance_failed = any("🚨" in line for line in [
         *steps.summary_lines, liveness_line, analytics_line, dupes_line,
     ])
-    unhealthy = bool(dead or low_coverage or degraded or parse_degraded or total_errors
-                     or sweep_reasons or maintenance_failed
-                     or any(r.outcome in {"failed", "degraded"} for r in results))
+    unhealthy = _nightly_unhealthy(
+        dead=dead, low_coverage=low_coverage, degraded=degraded, parse_degraded=parse_degraded,
+        sweep_reasons=sweep_reasons, maintenance_failed=maintenance_failed, results=results,
+    )
     from src.jobs.run_history import record_refresh_result
 
     record_refresh_result(results, incremental=incremental,
@@ -1934,7 +1948,9 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             if heal.skipped:
                 line += f", пропущено по бюджету: {heal.skipped}"
             if heal.errors or heal.skipped or getattr(heal, "source_errors", {}):
-                line = (f"🚨 {line}, ошибок: {heal.errors}; "
+                # Source failures stay alarms; item errors and budget skips are warnings.
+                alarm = "🚨 " if getattr(heal, "source_errors", {}) else "⚠️ "
+                line = (f"{alarm}{line}, ошибок: {heal.errors}; "
                         f"ошибок источников: {len(getattr(heal, 'source_errors', {}))}")
             lines.append(line)
         except Exception:
@@ -1966,7 +1982,8 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                          f"ожидают повторной попытки: {rolling.retry_deferred}")
             if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
                     or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
-                line = (f"🚨 {line}, ошибок: {rolling.errors}; "
+                alarm = "🚨 " if getattr(rolling, "source_errors", {}) else "⚠️ "
+                line = (f"{alarm}{line}, ошибок: {rolling.errors}; "
                         f"ошибок источников: {len(getattr(rolling, 'source_errors', {}))}")
             lines.append(line)
         except Exception:
@@ -1994,7 +2011,8 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
             if vl.errors or vl.skipped:
-                line = "🚨 " + line
+                # Skipped link checks stay an alarm: unverified links can leave dead listings up.
+                line = ("🚨 " if vl.skipped else "⚠️ ") + line
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: verify-links")
@@ -2712,7 +2730,15 @@ async def _refetch_details(
             f"errors={result.errors} skipped={result.skipped} "
             f"source_errors={len(result.source_errors)} ==="
         )
-        if result.errors or result.skipped or result.source_errors:
+        if result.errors:
+            click.echo(f"⚠️ Ошибки: {result.errors}")
+        if result.skipped:
+            click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
+        # Only source-level failures fail the run; item errors and budget skips are warnings.
+        if result.source_errors:
+            click.echo("🚨 Ошибки площадок: " + ", ".join(
+                f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())
+            ))
             raise SystemExit(1)
         return
 

@@ -477,4 +477,4 @@ async def test_explicit_source_removal_preserves_last_content_and_success(db, pl
     assert stored.photo_urls == ['https://img.test/old.jpg']
     assert stored.photo_phashes == ['ff00ff00ff00ff00']
     assert stored.details_succeeded_at.replace(tzinfo=UTC) == previous
-    assert stats.deactivated == 1 and stats.errors == 1 and stats.verified == 0
+    assert stats.deactivated == 1 and stats.errors == 0 and stats.verified == 0

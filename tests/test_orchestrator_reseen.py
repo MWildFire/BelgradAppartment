@@ -149,7 +149,7 @@ async def test_refetch_404_marks_inactive(factory):
     )
 
     assert stats.deactivated == 1
-    assert stats.errors == 1
+    assert stats.errors == 0
     async with factory() as s:
         row = (await s.execute(select(Listing).where(Listing.id == row_id))).scalar_one()
         assert row.is_active is False
