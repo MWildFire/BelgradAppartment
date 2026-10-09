@@ -1597,6 +1597,16 @@ async def _nightly_refresh(
             finish_refresh(token, error=error)
 
 
+def _nightly_unhealthy(*, dead, low_coverage, degraded, parse_degraded, sweep_reasons,
+                       maintenance_failed, results) -> bool:
+    """Exit 1 only for real failures: dead platform, incomplete coverage, failed steps (🚨).
+
+    Item errors (⚠️ Ошибки: N) and budget skips stay warnings in the summary and do not fail.
+    """
+    return bool(dead or low_coverage or degraded or parse_degraded or sweep_reasons
+                or maintenance_failed or any(r.outcome in {"failed", "degraded"} for r in results))
+
+
 async def _nightly_refresh_impl(
     max_pages: int,
     inactive_after_days: int,
@@ -1804,9 +1814,10 @@ async def _nightly_refresh_impl(
     maintenance_failed = any("🚨" in line for line in [
         *steps.summary_lines, liveness_line, analytics_line, dupes_line,
     ])
-    unhealthy = bool(dead or low_coverage or degraded or parse_degraded or total_errors
-                     or sweep_reasons or maintenance_failed
-                     or any(r.outcome in {"failed", "degraded"} for r in results))
+    unhealthy = _nightly_unhealthy(
+        dead=dead, low_coverage=low_coverage, degraded=degraded, parse_degraded=parse_degraded,
+        sweep_reasons=sweep_reasons, maintenance_failed=maintenance_failed, results=results,
+    )
     from src.jobs.run_history import record_refresh_result
 
     record_refresh_result(results, incremental=incremental,
@@ -2685,7 +2696,15 @@ async def _refetch_details(
             f"errors={result.errors} skipped={result.skipped} "
             f"source_errors={len(result.source_errors)} ==="
         )
-        if result.errors or result.skipped or result.source_errors:
+        if result.errors:
+            click.echo(f"⚠️ Ошибки: {result.errors}")
+        if result.skipped:
+            click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
+        # Only source-level failures fail the run; item errors and budget skips are warnings.
+        if result.source_errors:
+            click.echo("🚨 Источники с ошибкой: " + ", ".join(
+                f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())
+            ))
             raise SystemExit(1)
         return
 

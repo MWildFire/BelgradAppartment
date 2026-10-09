@@ -6,6 +6,8 @@ skipped link checks and failed steps stay alarms (🚨): they mark the run degra
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 import src.cli as cli_mod
@@ -97,3 +99,39 @@ async def test_edge_budget_stop_is_warning_and_other_dupes_failure_stays_alarm(m
 
     monkeypatch.setattr(cli_mod, "_write_dupes_report", boom)
     assert (await cli_mod._dupes_report_nightly_line()).startswith("🚨 ")
+
+
+def test_item_errors_and_budget_skips_do_not_fail_the_night():
+    healthy = dict(
+        dead=[], low_coverage=[], degraded=[], parse_degraded=[], sweep_reasons=[],
+        maintenance_failed=False,
+    )
+    assert not cli_mod._nightly_unhealthy(**healthy, results=[SimpleNamespace(outcome="ok", errors=7)])
+    assert cli_mod._nightly_unhealthy(
+        **{**healthy, "maintenance_failed": True}, results=[SimpleNamespace(outcome="ok", errors=0)],
+    )
+    assert cli_mod._nightly_unhealthy(
+        **healthy, results=[SimpleNamespace(outcome="failed", errors=1)],
+    )
+
+
+def _public_refresh(monkeypatch, **fields):
+    async def fake_rolling(*, limit, public_only, scrapers, deadline):
+        return SimpleNamespace(selected=10, refreshed=8, price_changes=[], **fields)
+
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
+
+
+async def test_public_refresh_item_errors_and_budget_skips_exit_zero(monkeypatch, capsys):
+    _public_refresh(monkeypatch, errors=2, skipped=3, source_errors={})
+    await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    out = capsys.readouterr().out
+    assert "⚠️ Ошибки: 2" in out and "⚠️ пропущено по бюджету: 3" in out
+
+
+async def test_public_refresh_source_failure_exits_one(monkeypatch, capsys):
+    _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={"NEKRETNINE": "TimeoutError"})
+    with pytest.raises(SystemExit) as exit_info:
+        await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    assert exit_info.value.code == 1
+    assert "🚨 Источники с ошибкой: NEKRETNINE: TimeoutError" in capsys.readouterr().out
