@@ -1294,12 +1294,14 @@ async def refetch_listing_details(
                 account(row, committed_outcome)
                 raise
             evidence = RefreshEvidence.failed(type(error).__name__)
-            stats.errors += 1
-            card_reason(row, "item", reason_code(error))
             status = getattr(getattr(error, "response", None), "status_code", None)
+            removed = status in (404, 410) or isinstance(error, SourceListingRemovedError)
+            # A source takedown is recorded as deactivated below, not as a run error (timer exit).
+            stats.errors += int(not removed)
+            card_reason(row, "item", reason_code(error))
             try:
                 async with get_session() as session:
-                    if status in (404, 410) or isinstance(error, SourceListingRemovedError):
+                    if removed:
                         now = datetime.now(UTC)
                         await session.execute(update(Listing).where(Listing.id == row.id).values(
                             is_active=False, deactivated_at=now, link_status="DEAD",

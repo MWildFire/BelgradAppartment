@@ -1012,7 +1012,10 @@ async def _dupes_report_nightly_line() -> str:
             f"дубли (report-only): групп {stats.groups_found}, "
             f"объявлений {stats.listings_grouped} — {path.name}"
         )
-    except Exception:
+    except Exception as error:
+        if isinstance(error, RuntimeError) and str(error) == "identity_edge_budget":
+            # The bounded edge guard stopped the report: a known limit, not a failed step.
+            return "⚠️ дубли: отчёт пропущен, лимит рёбер (identity_edge_budget)"
         logging.getLogger(__name__).exception("nightly step failed: dupes-report")
         return "🚨 dupes-report шаг упал — см. логи"
 
@@ -1029,7 +1032,7 @@ async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None =
         sent = await send_liveness_notice(report) if notify else False
         note = " — нотис отправлен" if sent else ""
         errors = getattr(report, "errors", 0)
-        prefix = "🚨 " if errors else ""
+        prefix = "⚠️ " if errors else ""
         note += (f", проверок {getattr(report, 'checked', 0)}, "
                  f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
@@ -1900,7 +1903,9 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             if heal.skipped:
                 line += f", пропущено по бюджету: {heal.skipped}"
             if heal.errors or heal.skipped or getattr(heal, "source_errors", {}):
-                line = (f"🚨 {line}, ошибок: {heal.errors}; "
+                # Source failures stay alarms; item errors and budget skips are warnings.
+                alarm = "🚨 " if getattr(heal, "source_errors", {}) else "⚠️ "
+                line = (f"{alarm}{line}, ошибок: {heal.errors}; "
                         f"ошибок источников: {len(getattr(heal, 'source_errors', {}))}")
             lines.append(line)
         except Exception:
@@ -1932,7 +1937,8 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                          f"ожидают повторной попытки: {rolling.retry_deferred}")
             if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
                     or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
-                line = (f"🚨 {line}, ошибок: {rolling.errors}; "
+                alarm = "🚨 " if getattr(rolling, "source_errors", {}) else "⚠️ "
+                line = (f"{alarm}{line}, ошибок: {rolling.errors}; "
                         f"ошибок источников: {len(getattr(rolling, 'source_errors', {}))}")
             lines.append(line)
         except Exception:
@@ -1960,7 +1966,8 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
             if vl.errors or vl.skipped:
-                line = "🚨 " + line
+                # Skipped link checks stay an alarm: unverified links can leave dead listings up.
+                line = ("🚨 " if vl.skipped else "⚠️ ") + line
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: verify-links")

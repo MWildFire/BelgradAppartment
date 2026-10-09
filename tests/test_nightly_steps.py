@@ -542,7 +542,7 @@ async def test_all_inventory_step_overrides_zero_quota_and_reports_backoff(monke
     lines, *_ = await _run_nightly_steps()
     line = next(line for line in lines if "деталей обновлено" in line)
     assert "4001" in line and "4004" in line and "3" in line
-    assert line.startswith("🚨")
+    assert line.startswith("⚠️")
     assert not any(call.startswith("heal:") for call in calls)
 
 
@@ -672,9 +672,9 @@ async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):
 
     lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
 
-    assert any(line.startswith("🚨 heal: исправлено 2 / осталось 3, пропущено по бюджету: 3")
+    assert any(line.startswith("⚠️ heal: исправлено 2 / осталось 3, пропущено по бюджету: 3")
                for line in lines)
-    assert any(line.startswith("🚨 деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6")
+    assert any(line.startswith("⚠️ деталей обновлено: 4, цен изменилось: 0, пропущено по бюджету: 6")
                for line in lines)
 
 
