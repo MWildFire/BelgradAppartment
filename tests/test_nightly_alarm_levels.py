@@ -134,4 +134,4 @@ async def test_public_refresh_source_failure_exits_one(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exit_info:
         await cli_mod._refetch_details(None, False, None, False, public_only=True)
     assert exit_info.value.code == 1
-    assert "🚨 Источники с ошибкой: NEKRETNINE: TimeoutError" in capsys.readouterr().out
+    assert "🚨 Ошибки площадок: NEKRETNINE: TimeoutError" in capsys.readouterr().out

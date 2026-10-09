@@ -2702,7 +2702,7 @@ async def _refetch_details(
             click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
         # Only source-level failures fail the run; item errors and budget skips are warnings.
         if result.source_errors:
-            click.echo("🚨 Источники с ошибкой: " + ", ".join(
+            click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())
             ))
             raise SystemExit(1)
