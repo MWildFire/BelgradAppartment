@@ -368,6 +368,7 @@ async def test_source_timeout_during_commit_preserves_success_and_continues_queu
     monkeypatch.setattr(orch, "_download_photos", save_photos)
     real_commit = AsyncSession.commit
     delayed_once = False
+    deadline = time.monotonic() + 3.0  # two equal source shares of 1.5 s each
 
     async def delayed_commit(session):
         nonlocal delayed_once
@@ -380,13 +381,15 @@ async def test_source_timeout_during_commit_preserves_success_and_continues_queu
         await real_commit(session)
         if accepted_first and not delayed_once:
             delayed_once = True
-            await asyncio.sleep(0.25)
+            # Hold until 0.5 s after the first share ends: its timeout then lands after the
+            # SQL commit, and the second source keeps the remaining ~1 s of the budget.
+            await asyncio.sleep(max(0.0, deadline - 1.0 - time.monotonic()))
 
     monkeypatch.setattr(AsyncSession, "commit", delayed_commit)
     stats = await orch.refetch_listing_details(
         [first, second],
         sleep_between=0,
-        deadline=time.monotonic() + 0.4,
+        deadline=deadline,
         scrapers={
             first.platform: scraper_for(detail(first)),
             second.platform: scraper_for(detail(second)),
