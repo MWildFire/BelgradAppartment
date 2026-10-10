@@ -54,3 +54,31 @@ def test_budget_skips_still_degrade_the_source():
 
     assert evaluation.outcome == "degraded"
     assert "skipped_pages" in evaluation.reasons
+
+
+def test_item_errors_at_half_of_the_items_degrade_the_source():
+    evaluation = evaluate_source(_source(errors=50, fetched=50))
+
+    assert evaluation.outcome == "degraded"
+    assert "item_error_rate" in evaluation.reasons
+
+
+def test_item_errors_below_half_of_the_items_keep_the_source_ok():
+    evaluation = evaluate_source(_source(errors=49, fetched=51))
+
+    assert evaluation.outcome == "ok"
+    assert "item_error_rate" not in evaluation.reasons
+
+
+def test_near_total_item_failure_fails_the_night():
+    healthy = {
+        "dead": [],
+        "low_coverage": [],
+        "degraded": [],
+        "parse_degraded": [],
+        "sweep_reasons": [],
+        "maintenance_failed": False,
+    }
+    outcome = evaluate_source(_source(errors=99, fetched=1)).outcome
+
+    assert _nightly_unhealthy(**healthy, results=[SimpleNamespace(outcome=outcome, errors=99)])

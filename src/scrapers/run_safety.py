@@ -50,6 +50,11 @@ def evaluate_source(result) -> SourceEvaluation:
     ):
         reasons.append("no_observations")
     reasons.extend(result.quality_reasons)
+    # A few failing items are warnings: they still block the sweep, but the source stays ok.
+    # When half or more of the processed items fail, the parser or the site is broken, so the
+    # source degrades like any failed step.
+    if result.errors and result.errors * 2 >= result.fetched + result.errors:
+        reasons.append("item_error_rate")
     reasons = list(dict.fromkeys(reasons))
     # Item errors are warnings in the summary (see _nightly_unhealthy); they still block the
     # sweep through sweep_allowed, but on their own they do not degrade the source outcome.
