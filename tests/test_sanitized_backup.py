@@ -2623,6 +2623,14 @@ def test_receive_issues_the_real_full_flush_on_every_file_and_directory_of_the_c
     names = [*manifest_at(snapshot)["files"], "manifest.json"]
     assert copy in flushed
     assert [name for name in names if os.path.join(copy, name) not in flushed] == []
+    # The directories are flushed too: the entries flushed under the copy are exactly its files,
+    # the directories above them, and the copy itself. Nothing else is flushed or present there.
+    entries = {copy, *(os.path.join(copy, name) for name in names)}
+    for name in names:
+        parts = Path(name).parts
+        entries.update(os.path.join(copy, *parts[:depth]) for depth in range(1, len(parts)))
+    flushed_in_copy = {path for path in flushed if path == copy or path.startswith(copy + os.sep)}
+    assert flushed_in_copy == entries
 
 
 def test_refused_full_flush_on_the_copy_keeps_the_copy_and_never_discards_the_source(
