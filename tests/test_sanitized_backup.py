@@ -600,6 +600,13 @@ def test_a_database_sized_manifest_entry_passes_the_cap_and_fails_the_copy_check
     # The staged database of 2026-09-10 was 1,496,510,464 bytes, far below the 4 GiB cap. Its manifest
     # entry must pass the receiver's cap, and a copy of another size must be refused after the
     # transfer by the copy check, not by the cap. Only the manifest size is large; the copy is small.
+    # The receiver also refuses a volume without room for the manifest sizes. That check is not this
+    # test's subject, so the volume reports 2 TiB free and the test runs on a disk of any size.
+    monkeypatch.setattr(
+        backup.shutil,
+        "disk_usage",
+        lambda _path: SimpleNamespace(total=2 * 1024**4, used=0, free=2 * 1024**4),
+    )
     change_manifest(snapshot, lambda m: m["files"]["data/otz.db"].update(size=1_496_510_464))
     args = receiver_args(tmp_path)
     calls = fake_transport(snapshot, args, monkeypatch)
