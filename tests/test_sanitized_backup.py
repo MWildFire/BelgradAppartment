@@ -13,6 +13,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -1295,7 +1296,9 @@ def test_restore_scratch_is_made_by_the_parent_and_removed_after_the_child(snaps
     monkeypatch.setattr(backup.subprocess, "run", child)
     result = backup.verify_snapshot(snapshot, application=True)
     assert result["result"] == "data_restore_verified"
-    assert seen["parent"] == snapshot.parent and seen["mode"] == 0o700
+    # Outside the snapshot namespace, so a killed CLI process cannot leave a scratch inside it.
+    assert seen["parent"].resolve() == Path(tempfile.gettempdir()).resolve()
+    assert seen["mode"] == 0o700
     assert not seen["path"].exists()
 
 

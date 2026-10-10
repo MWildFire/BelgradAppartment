@@ -753,9 +753,11 @@ def verify_snapshot(
     }
     if application:
         # This process creates the scratch directory and removes it, also when the child is killed
-        # at the timeout. A killed child therefore cannot leave a copy of the database behind.
+        # at the timeout. A killed child therefore cannot leave a copy of the database behind. The
+        # scratch sits outside the snapshot namespace unless the receiver names its copy as parent,
+        # so a killed CLI process cannot leave a .sanitized-restore-* directory inside it.
         with tempfile.TemporaryDirectory(
-            prefix=".sanitized-restore-", dir=scratch_parent or folder.parent
+            prefix=".sanitized-restore-", dir=scratch_parent or tempfile.gettempdir()
         ) as scratch:
             child = subprocess.run(
                 [
