@@ -2,6 +2,10 @@
 
 Item errors and budget skips are warnings (⚠️) and do not fail the night. Source-level failures,
 skipped link checks and failed steps stay alarms (🚨): they mark the run degraded.
+
+Open conflict (owner decision): run_safety.evaluate_source marks a source with item errors as
+"degraded", and _nightly_unhealthy fails the night on "degraded". The test
+test_real_item_errors_degrade_the_source_and_fail_the_night pins the code, not the policy above.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ import pytest
 
 import src.cli as cli_mod
 from src.config import get_settings
+from src.db.models import Platform
 from src.scrapers import orchestrator
 
 
@@ -101,18 +106,31 @@ async def test_edge_budget_stop_is_warning_and_other_dupes_failure_stays_alarm(m
     assert (await cli_mod._dupes_report_nightly_line()).startswith("🚨 ")
 
 
-def test_item_errors_and_budget_skips_do_not_fail_the_night():
+def test_real_item_errors_degrade_the_source_and_fail_the_night():
+    """Pins current behaviour with real ScrapeResult objects, not SimpleNamespace fakes.
+
+    Item errors make the source "degraded" (run_safety.evaluate_source, reason item_errors), and
+    _nightly_unhealthy fails the night on "degraded". This contradicts the module docstring; the
+    owner decides which rule stands.
+    """
     healthy = dict(
         dead=[], low_coverage=[], degraded=[], parse_degraded=[], sweep_reasons=[],
         maintenance_failed=False,
     )
-    assert not cli_mod._nightly_unhealthy(**healthy, results=[SimpleNamespace(outcome="ok", errors=7)])
-    assert cli_mod._nightly_unhealthy(
-        **{**healthy, "maintenance_failed": True}, results=[SimpleNamespace(outcome="ok", errors=0)],
+    with_errors = orchestrator.ScrapeResult(
+        platform=Platform.NEKRETNINE, previewed=10, fetched=3, errors=7,
     )
-    assert cli_mod._nightly_unhealthy(
-        **healthy, results=[SimpleNamespace(outcome="failed", errors=1)],
-    )
+    assert with_errors.outcome == "degraded"
+    assert cli_mod._nightly_unhealthy(**healthy, results=[with_errors])
+
+    clean = orchestrator.ScrapeResult(platform=Platform.NEKRETNINE, previewed=10, fetched=10)
+    assert clean.outcome == "ok"
+    assert not cli_mod._nightly_unhealthy(**healthy, results=[clean])
+    assert cli_mod._nightly_unhealthy(**{**healthy, "maintenance_failed": True}, results=[clean])
+
+    failed = orchestrator.ScrapeResult(platform=Platform.NEKRETNINE, previewed=10, errors=1)
+    assert failed.outcome == "failed"
+    assert cli_mod._nightly_unhealthy(**healthy, results=[failed])
 
 
 def _public_refresh(monkeypatch, **fields):
