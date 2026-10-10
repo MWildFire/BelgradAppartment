@@ -3,9 +3,10 @@ from pathlib import PurePosixPath
 
 # One rsync call moves at most MAX_CONTENT_BYTES of file content and at most 1000 names. A batch
 # that runs longer than the 7200 s transport timeout fails. A failed batch is not retried: the run
-# stops, and a resume deletes the partial copy and transfers again. A full batch of 256 MiB takes
-# 7200 s at about 37 kB/s, so a channel slower than that fails every full batch.
-MAX_CONTENT_BYTES = 256 * 1024**2
+# stops, and a resume deletes the partial copy and transfers again. A full batch of 4 GiB takes
+# 7200 s at about 600 kB/s, so a channel slower than that fails every full batch. The staged
+# database of 2026-09-10 was 1,496,510,464 bytes (1.39 GiB), about 2.9x below this cap.
+MAX_CONTENT_BYTES = 4 * 1024**3
 
 
 def batches(

@@ -35,16 +35,31 @@ class BoundedTransferTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "^file_over_batch_cap$"):
             list(batches(names, sizes=sizes, max_content_bytes=1000))
 
-    def test_the_default_content_limit_is_256_mib_and_splits_batches_by_size(self):
-        self.assertEqual(MAX_CONTENT_BYTES, 256 * 1024**2)
+    def test_the_default_content_limit_is_4_gib_and_splits_batches_by_size(self):
+        self.assertEqual(MAX_CONTENT_BYTES, 4 * 1024**3)
         names = [f"data/listings/{n:03d}.jpg" for n in range(3)]
-        sizes = {name: 100 * 1024**2 for name in names}
-        self.assertEqual([len(c) for c in batches(names, sizes=sizes)], [2, 1])  # 200 MiB, then 100
+        sizes = {name: 3 * 1024**3 // 2 for name in names}
+        self.assertEqual([len(c) for c in batches(names, sizes=sizes)], [2, 1])  # 3 GiB, then 1.5
         sizes = {name: MAX_CONTENT_BYTES for name in names}  # exactly the cap is still accepted
         self.assertEqual([len(c) for c in batches(names, sizes=sizes)], [1, 1, 1])
         sizes = {name: MAX_CONTENT_BYTES + 1 for name in names}
         with self.assertRaisesRegex(ValueError, "^file_over_batch_cap$"):
             list(batches(names, sizes=sizes))
+
+    def test_a_database_sized_file_is_batched_within_the_default_cap(self):
+        # Sizes are the manifest's, as the receiver passes them; no bytes are read. The staged
+        # database of 2026-09-10 was 1,496,510,464 bytes (1.39 GiB).
+        names = ["data/listings/0.jpg", "data/otz.db", "data/listings/1.jpg"]
+        sizes = {
+            "data/listings/0.jpg": 3 * 1024**3,
+            "data/otz.db": 1_496_510_464,
+            "data/listings/1.jpg": 10 * 1024**2,
+        }
+        chunks = list(batches(names, sizes=sizes))
+        # 3 GiB plus the database is over 4 GiB, so the database opens a new batch that the small
+        # file after it still fits in. Nothing is refused, and every batch is within the cap.
+        self.assertEqual(chunks, [["data/listings/0.jpg"], ["data/otz.db", "data/listings/1.jpg"]])
+        self.assertTrue(all(sum(sizes[n] for n in c) <= MAX_CONTENT_BYTES for c in chunks))
 
     def test_content_limit_needs_a_size_for_every_name(self):
         with self.assertRaises(ValueError):

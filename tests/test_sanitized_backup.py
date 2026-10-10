@@ -528,7 +528,7 @@ def test_receive_refuses_a_file_over_the_batch_cap_before_any_transfer(
     # The size comes from the manifest, which the receiver trusts for batching; a file over the cap
     # is refused on that size before the first transfer, whatever the bytes on the source are.
     change_manifest(
-        snapshot, lambda m: m["files"]["data/otz.db"].update(size=256 * 1024**2 + 1)
+        snapshot, lambda m: m["files"]["data/otz.db"].update(size=4 * 1024**3 + 1)
     )
     args = receiver_args(tmp_path)
     calls = fake_transport(snapshot, args, monkeypatch)
