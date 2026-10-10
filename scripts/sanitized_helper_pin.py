@@ -18,7 +18,7 @@ HELPER_FILES = (
     "scripts/sanitized_backup.py",
     "scripts/sanitized_contract.py",
 )
-HELPER_SET_SHA256 = "f46ff9418add52aee88bceb2e5aadac7f750c283353690889163adc0dbe121b1"
+HELPER_SET_SHA256 = "e8f0f6e58e418f74be6fb552e7b7ec8dc46d81ff50a69977e509cf6b8d08a71c"
 
 
 def helper_set_digest(files):

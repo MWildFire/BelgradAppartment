@@ -2,12 +2,23 @@
 from pathlib import PurePosixPath
 
 
-def batches(names, max_files=1000, max_bytes=128 * 1024):
-    if max_files < 1 or max_bytes < 2:
+# One rsync call moves at most MAX_CONTENT_BYTES of file content. The 7200 s timeout is reached only
+# on a link slower than about 150 kB/s, and a failed call repeats its own batch, not the copy.
+MAX_CONTENT_BYTES = 1024**3
+
+
+def batches(names, max_files=1000, max_bytes=128 * 1024, sizes=None, max_content_bytes=MAX_CONTENT_BYTES):
+    """Split names into batches of at most max_files names and max_bytes encoded name bytes.
+
+    When sizes maps every name to its file size, a batch also holds at most max_content_bytes of
+    file content. A single file above that limit is sent alone.
+    """
+    if max_files < 1 or max_bytes < 2 or max_content_bytes < 1:
         raise ValueError("invalid_batch_limit")
     seen = set()
     batch = []
     size = 0
+    content = 0
     for name in names:
         if not isinstance(name, str):
             raise ValueError("invalid_or_duplicate_member")
@@ -25,12 +36,23 @@ def batches(names, max_files=1000, max_bytes=128 * 1024):
         length = len(name.encode()) + 1
         if length > max_bytes:
             raise ValueError("member_exceeds_batch_limit")
-        if batch and (len(batch) >= max_files or size + length > max_bytes):
+        file_bytes = 0
+        if sizes is not None:
+            file_bytes = sizes.get(name)
+            if type(file_bytes) is not int or file_bytes < 0:
+                raise ValueError("invalid_file_size")
+        if batch and (
+            len(batch) >= max_files
+            or size + length > max_bytes
+            or content + file_bytes > max_content_bytes
+        ):
             yield batch
             batch = []
             size = 0
+            content = 0
         batch.append(name)
         size += length
+        content += file_bytes
     if batch:
         yield batch
 

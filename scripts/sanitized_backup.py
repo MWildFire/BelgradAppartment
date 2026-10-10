@@ -1210,7 +1210,12 @@ def receive(args):
                 "insufficient_receiver_space",
             )
             # Materialized first: every name is validated before the first transfer.
-            groups = list(bounded.batches(manifest["files"]))
+            groups = list(
+                bounded.batches(
+                    manifest["files"],
+                    sizes={name: meta["size"] for name, meta in manifest["files"].items()},
+                )
+            )
             for group in groups:
                 listing.write_bytes(bounded.encode_batch(group))
                 listing.chmod(0o600)

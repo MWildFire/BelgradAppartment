@@ -511,7 +511,9 @@ def test_receive_transfers_in_bounded_batches(snapshot, tmp_path, monkeypatch):
 
     real_batches = bounded_transfer.batches
     monkeypatch.setattr(
-        bounded_transfer, "batches", lambda names: real_batches(names, max_files=40)
+        bounded_transfer,
+        "batches",
+        lambda names, **kwargs: real_batches(names, max_files=40, **kwargs),
     )
     result = backup.receive(args)
     listings = [call for call in calls if "--files-from" in call]
@@ -1598,7 +1600,9 @@ def power(snapshot, tmp_path, monkeypatch):
     fake_transport(snapshot, args, monkeypatch)
     real_batches = bounded_transfer.batches
     monkeypatch.setattr(
-        bounded_transfer, "batches", lambda names: real_batches(names, max_files=40)
+        bounded_transfer,
+        "batches",
+        lambda names, **kwargs: real_batches(names, max_files=40, **kwargs),
     )
     state = SimpleNamespace(point=None, dead=False, present=False, batches=0)
     source_remote = backup.transport.remote

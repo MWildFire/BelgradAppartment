@@ -22,6 +22,25 @@ class BoundedTransferTests(unittest.TestCase):
         self.assertEqual([n for c in chunks for n in c], names)
         self.assertTrue(all(len(encode_batch(c)) <= 100 for c in chunks))
 
+    def test_content_limit_splits_batches_by_file_size(self):
+        names = [f"data/listings/{n:03d}.jpg" for n in range(6)]
+        sizes = {name: 400 for name in names}
+        chunks = list(batches(names, max_files=1000, sizes=sizes, max_content_bytes=1000))
+        self.assertEqual([n for c in chunks for n in c], names)
+        self.assertEqual([len(c) for c in chunks], [2, 2, 2])  # 2 x 400 fits, 3 x 400 does not
+
+    def test_a_file_larger_than_the_content_limit_is_sent_alone(self):
+        names = ["data/otz.db", "data/a.jpg", "data/b.jpg"]
+        sizes = {"data/otz.db": 5000, "data/a.jpg": 10, "data/b.jpg": 10}
+        chunks = list(batches(names, sizes=sizes, max_content_bytes=1000))
+        self.assertEqual(chunks, [["data/otz.db"], ["data/a.jpg", "data/b.jpg"]])
+
+    def test_content_limit_needs_a_size_for_every_name(self):
+        with self.assertRaises(ValueError):
+            list(batches(["data/a.jpg"], sizes={}, max_content_bytes=1000))
+        with self.assertRaises(ValueError):
+            list(batches(["data/a.jpg"], sizes={"data/a.jpg": -1}, max_content_bytes=1000))
+
     def test_no_empty_batch(self):
         self.assertEqual(list(batches([])), [])
         self.assertEqual(list(batches(["data/otz.db"])), [["data/otz.db"]])
