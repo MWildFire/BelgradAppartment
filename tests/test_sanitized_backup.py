@@ -1633,6 +1633,38 @@ def test_a_refused_second_receiver_leaves_the_holders_pending_copy_in_place(
     assert result["files_transferred"] == 150
 
 
+def test_a_failed_copy_is_removed_while_the_lease_is_still_held(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    generation = args.source_snapshot.name
+    pending = args.private_root / "pending" / generation
+    pending_at_release = []
+
+    @contextmanager
+    def recording_lease(_args):
+        try:
+            yield
+        finally:
+            pending_at_release.append(pending.exists())
+
+    real_run = backup.transport.run
+
+    def failing_batch(command):
+        if "--files-from" in command:
+            raise backup.scan.PreflightError("synthetic_batch_failed")
+        return real_run(command)
+
+    monkeypatch.setattr(backup.transport, "remote_lease", recording_lease)
+    monkeypatch.setattr(backup.transport, "run", failing_batch)
+    with pytest.raises(backup.scan.PreflightError, match=r"^synthetic_batch_failed$"):
+        backup.receive(args)
+    # The copy this run made is gone before the lease is released, not after another may hold it.
+    assert pending_at_release == [False]
+    assert not pending.exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.TRANSFERRING
+
+
 def test_copy_is_flushed_before_the_source_is_discarded(snapshot, tmp_path, monkeypatch):
     args = receiver_args(tmp_path)
     fake_transport(snapshot, args, monkeypatch)

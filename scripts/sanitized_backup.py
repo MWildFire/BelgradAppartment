@@ -1150,164 +1150,166 @@ def receive(args):
     created_copy = False  # True once this run made the copy; only such a copy is ever removed
     try:
         with transport.remote_lease(args):
-            _require_pinned_helper(args)
-            # Holding the lease, no other receiver is writing resume/: a temporary there was left
-            # by a receiver that was killed while it wrote a record.
-            _discard_temporaries(root / "resume")
-            # The same checks again, now that this process holds the lease: another receiver may
-            # have written a record or finished the generation while this one waited for it.
-            require(not destination.exists() and not receipt.exists(), "generation_exists")
-            if resuming:
-                request_id = _require_resumable(args, resume_record)
-                source_checksum = args.resume_manifest_sha256
-                # Retained or transferring: no verification succeeded; the copy is not evidence.
-                if pending.exists():
-                    shutil.rmtree(pending)
-            else:
-                require(not _records(root / "resume"), "unresolved_resume_record")
-                require(not pending.exists(), "generation_exists")
-                # Written before the call: a lost answer leaves a record that blocks fresh runs.
-                request_id = uuid.uuid4().hex
-                _durable_write(
-                    resume_record, _resume_record(args, None, request_id, state=REQUESTED)
-                )
-                source = _snapshot_remote(
-                    args,
-                    _helper_command(
+            try:
+                _require_pinned_helper(args)
+                # Holding the lease, no other receiver is writing resume/: a temporary there was left
+                # by a receiver that was killed while it wrote a record.
+                _discard_temporaries(root / "resume")
+                # The same checks again, now that this process holds the lease: another receiver may
+                # have written a record or finished the generation while this one waited for it.
+                require(not destination.exists() and not receipt.exists(), "generation_exists")
+                if resuming:
+                    request_id = _require_resumable(args, resume_record)
+                    source_checksum = args.resume_manifest_sha256
+                    # Retained or transferring: no verification succeeded; the copy is not evidence.
+                    if pending.exists():
+                        shutil.rmtree(pending)
+                else:
+                    require(not _records(root / "resume"), "unresolved_resume_record")
+                    require(not pending.exists(), "generation_exists")
+                    # Written before the call: a lost answer leaves a record that blocks fresh runs.
+                    request_id = uuid.uuid4().hex
+                    _durable_write(
+                        resume_record, _resume_record(args, None, request_id, state=REQUESTED)
+                    )
+                    source = _snapshot_remote(
                         args,
-                        "snapshot",
-                        "--project-root",
-                        args.remote_root,
-                        "--output-dir",
-                        args.source_snapshot,
-                        "--application-project-root",
-                        args.remote_root,
-                        "--min-free-gib",
-                        args.min_free_gib,
-                        "--acknowledge-url-loss",
-                    ),
-                )
-                status = json.loads(source.stdout)
-                require(
-                    status.get("result") == "sanitized_source_snapshot_created"
-                    and status.get("scope") == SCOPE
-                    and re.fullmatch(r"[a-f0-9]{64}", status.get("manifest_sha256", "")),
-                    "source_snapshot_unconfirmed",
-                )
-                source_checksum = status["manifest_sha256"]
+                        _helper_command(
+                            args,
+                            "snapshot",
+                            "--project-root",
+                            args.remote_root,
+                            "--output-dir",
+                            args.source_snapshot,
+                            "--application-project-root",
+                            args.remote_root,
+                            "--min-free-gib",
+                            args.min_free_gib,
+                            "--acknowledge-url-loss",
+                        ),
+                    )
+                    status = json.loads(source.stdout)
+                    require(
+                        status.get("result") == "sanitized_source_snapshot_created"
+                        and status.get("scope") == SCOPE
+                        and re.fullmatch(r"[a-f0-9]{64}", status.get("manifest_sha256", "")),
+                        "source_snapshot_unconfirmed",
+                    )
+                    source_checksum = status["manifest_sha256"]
+                    _durable_write(
+                        resume_record, _resume_record(args, source_checksum, request_id, state=RETAINED)
+                    )
+                pending.mkdir(mode=0o700)
+                created_copy = True
                 _durable_write(
-                    resume_record, _resume_record(args, source_checksum, request_id, state=RETAINED)
+                    resume_record, _resume_record(args, source_checksum, request_id, state=TRANSFERRING)
                 )
-            pending.mkdir(mode=0o700)
-            created_copy = True
-            _durable_write(
-                resume_record, _resume_record(args, source_checksum, request_id, state=TRANSFERRING)
-            )
-            transport.run(
-                [
-                    *rsync,
-                    f"{args.ssh_target}:{args.source_snapshot}/manifest.json",
-                    str(pending / "manifest.json"),
-                ]
-            )
-            require(
-                recovery.digest(pending / "manifest.json") == source_checksum,
-                "source_manifest_changed",
-            )
-            manifest = read_json(pending / "manifest.json")
-            check_manifest(manifest)
-            require(
-                manifest["source_project_root"] == str(args.remote_root), "wrong_snapshot_source"
-            )
-            require(
-                shutil.disk_usage(root).free
-                >= args.min_free_gib * 1024**3 + sum(m["size"] for m in manifest["files"].values()),
-                "insufficient_receiver_space",
-            )
-            # Materialized first: every name is validated before the first transfer.
-            groups = list(
-                bounded.batches(
-                    manifest["files"],
-                    sizes={name: meta["size"] for name, meta in manifest["files"].items()},
-                )
-            )
-            for group in groups:
-                listing.write_bytes(bounded.encode_batch(group))
-                listing.chmod(0o600)
                 transport.run(
                     [
                         *rsync,
-                        "-I",
-                        "-0",
-                        "--files-from",
-                        str(listing),
-                        f"{args.ssh_target}:{args.source_snapshot}/",
-                        str(pending) + "/",
+                        f"{args.ssh_target}:{args.source_snapshot}/manifest.json",
+                        str(pending / "manifest.json"),
                     ]
                 )
+                require(
+                    recovery.digest(pending / "manifest.json") == source_checksum,
+                    "source_manifest_changed",
+                )
+                manifest = read_json(pending / "manifest.json")
+                check_manifest(manifest)
+                require(
+                    manifest["source_project_root"] == str(args.remote_root), "wrong_snapshot_source"
+                )
+                require(
+                    shutil.disk_usage(root).free
+                    >= args.min_free_gib * 1024**3 + sum(m["size"] for m in manifest["files"].values()),
+                    "insufficient_receiver_space",
+                )
+                # Materialized first: every name is validated before the first transfer.
+                groups = list(
+                    bounded.batches(
+                        manifest["files"],
+                        sizes={name: meta["size"] for name, meta in manifest["files"].items()},
+                    )
+                )
+                for group in groups:
+                    listing.write_bytes(bounded.encode_batch(group))
+                    listing.chmod(0o600)
+                    transport.run(
+                        [
+                            *rsync,
+                            "-I",
+                            "-0",
+                            "--files-from",
+                            str(listing),
+                            f"{args.ssh_target}:{args.source_snapshot}/",
+                            str(pending) + "/",
+                        ]
+                    )
+                    transport.assert_lease()
+                listing.unlink(missing_ok=True)
+                # Recorded before verification starts: a result that is never written down still
+                # leaves a record that refuses the deletion a resume would otherwise perform.
+                verify_may_have_started = True
+                _durable_write(
+                    resume_record, _resume_record(args, source_checksum, request_id, state=VERIFYING)
+                )
+                try:
+                    result = verify_snapshot(pending, application=True, scratch_parent=pending)
+                except BaseException:
+                    # The copy is not evidence: write that down, then let the handler remove it. The
+                    # source snapshot is still on the server, because the discard has not run yet.
+                    _durable_write(
+                        resume_record,
+                        _resume_record(args, source_checksum, request_id, state=TRANSFERRING),
+                    )
+                    verify_may_have_started = False
+                    raise
+                _durable_write(
+                    resume_record, _resume_record(args, source_checksum, request_id, state=VERIFIED)
+                )
                 transport.assert_lease()
-            listing.unlink(missing_ok=True)
-            # Recorded before verification starts: a result that is never written down still
-            # leaves a record that refuses the deletion a resume would otherwise perform.
-            verify_may_have_started = True
-            _durable_write(
-                resume_record, _resume_record(args, source_checksum, request_id, state=VERIFYING)
-            )
-            try:
-                result = verify_snapshot(pending, application=True, scratch_parent=pending)
-            except BaseException:
-                # The copy is not evidence: write that down, then let the handler remove it. The
-                # source snapshot is still on the server, because the discard has not run yet.
+                require(
+                    recovery.digest(pending / "manifest.json") == source_checksum,
+                    "source_manifest_changed",
+                )
+                # A volume that refuses F_FULLFSYNC raises here, before the source can be discarded.
+                durability_mode = _fsync_tree(pending)
+                # The copy's own entry lives in pending/: its directory is flushed the same way, after
+                # close, and that is not measured as a power-loss guarantee either.
+                _fsync_path(pending.parent)
+                # Recorded before the call: a crash or a lost answer during discard keeps the copy.
                 _durable_write(
                     resume_record,
-                    _resume_record(args, source_checksum, request_id, state=TRANSFERRING),
+                    _resume_record(args, source_checksum, request_id, state=KEPT_FOR_OPERATOR),
                 )
-                verify_may_have_started = False
+                _discard_remote(args, source_checksum)
+                transport.assert_lease()
+                result.update(
+                    backup_format="sanitized_directory_generation",
+                    generation_id=generation,
+                    manifest_sha256=result["generation_manifest_sha256"],
+                    offhost_verified=True,
+                    files_transferred=len(manifest["files"]),
+                    media_reused_from_verified_seed=0,
+                    source_temporary_snapshot_removed=True,
+                    durability_mode=durability_mode,
+                    power_loss_guarantee=POWER_LOSS_GUARANTEE,
+                )
+            except BaseException:
+                # Still under the lease: a copy this run made is removed only while no verification
+                # has started, and before the lease is released, so no other receiver can be writing
+                # it. Once verification has started, the copy is kept for the operator; a copy another
+                # receiver left behind is never removed here.
+                if created_copy and not verify_may_have_started and pending.exists():
+                    shutil.rmtree(pending)
                 raise
-            _durable_write(
-                resume_record, _resume_record(args, source_checksum, request_id, state=VERIFIED)
-            )
-            transport.assert_lease()
-            require(
-                recovery.digest(pending / "manifest.json") == source_checksum,
-                "source_manifest_changed",
-            )
-            # A volume that refuses F_FULLFSYNC raises here, before the source can be discarded.
-            durability_mode = _fsync_tree(pending)
-            # The copy's own entry lives in pending/: its directory is flushed the same way, after
-            # close, and that is not measured as a power-loss guarantee either.
-            _fsync_path(pending.parent)
-            # Recorded before the call: a crash or a lost answer during discard keeps the copy.
-            _durable_write(
-                resume_record,
-                _resume_record(args, source_checksum, request_id, state=KEPT_FOR_OPERATOR),
-            )
-            _discard_remote(args, source_checksum)
-            transport.assert_lease()
-            result.update(
-                backup_format="sanitized_directory_generation",
-                generation_id=generation,
-                manifest_sha256=result["generation_manifest_sha256"],
-                offhost_verified=True,
-                files_transferred=len(manifest["files"]),
-                media_reused_from_verified_seed=0,
-                source_temporary_snapshot_removed=True,
-                durability_mode=durability_mode,
-                power_loss_guarantee=POWER_LOSS_GUARANTEE,
-            )
         # Lease release can itself fail. Publish proof only after the context exits cleanly.
         _publish_generation(pending, destination)
         _durable_write(receipt, result)
         resume_record.unlink(missing_ok=True)
         _fsync_path(resume_record.parent)
         return result
-    except BaseException:
-        # A copy is removed here only if this run made it and no verification has started. Its
-        # record says so (requested, retained or transferring). Anything else is kept for the
-        # operator, including a copy another receiver left behind.
-        if created_copy and not verify_may_have_started and pending.exists():
-            shutil.rmtree(pending)
-        raise
     finally:
         listing.unlink(missing_ok=True)
 
