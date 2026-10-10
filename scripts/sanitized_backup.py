@@ -951,8 +951,11 @@ def _helper_command(args, *helper_args):
 
 
 def _require_pinned_helper(args):
-    """First helper run under the lease. The bootstrap refuses before the inspection can answer."""
-    _inspect_remote(args)
+    """First helper run under the lease. The bootstrap refuses before the inspection can answer.
+
+    A source build that still holds its lock refuses here, before any record is written.
+    """
+    require(_inspect_remote(args)["result"] != "build_running", "remote_build_running")
 
 
 def _receiver_root(args):
