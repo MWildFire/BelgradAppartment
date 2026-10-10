@@ -50,6 +50,22 @@ def _open(directory, name, is_directory):
         _refuse("remote_helper_mode_unsafe")
     return descriptor
 
+def _ancestors_safe(directory):
+    # Every directory above the tools directory, with links resolved, must belong to root or the
+    # operator, and must not be writable by others unless it is sticky, as /tmp is.
+    current = directory
+    while True:
+        status = os.stat(current)
+        if (
+            not stat.S_ISDIR(status.st_mode)
+            or status.st_uid not in (0, os.geteuid())
+            or (status.st_mode & 0o022 and not status.st_mode & stat.S_ISVTX)
+        ):
+            _refuse("remote_helper_mode_unsafe")
+        if current == "/":
+            return
+        current = os.path.dirname(current)
+
 try:
     tools, expected, names, entry = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), sys.argv[4]
 except (IndexError, ValueError):
@@ -62,7 +78,9 @@ if not (
 ):
     _refuse("invalid_remote_helper_set")
 
-root = _open(None, tools, True)
+parent = os.path.realpath(os.path.dirname(os.path.abspath(tools)))
+_ancestors_safe(parent)
+root = _open(None, os.path.join(parent, os.path.basename(tools)), True)
 scripts = _open(root, "scripts", True)
 files = {}
 for name in names:

@@ -2256,6 +2256,29 @@ def test_source_bootstrap_refuses_any_changed_byte_before_the_helper_runs(tmp_pa
     assert "usage:" not in result.stdout
 
 
+@pytest.mark.parametrize("mode", [0o777, 0o775])
+def test_source_bootstrap_refuses_a_tools_directory_under_a_writable_ancestor(tmp_path, mode):
+    # The tools directory itself is safe; anyone who can rename its parent could replace it.
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    tools = helper_tools(shared)
+    shared.chmod(mode)
+    result = run_bootstrap(tools, "--help")
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == {"result": "blocked", "reason": "remote_helper_mode_unsafe"}
+
+
+def test_source_bootstrap_accepts_a_sticky_ancestor_as_tmp_is(tmp_path):
+    # Like /tmp: world-writable but sticky, so only the owner of an entry can rename it.
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    tools = helper_tools(shared)
+    shared.chmod(0o1777)
+    result = run_bootstrap(tools, "--help")
+    assert result.returncode == 0
+    assert result.stdout.startswith("usage: sanitized_backup.py")
+
+
 @pytest.mark.parametrize("target", ["scripts/recovery.py", "scripts"])
 def test_source_bootstrap_refuses_group_or_world_writable_files_and_directories(tmp_path, target):
     tools = helper_tools(tmp_path)
