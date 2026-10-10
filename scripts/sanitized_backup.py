@@ -938,7 +938,7 @@ def _durable_write(path, value):
 
 
 def _records(directory):
-    """Entries that are records. A temporary is a write in progress or a leftover, never a record."""
+    """Entries that are records. A temporary, in progress or left over, is never a record."""
     return [path for path in directory.iterdir() if path.suffix != ".tmp"]
 
 
