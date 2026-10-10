@@ -1480,6 +1480,35 @@ CRASH_CASES = [
 ]
 
 
+def test_copy_directory_entry_is_flushed_before_the_source_is_discarded(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    order = []
+    real_fsync_path = backup._fsync_path
+    monkeypatch.setattr(
+        backup,
+        "_fsync_path",
+        lambda path: (order.append(("fsync", Path(path))), real_fsync_path(path))[1],
+    )
+    real_discard = backup._discard_remote
+    monkeypatch.setattr(
+        backup,
+        "_discard_remote",
+        lambda remote_args, checksum: (
+            order.append(("discard", None)),
+            real_discard(remote_args, checksum),
+        )[1],
+    )
+    backup.receive(args)
+    pending = args.private_root / "pending"
+    generation = args.source_snapshot.name
+    discard = order.index(("discard", None))
+    assert order.index(("fsync", pending)) < discard  # the directory that holds the copy
+    assert order.index(("fsync", pending / generation)) < order.index(("fsync", pending))
+
+
 @pytest.mark.parametrize("point,state,copy_at,restart", CRASH_CASES)
 def test_power_loss_at_each_durable_point_keeps_the_copy_and_reaches_the_documented_state(
     power, point, state, copy_at, restart

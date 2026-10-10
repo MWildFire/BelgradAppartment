@@ -1125,6 +1125,8 @@ def receive(args):
             )
             # A volume that refuses F_FULLFSYNC raises here, before the source can be discarded.
             durability_mode = _fsync_tree(pending)
+            # The copy's own entry lives in pending/; without this flush a power loss could lose it.
+            _fsync_path(pending.parent)
             # Recorded before the call: a crash or a lost answer during discard keeps the copy.
             _durable_write(
                 resume_record,
