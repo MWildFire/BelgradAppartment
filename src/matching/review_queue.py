@@ -225,6 +225,10 @@ async def reset_for_rematch() -> None:
     return to NEW. There is no full wipe: a wipe would send already-decided pairs again.
     """
     async with get_session() as session:
+        # The write comes first: SQLite then holds the write lock for the rest of the transaction.
+        # Reads taken before any lock could miss a decision committed in between, and that
+        # decision would then be reset to NEW and lose its manual job.
+        await session.execute(delete(Match).where(~_decided_match_clause()))
         kept = set(
             (
                 await session.execute(select(Match.inbound_post_id).where(_decided_match_clause()))
@@ -239,7 +243,6 @@ async def reset_for_rematch() -> None:
                 )
             ).scalars()
         )
-        await session.execute(delete(Match).where(~_decided_match_clause()))
         reset = update(InboundPost).values(status=InboundStatus.NEW)
         if kept:
             reset = reset.where(~InboundPost.id.in_(kept))

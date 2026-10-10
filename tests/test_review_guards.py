@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import event, select, update
 
 from src.db import InboundPost, InboundStatus, Match, MatchStatus, get_session
 from src.db.models import MatchDelivery, PublishedPost, SiteListing, ValidationJob
@@ -178,6 +178,26 @@ async def test_decided_inbound_ids_cover_every_kind_of_history(db, history):
     decided = await review_queue.decided_inbound_ids([iid])
 
     assert decided == (set() if history == "undecided" else {iid})
+
+
+async def test_rematch_reset_writes_before_it_reads_decisions(db):
+    """Reads taken before the first write can miss a decision committed in between.
+
+    The first statement must be the write, so SQLite holds the write lock for the rest of the
+    transaction and the decided state read afterwards cannot change under it.
+    """
+    statements: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(db.sync_engine, "before_cursor_execute", record)
+    try:
+        await review_queue.reset_for_rematch()
+    finally:
+        event.remove(db.sync_engine, "before_cursor_execute", record)
+
+    assert statements[0].lstrip().upper().startswith("DELETE")
 
 
 async def test_reset_wipes_only_undecided_matches(db):
