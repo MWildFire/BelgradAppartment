@@ -776,14 +776,14 @@ def _discard_remote(args, checksum):
     )
 
 
-def _resume_record(args, manifest_sha256):
+def _resume_record(args, manifest_sha256, state="retained_after_failure"):
     return {
         "format": FORMAT,
         "scope": SCOPE,
         "generation": args.source_snapshot.name,
         "source_snapshot": str(args.source_snapshot),
         "manifest_sha256": manifest_sha256,
-        "state": "retained_after_failure",
+        "state": state,
     }
 
 
@@ -791,8 +791,9 @@ def receive(args):
     """Future explicit transport; no seed, hardlinks, retention or ordinary scope writes.
 
     Bounded batches only. A failure after the source snapshot exists keeps that snapshot and
-    its manifest digest for an explicit resume; it is never discarded automatically. After the
-    source snapshot is discarded, a failure keeps the verified local copy for an operator.
+    its manifest digest for an explicit resume; it is never discarded automatically. A verified
+    local copy, or a discard that may have run, is never deleted automatically either: it is
+    kept for an operator, and its resume record refuses resume.
     """
     # Local receiver only: the remote helper never imports the batching module.
     from scripts import bounded_transfer as bounded
@@ -852,6 +853,9 @@ def receive(args):
             and read_json(resume_record) == _resume_record(args, args.resume_manifest_sha256),
             "resume_record_mismatch",
         )
+    if not resuming:
+        # An open resume record names a retained snapshot; a fresh run must not create another.
+        require(not any((root / "resume").iterdir()), "unresolved_resume_record")
     pending.mkdir(mode=0o700)
     rsync = [
         "/usr/bin/rsync",
@@ -863,7 +867,8 @@ def receive(args):
     ]
     listing = root / "pending" / (generation + ".files")
     source_checksum = None
-    discarded = False
+    verified = False
+    discard_attempted = False
     try:
         with transport.remote_lease(args):
             if resuming:
@@ -894,7 +899,7 @@ def receive(args):
                     "source_snapshot_unconfirmed",
                 )
                 source_checksum = status["manifest_sha256"]
-                # Recorded before any further transfer, so a crash still leaves a resume path.
+                # Recorded before the first transfer, so an interruption keeps a resume path.
                 transport.atomic_json(resume_record, _resume_record(args, source_checksum))
             transport.run(
                 [
@@ -917,7 +922,9 @@ def receive(args):
                 >= args.min_free_gib * 1024**3 + sum(m["size"] for m in manifest["files"].values()),
                 "insufficient_receiver_space",
             )
-            for group in bounded.batches(manifest["files"]):
+            # Materialized first: every name is validated before the first transfer.
+            groups = list(bounded.batches(manifest["files"]))
+            for group in groups:
                 listing.write_bytes(bounded.encode_batch(group))
                 listing.chmod(0o600)
                 transport.run(
@@ -934,14 +941,15 @@ def receive(args):
                 transport.assert_lease()
             listing.unlink(missing_ok=True)
             result = verify_snapshot(pending, application=True)
+            verified = True
             transport.assert_lease()
             require(
                 recovery.digest(pending / "manifest.json") == source_checksum,
                 "source_manifest_changed",
             )
+            discard_attempted = True
             _discard_remote(args, source_checksum)
             source_checksum = None
-            discarded = True
             resume_record.unlink(missing_ok=True)
             transport.assert_lease()
             result.update(
@@ -959,9 +967,14 @@ def receive(args):
         resume_record.unlink(missing_ok=True)
         return result
     except BaseException:
-        if discarded:
-            # The source snapshot is already gone and the copy is verified: it is the only copy
-            # left, so it is kept for an operator and never deleted here.
+        if verified or discard_attempted:
+            # A verified copy, or a discard that may have run, is never deleted automatically.
+            # Keep the copy for an operator; the record moves to a state that refuses resume.
+            if source_checksum is not None:
+                transport.atomic_json(
+                    resume_record,
+                    _resume_record(args, source_checksum, state="kept_for_operator"),
+                )
             raise
         if pending.exists():
             shutil.rmtree(pending)

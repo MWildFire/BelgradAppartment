@@ -436,7 +436,6 @@ def test_separate_receiver_and_real_offline_restore_leave_ordinary_generations_u
         ("source", 0),
         ("manifest", 1),
         ("media", 2),
-        ("cleanup", 2),
     ],
 )
 def test_receiver_failures_cannot_publish_receipts_or_generations(
@@ -581,6 +580,94 @@ def test_receive_resume_requires_matching_record_before_transport(tmp_path, monk
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("transport before resume record check")
+
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_record_mismatch$"):
+        backup.receive(args)
+
+
+def test_unconfirmed_discard_keeps_copy_and_refuses_resume(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    discard = backup._discard_remote
+
+    def removed_then_unconfirmed(remote_args, checksum):
+        discard(remote_args, checksum)
+        shutil.rmtree(snapshot)  # the server snapshot is gone, but its confirmation never arrives
+        raise backup.scan.PreflightError("source_snapshot_cleanup_unconfirmed")
+
+    monkeypatch.setattr(backup, "_discard_remote", removed_then_unconfirmed)
+    with pytest.raises(backup.scan.PreflightError, match=r"^source_snapshot_cleanup_unconfirmed$"):
+        backup.receive(args)
+    generation = args.source_snapshot.name
+    assert (args.private_root / "pending" / generation / "manifest.json").exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == "kept_for_operator"
+    for name in ("receipts", "generations"):
+        assert not list((args.private_root / name).iterdir())
+    args.resume_manifest_sha256 = record["manifest_sha256"]
+    with pytest.raises(backup.scan.PreflightError, match=r"^generation_exists$"):
+        backup.receive(args)
+
+
+def test_unresolved_resume_record_blocks_a_fresh_run(tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    args.private_root.mkdir(parents=True, mode=0o700)
+    (args.private_root / "scope.json").write_text(
+        json.dumps({"format": policy.FORMAT, "scope": policy.SCOPE})
+    )
+    (args.private_root / "resume").mkdir(mode=0o700)
+    (args.private_root / "resume" / "20261006-080000-deadbeef.json").write_text("{}")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("transport before the open-record guard")
+
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^unresolved_resume_record$"):
+        backup.receive(args)
+
+
+def test_resume_record_is_written_before_the_first_transfer(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
+    transfer = backup.transport.run
+    seen = []
+
+    def checked(command):
+        seen.append(record.exists())
+        return transfer(command)
+
+    monkeypatch.setattr(backup.transport, "run", checked)
+    result = backup.receive(args)
+    assert seen[0] is True
+    assert result["offhost_verified"] is True
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("manifest_sha256", "b" * 64),
+        ("generation", "20261006-090001-123abc45"),
+        ("source_snapshot", "/var/tmp/otz-data-only-sanitized/20261006-090001-123abc45"),
+        ("state", "kept_for_operator"),
+    ],
+)
+def test_resume_refuses_a_tampered_record_before_transport(
+    snapshot, tmp_path, monkeypatch, field, value
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch, "manifest")
+    with pytest.raises(backup.scan.PreflightError):
+        backup.receive(args)
+    record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
+    data = backup.read_json(record)
+    data[field] = value
+    record.write_text(json.dumps(data))
+    args.resume_manifest_sha256 = recovery.digest(snapshot / "manifest.json")
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("transport before the resume record check")
 
     monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
     with pytest.raises(backup.scan.PreflightError, match=r"^resume_record_mismatch$"):
@@ -839,7 +926,6 @@ def test_isolated_helper_bundle_runs_snapshot_and_restore_against_separate_appli
     for name in (
         "sanitized_backup",
         "sanitized_contract",
-        "bounded_transfer",
         "data_only_backup",
         "data_only_preflight",
         "offhost_backup",
