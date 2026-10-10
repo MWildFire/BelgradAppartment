@@ -928,7 +928,8 @@ def _fsync_path(path):
 
 
 def _durable_write(path, value):
-    """Replace path so that a power loss keeps the old record or the new one, never a torn file.
+    """Replace path. Intent; not measured: a power loss should keep the old record or the new one,
+    never a torn file.
 
     Order: the temporary file is written and flushed through the descriptor that wrote it, then
     closed, renamed over the record, and the parent directory is flushed. F_FULLFSYNC is issued at
