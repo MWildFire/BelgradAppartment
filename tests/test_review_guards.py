@@ -180,24 +180,31 @@ async def test_decided_inbound_ids_cover_every_kind_of_history(db, history):
     assert decided == (set() if history == "undecided" else {iid})
 
 
-async def test_rematch_reset_writes_before_it_reads_decisions(db):
-    """Reads taken before the first write can miss a decision committed in between.
+async def test_rematch_reset_is_one_write_transaction(db):
+    """The reset writes first and commits once, at the end.
 
-    The first statement must be the write, so SQLite holds the write lock for the rest of the
-    transaction and the decided state read afterwards cannot change under it.
+    Reads taken before the first write can miss a decision committed in between. A commit in the
+    middle releases the write lock, and the reads after it can miss a decision in the same way.
     """
-    statements: list[str] = []
+    events: list[str] = []
 
     def record(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
+        events.append(statement.lstrip().upper())
+
+    def record_commit(conn):
+        events.append("COMMIT")
 
     event.listen(db.sync_engine, "before_cursor_execute", record)
+    event.listen(db.sync_engine, "commit", record_commit)
     try:
         await review_queue.reset_for_rematch()
     finally:
         event.remove(db.sync_engine, "before_cursor_execute", record)
+        event.remove(db.sync_engine, "commit", record_commit)
 
-    assert statements[0].lstrip().upper().startswith("DELETE")
+    assert events[0].startswith("DELETE")
+    assert events.count("COMMIT") == 1
+    assert events[-1] == "COMMIT"
 
 
 async def test_reset_wipes_only_undecided_matches(db):
