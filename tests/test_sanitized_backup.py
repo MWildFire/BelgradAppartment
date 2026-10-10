@@ -561,6 +561,25 @@ def test_a_manifest_size_that_differs_from_the_copy_is_refused_after_transfer(
     assert record["state"] == backup.TRANSFERRING
 
 
+def test_a_database_sized_manifest_entry_passes_the_cap_and_fails_the_copy_check(
+    snapshot, tmp_path, monkeypatch
+):
+    # The staged database of 2026-09-10 was 1,496,510,464 bytes, far below the 4 GiB cap. Its manifest
+    # entry must pass the receiver's cap, and a copy of another size must be refused after the
+    # transfer by the copy check, not by the cap. Only the manifest size is large; the copy is small.
+    change_manifest(snapshot, lambda m: m["files"]["data/otz.db"].update(size=1_496_510_464))
+    args = receiver_args(tmp_path)
+    calls = fake_transport(snapshot, args, monkeypatch)
+    with pytest.raises(backup.scan.PreflightError, match=r"^snapshot_checksum_differs$"):
+        backup.receive(args)
+    assert [call for call in calls if "--files-from" in call]  # the transfer did run
+    generation = args.source_snapshot.name
+    assert not (args.private_root / "receipts" / (generation + ".json")).exists()
+    assert not (args.private_root / "generations" / generation).exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.TRANSFERRING
+
+
 def test_receive_keeps_verified_copy_when_lease_fails_after_source_discard(
     snapshot, tmp_path, monkeypatch
 ):
