@@ -1022,9 +1022,8 @@ def test_cli_verify_does_not_overwrite_an_existing_or_unsafe_receipt(snapshot, t
         assert not receipt.exists()
 
 
-def test_isolated_helper_bundle_runs_snapshot_and_restore_against_separate_application(
-    source, tmp_path
-):
+def run_isolated_helper_bundle(source, tmp_path):
+    """Snapshot and verify with only the pinned helpers, in a directory that holds no repository."""
     # Exact helpers only: no runtime source, .env, sessions, datasets or model weights.
     helpers = tmp_path / "isolated-helper/scripts"
     helpers.mkdir(parents=True)
@@ -1061,8 +1060,6 @@ def test_isolated_helper_bundle_runs_snapshot_and_restore_against_separate_appli
         check=False,
         cwd=tmp_path,
     )
-    assert prepare.returncode == 0, prepare.stdout
-    assert json.loads(prepare.stdout)["result"] == "sanitized_source_snapshot_created"
     receipt = tmp_path / "bundle-receipt.json"
     restore = subprocess.run(
         [
@@ -1080,23 +1077,46 @@ def test_isolated_helper_bundle_runs_snapshot_and_restore_against_separate_appli
         check=False,
         cwd=tmp_path,
     )
-    if sys.platform != "darwin":
-        # The receipt is flushed with F_FULLFSYNC, which only macOS has. Off macOS the verify
-        # step must stop before the receipt exists; that refusal is what this test checks there.
-        assert restore.returncode == 1
-        assert json.loads(restore.stdout) == {
-            "result": "blocked",
-            "reason": "full_flush_unavailable",
-        }
-        assert not receipt.exists()
-        assert not (helpers.parent / "src").exists()
-        return
+    return helpers, prepare, restore, receipt
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the verify receipt is flushed with F_FULLFSYNC, which only macOS has",
+)
+def test_isolated_helper_bundle_runs_snapshot_and_restore_against_separate_application(
+    source, tmp_path
+):
+    helpers, prepare, restore, receipt = run_isolated_helper_bundle(source, tmp_path)
+    assert prepare.returncode == 0, prepare.stdout
+    assert json.loads(prepare.stdout)["result"] == "sanitized_source_snapshot_created"
     assert restore.returncode == 0, restore.stdout
     result = backup.read_json(receipt)
     assert result["result"] == "data_restore_verified"
     assert result["listing_albums"] == backup.ALBUM_RESULT | {"network": "disabled"}
     assert result["offhost_verified"] is False
     assert result["protected_recovery_verified"] is False
+    assert not (helpers.parent / "src").exists()
+
+
+def test_isolated_helper_bundle_creates_the_snapshot_and_refuses_the_receipt_off_macos(
+    source, tmp_path
+):
+    helpers, prepare, restore, receipt = run_isolated_helper_bundle(source, tmp_path)
+    assert prepare.returncode == 0, prepare.stdout
+    assert json.loads(prepare.stdout)["result"] == "sanitized_source_snapshot_created"
+    if sys.platform != "darwin":
+        # The receipt is flushed with F_FULLFSYNC, which only macOS has. Off macOS the verify
+        # step must stop before the receipt exists.
+        assert restore.returncode == 1
+        assert json.loads(restore.stdout) == {
+            "result": "blocked",
+            "reason": "full_flush_unavailable",
+        }
+        assert not receipt.exists()
+    else:
+        assert restore.returncode == 0, restore.stdout
+        assert receipt.exists()
     assert not (helpers.parent / "src").exists()
 
 
