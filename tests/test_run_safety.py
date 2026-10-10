@@ -319,3 +319,14 @@ async def test_dry_source_timeout_writes_no_checkpoint(db, tmp_path):
     path = tmp_path / "dry.json"
     result = await scrape_platform(Hanging(), dry_run=True, source_budget_sec=0.01, checkpoint_path=path)
     assert result.stop_reason == "source_timeout" and not path.exists()
+
+
+def test_probe_sweep_broken_only_when_probes_failed_wholesale():
+    from src.scrapers.run_safety import probe_sweep_broken
+
+    assert not probe_sweep_broken(checked=0, failed=0)
+    assert probe_sweep_broken(checked=0, failed=1)  # errored before any probe ran
+    assert probe_sweep_broken(checked=5, failed=5)  # every probe failed
+    assert not probe_sweep_broken(checked=10, failed=5)  # exactly at the threshold
+    assert probe_sweep_broken(checked=10, failed=6)
+    assert not probe_sweep_broken(checked=100, failed=1)  # ordinary noise

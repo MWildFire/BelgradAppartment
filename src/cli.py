@@ -21,6 +21,7 @@ from src.jobs.lifecycle import remaining_budget, run_budget, run_cooperatively
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
+from src.scrapers.run_safety import probe_sweep_broken
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
@@ -1039,7 +1040,9 @@ async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None =
         sent = await send_liveness_notice(report) if notify else False
         note = " — нотис отправлен" if sent else ""
         errors = getattr(report, "errors", 0)
-        prefix = "⚠️ " if errors else ""
+        # Errored probes are the liveness analogue of INCONCLUSIVE links (see probe_sweep_broken).
+        broken = probe_sweep_broken(checked=getattr(report, "checked", 0), failed=errors)
+        prefix = "🚨 " if broken else ("⚠️ " if errors else "")
         note += (f", проверок {getattr(report, 'checked', 0)}, "
                  f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
@@ -1976,9 +1979,12 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
-            if vl.errors or vl.skipped:
+            # Most probes failing (network down, blocked) is an outage: the sweep cannot confirm
+            # the listings it did not reach, so it alarms instead of warning.
+            broken = probe_sweep_broken(checked=vl.checked, failed=vl.inconclusive)
+            if vl.errors or vl.skipped or broken:
                 # Skipped link checks stay an alarm: unverified links can leave dead listings up.
-                line = ("🚨 " if vl.skipped else "⚠️ ") + line
+                line = ("🚨 " if vl.skipped or broken else "⚠️ ") + line
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: verify-links")

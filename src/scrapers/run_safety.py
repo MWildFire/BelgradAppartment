@@ -123,3 +123,23 @@ def evaluate_absence(
         next_streak >= max(2, confirmations),
         "confirmed_weekly_absence",
     )
+
+
+# Share of one bounded probe sweep (link or liveness checks) that may fail before the sweep counts
+# as broken rather than noisy: failed probes confirm nothing about the listings they did not reach.
+# Owner decision: 0.5 is a proposal, not a measured baseline.
+PROBE_FAILURE_ALARM_SHARE = 0.5
+
+
+def probe_sweep_broken(*, checked: int, failed: int) -> bool:
+    """True when probes failed wholesale (network down, blocked), not one by one.
+
+    Alarm when every probe failed or the failed share is above PROBE_FAILURE_ALARM_SHARE.
+    Failures with nothing checked, for example a source that errored before its first probe,
+    count as broken too.
+    """
+    if failed <= 0:
+        return False
+    if checked <= 0 or failed >= checked:
+        return True
+    return failed / checked > PROBE_FAILURE_ALARM_SHARE

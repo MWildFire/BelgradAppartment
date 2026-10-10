@@ -873,12 +873,15 @@ class LinkVerifyStats:
 
     `checked` rows we issued a HEAD for; `deactivated` flipped is_active=False on a definitive
     gone-status (404/410); `errors` inconclusive responses (timeouts, 5xx, anti-bot 403/405,
-    network) that did NOT deactivate; `skipped` rows left unchecked when the deadline ran out.
+    network) that did NOT deactivate; `inconclusive` every INCONCLUSIVE verdict, the input of the
+    outage alarm (run_safety.probe_sweep_broken); `skipped` rows left unchecked when the deadline
+    ran out.
     """
 
     checked: int = 0
     deactivated: int = 0
     errors: int = 0
+    inconclusive: int = 0
     skipped: int = 0
     # X2: public cards auto-hidden because their listing 404/410'd (is_public was True).
     site_listings_hidden: int = 0
@@ -981,6 +984,8 @@ async def verify_active_links(
 
     async def _record_check(row: Any, status: str, *, definitive_alive: bool = False) -> None:
         observed_status[row.id] = status
+        if status == "INCONCLUSIVE":
+            stats.inconclusive += 1
         if dry_run:
             return
         values = dict(

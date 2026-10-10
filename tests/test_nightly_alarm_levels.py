@@ -90,6 +90,56 @@ async def test_source_failures_and_skipped_link_checks_stay_alarms(db, heal_roll
     assert link_line.startswith("🚨 ")
 
 
+async def test_link_check_outage_is_alarm_not_warning(db, heal_rolling_links):
+    """Most probes failing is an outage, not noise: dead listings may stay up unverified."""
+    idle_heal = orchestrator.HealResult(selected=0, fixed=0, remaining=0, errors=0)
+    idle_rolling = orchestrator.RollingRefreshResult(
+        selected=0, refreshed=0, errors=0, price_changes=[],
+    )
+
+    lines = await _nightly_lines(
+        heal_rolling_links, idle_heal, idle_rolling,
+        orchestrator.LinkVerifyStats(checked=5, errors=5, inconclusive=5),
+    )
+    link_line = next(line for line in lines if "ссылки: проверено" in line)
+    assert link_line.startswith("🚨 ")
+    assert any("🚨" in line for line in lines)  # the night's maintenance_failed trigger
+
+    lines = await _nightly_lines(
+        heal_rolling_links, idle_heal, idle_rolling,
+        orchestrator.LinkVerifyStats(checked=5, errors=1, inconclusive=1),
+    )
+    link_line = next(line for line in lines if "ссылки: проверено" in line)
+    assert link_line.startswith("⚠️ ")
+    assert not any("🚨" in line for line in lines)
+
+
+async def test_liveness_probe_outage_is_alarm(monkeypatch):
+    from src.site import liveness
+
+    monkeypatch.setattr(get_settings(), "site_liveness_enabled", True)
+
+    async def no_notice(report):
+        return False
+
+    def sweep(*, errors, checked):
+        async def fake_sweep(*, max_hides=None):
+            return SimpleNamespace(
+                hidden=[], candidates_confirmed=[], candidates_unconfirmed=[],
+                kept_active=0, kept_pinned=0, checked=checked, errors=errors, skipped=0,
+            )
+
+        return fake_sweep
+
+    monkeypatch.setattr(liveness, "send_liveness_notice", no_notice)
+    monkeypatch.setattr(liveness, "site_liveness_sweep", sweep(errors=5, checked=5))
+    assert (await cli_mod._liveness_nightly_line(notify=False)).startswith("🚨 liveness")
+
+    monkeypatch.setattr(liveness, "site_liveness_sweep", sweep(errors=1, checked=100))
+    line = await cli_mod._liveness_nightly_line(notify=False)
+    assert line.startswith("⚠️ liveness") and "ошибок 1" in line
+
+
 async def test_edge_budget_stop_is_warning_and_other_dupes_failure_stays_alarm(monkeypatch):
     async def edge_budget():
         raise RuntimeError("identity_edge_budget")
