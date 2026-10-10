@@ -395,7 +395,7 @@ def fake_transport(snapshot, args, monkeypatch, fault=None):
     return calls
 
 
-@pytest.mark.parametrize("remote_user", ["otz", "root"])
+@pytest.mark.parametrize("remote_user", ["otz"])
 def test_separate_receiver_and_real_offline_restore_leave_ordinary_generations_untouched(
     snapshot, tmp_path, monkeypatch, remote_user
 ):
@@ -604,8 +604,9 @@ def test_unconfirmed_discard_keeps_copy_and_refuses_resume(snapshot, tmp_path, m
     for name in ("receipts", "generations"):
         assert not list((args.private_root / name).iterdir())
     args.resume_manifest_sha256 = record["manifest_sha256"]
-    with pytest.raises(backup.scan.PreflightError, match=r"^generation_exists$"):
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_record_mismatch$"):
         backup.receive(args)
+    assert (args.private_root / "pending" / generation / "manifest.json").exists()
 
 
 def test_verified_copy_survives_a_lease_loss_before_discard(snapshot, tmp_path, monkeypatch):
@@ -1260,3 +1261,73 @@ def test_scan_reuse_rejects_mismatched_or_malformed_proof(snapshot, fault):
 def test_actual_restore_never_accepts_reused_source_scan_proof(snapshot):
     with pytest.raises(backup.scan.PreflightError, match="scan_reuse_for_restore_forbidden"):
         backup.verify_snapshot(snapshot, application=True, _scanned_media={})
+
+
+def test_root_operator_is_refused_before_any_transport(tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    args.remote_user = "root"
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("transport before the operator check")
+
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^unsupported_source_operator$"):
+        backup.receive(args)
+
+
+def test_lost_snapshot_answer_leaves_a_requested_record_that_blocks_fresh_runs(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+
+    def answer_lost(*_args, **_kwargs):
+        raise backup.scan.PreflightError("snapshot_answer_lost")
+
+    monkeypatch.setattr(backup, "_snapshot_remote", answer_lost)
+    with pytest.raises(backup.scan.PreflightError, match=r"^snapshot_answer_lost$"):
+        backup.receive(args)
+    record = backup.read_json(args.private_root / "resume" / (args.source_snapshot.name + ".json"))
+    assert record["state"] == "requested"
+    assert record["manifest_sha256"] is None
+    with pytest.raises(backup.scan.PreflightError, match=r"^unresolved_resume_record$"):
+        backup.receive(args)
+    args.resume_manifest_sha256 = recovery.digest(snapshot / "manifest.json")
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_record_mismatch$"):
+        backup.receive(args)
+
+
+def test_resume_replaces_a_partial_pending_copy_left_by_an_interrupted_transfer(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch, "manifest")
+    with pytest.raises(backup.scan.PreflightError):
+        backup.receive(args)
+    generation = args.source_snapshot.name
+    partial = args.private_root / "pending" / generation
+    partial.mkdir(mode=0o700)
+    (partial / "partial-transfer.bin").write_bytes(b"half a file")
+    args.resume_manifest_sha256 = recovery.digest(snapshot / "manifest.json")
+    fake_transport(snapshot, args, monkeypatch)
+    result = backup.receive(args)
+    assert result["offhost_verified"] is True
+    assert not (args.private_root / "pending" / generation).exists()
+    assert (args.private_root / "generations" / generation).exists()
+
+
+def test_copy_is_flushed_before_the_source_is_discarded(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    order = []
+    flush = backup._fsync_tree
+    discard = backup._discard_remote
+    monkeypatch.setattr(
+        backup, "_fsync_tree", lambda folder: (order.append("fsync"), flush(folder))
+    )
+    monkeypatch.setattr(
+        backup, "_discard_remote", lambda a, checksum: (order.append("discard"), discard(a, checksum))
+    )
+    result = backup.receive(args)
+    assert order == ["fsync", "discard"]
+    assert result["offhost_verified"] is True

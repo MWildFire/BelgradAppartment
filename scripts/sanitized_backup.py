@@ -787,6 +787,26 @@ def _resume_record(args, manifest_sha256, state="retained_after_failure"):
     }
 
 
+def _fsync_path(path):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_tree(folder):
+    """Flush every file and directory of a verified copy before the source copy is discarded.
+
+    Plain fsync is used here; on macOS a stronger F_FULLFSYNC may be required for power-loss
+    durability, which has to be measured on the target disk before this is relied on.
+    """
+    for path in folder.rglob("*"):
+        if path.is_file() and not path.is_symlink():
+            _fsync_path(path)
+    _fsync_path(folder)
+
+
 def receive(args):
     """Future explicit transport; no seed, hardlinks, retention or ordinary scope writes.
 
@@ -800,7 +820,7 @@ def receive(args):
     from scripts import bounded_transfer as bounded
 
     require(getattr(args, "acknowledge_url_loss", False) is True, "url_loss_not_acknowledged")
-    require(args.remote_user in {"otz", "root"}, "unsupported_source_operator")
+    require(args.remote_user == "otz", "unsupported_source_operator")
     root = args.private_root.absolute()
     require(
         root.resolve() == root and root.parts[-2:] == ("data-only", "sanitized-v1"),
@@ -839,9 +859,7 @@ def receive(args):
     resume_record = root / "resume" / (generation + ".json")
     resuming = getattr(args, "resume_manifest_sha256", None) is not None
     require(
-        not pending.exists()
-        and not destination.exists()
-        and not (root / "receipts" / (generation + ".json")).exists(),
+        not destination.exists() and not (root / "receipts" / (generation + ".json")).exists(),
         "generation_exists",
     )
     if resuming:
@@ -854,8 +872,14 @@ def receive(args):
             and read_json(resume_record) == _resume_record(args, args.resume_manifest_sha256),
             "resume_record_mismatch",
         )
-    if not resuming:
-        # An open resume record names a retained snapshot; a fresh run must not create another.
+        # The record proves this copy was never verified, so a partial pending copy from an
+        # interrupted transfer is removed before the retained snapshot is transferred again.
+        if pending.exists():
+            shutil.rmtree(pending)
+    else:
+        require(not pending.exists(), "generation_exists")
+        # An open resume record names a retained or requested snapshot; a fresh run must not
+        # create another one.
         require(not any((root / "resume").iterdir()), "unresolved_resume_record")
     pending.mkdir(mode=0o700)
     rsync = [
@@ -875,6 +899,9 @@ def receive(args):
             if resuming:
                 source_checksum = args.resume_manifest_sha256
             else:
+                # Written before the call: a lost answer leaves a visible record that blocks fresh
+                # runs, so the snapshot cannot be orphaned silently.
+                transport.atomic_json(resume_record, _resume_record(args, None, state="requested"))
                 source = _snapshot_remote(
                     args,
                     [
@@ -948,6 +975,7 @@ def receive(args):
                 recovery.digest(pending / "manifest.json") == source_checksum,
                 "source_manifest_changed",
             )
+            _fsync_tree(pending)
             discard_attempted = True
             # Marked before the call: a crash or a lost answer during discard keeps the copy and
             # refuses resume. The marker is removed only once the discard is confirmed.
@@ -982,7 +1010,7 @@ def receive(args):
                         resume_record,
                         _resume_record(args, source_checksum, state="kept_for_operator"),
                     )
-                except OSError as write_error:
+                except Exception as write_error:
                     # The original cause stays the raised error; the write failure is attached.
                     error.add_note(f"resume record not updated: {type(write_error).__name__}")
             raise
@@ -1100,7 +1128,7 @@ def main():
         receiver.add_argument("--" + name, type=Path, required=True)
     for name in ("ssh-target", "remote-python"):
         receiver.add_argument("--" + name, required=True)
-    receiver.add_argument("--remote-user", default="otz", choices=["otz", "root"])
+    receiver.add_argument("--remote-user", default="otz", choices=["otz"])
     receiver.add_argument("--min-free-gib", type=float, default=20)
     receiver.add_argument("--acknowledge-url-loss", action="store_true")
     receiver.add_argument("--resume-manifest-sha256")
