@@ -1337,6 +1337,20 @@ def test_stale_resume_temporary_is_removed_under_the_lease_and_does_not_block_a_
     assert not stale.exists()
 
 
+def test_a_listing_left_by_a_killed_run_is_swept_under_the_lease_before_a_fresh_copy(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    fake_transport(snapshot, args, monkeypatch)
+    pending = args.private_root / "pending"
+    # What a SIGKILLed run leaves: a batch listing named with that run's uuid, never removed.
+    leftover = pending / f"{args.source_snapshot.name}.{uuid.uuid4().hex}.files"
+    leftover.write_bytes(b"synthetic listing\0")
+    assert backup.receive(args)["offhost_verified"] is True
+    assert not leftover.exists()
+
+
 def smoke_child_result():
     return {
         "application": {
@@ -2912,3 +2926,4 @@ def test_receiver_refuses_an_interpreter_outside_the_documented_path_before_any_
     monkeypatch.setattr(backup.transport, "remote", forbidden)
     with pytest.raises(backup.scan.PreflightError, match=r"^unsupported_remote_python$"):
         backup.receive(args)
+

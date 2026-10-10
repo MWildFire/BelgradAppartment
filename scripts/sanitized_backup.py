@@ -957,6 +957,17 @@ def _discard_temporaries(directory):
         path.unlink()
 
 
+def _discard_listings(directory):
+    """Remove batch listings that a killed run left, as pending/<generation>.<uuid>.files.
+
+    Call only under the lease. A run writes and removes its listing inside the lease, except that
+    its last unlink after a failure runs once the lease is released, so a missing file is not an
+    error here.
+    """
+    for path in directory.glob("*.files"):
+        path.unlink(missing_ok=True)
+
+
 def _fsync_tree(folder):
     """Issue F_FULLFSYNC on every file, then every directory, deepest first.
 
@@ -1169,6 +1180,9 @@ def receive(args):
                 # Holding the lease, no other receiver is writing resume/: a temporary there was
                 # left by a receiver that was killed while it wrote a record.
                 _discard_temporaries(root / "resume")
+                # A listing is written and removed inside the lease, so one found here was left by a
+                # receiver that was killed during a batch. It is removed before any copy is made.
+                _discard_listings(root / "pending")
                 # The same checks again, now that this process holds the lease: another receiver may
                 # have written a record or finished the generation while this one waited for it.
                 require(not destination.exists() and not receipt.exists(), "generation_exists")
