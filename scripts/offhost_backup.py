@@ -36,6 +36,8 @@ else:
 
 
 _LEASE = ContextVar("offhost_source_lease", default=None)
+# Markers of this driver's generations. The sanitized and data-only drivers write other markers.
+PLAIN_BACKUP_FORMAT = "directory_generation"
 
 
 @contextmanager
@@ -250,6 +252,11 @@ def completed(root):
             if (
                 path.is_dir()
                 and not path.is_symlink()
+                # Only this driver's generations. Sanitized and data-only generations also carry
+                # data_restore_verified; without these markers rotation would delete them.
+                and receipt.get("backup_format") == PLAIN_BACKUP_FORMAT
+                and manifest.get("format") == recovery.FORMAT
+                and "scope" not in manifest
                 and receipt.get("result") == "data_restore_verified"
                 and receipt.get("generation_manifest_sha256") == recovery.digest(manifest_path)
                 and stamp.tzinfo is not None
@@ -508,6 +515,9 @@ def backup(args):
 def _backup(args):
     prepared_stage, prepared_checksum = prepared_snapshot_options(args)
     root = args.private_root.resolve()
+    # A scope marker is written by the sanitized or data-only driver. Refuse before creating
+    # anything, so this driver's rotation can never delete generations of another driver.
+    recovery.require(not (root / "scope.json").exists(), "foreign_namespace_marker")
     if getattr(args, "application_project_root", None) is not None:
         recovery.ROOT = args.application_project_root.resolve()
     recovery.private_dir(root)
