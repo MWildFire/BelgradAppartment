@@ -1,6 +1,7 @@
 """Synthetic data only; every SSH/rsync boundary is replaced by a local fixture."""
 
 import argparse
+import ast
 import copy
 import errno
 import fcntl
@@ -2413,14 +2414,117 @@ def test_pinned_helper_set_matches_the_repository_files():
     assert pin.helper_set_digest(files) == pin.HELPER_SET_SHA256
 
 
-def test_pinned_set_contains_every_module_the_source_helper_imports():
-    imported = set()
-    for name in pin.HELPER_FILES:
-        for match in re.finditer(r"^\s*from scripts import (\w+)", (REPOSITORY / name).read_text(), re.M):
-            imported.add(f"scripts/{match.group(1)}.py")
-    # Receiver-only lazy imports: the source helper never runs these functions.
-    receiver_only = {"scripts/bounded_transfer.py", "scripts/sanitized_helper_pin.py"}
-    assert imported - set(pin.HELPER_FILES) <= receiver_only
+# Repository imports made inside a function body that only a receiver command reaches. The source
+# commands are create_snapshot, inspect_snapshot and discard_snapshot; the test checks that none of
+# these functions is reached from them. Anything else that is not pinned fails the test.
+RECEIVER_ONLY_IMPORTS = {
+    ("scripts/sanitized_backup.py", "_helper_command", "scripts/sanitized_helper_pin.py"),
+    ("scripts/sanitized_backup.py", "_resume_record", "scripts/sanitized_helper_pin.py"),
+    ("scripts/sanitized_backup.py", "_require_requested", "scripts/sanitized_helper_pin.py"),
+    ("scripts/sanitized_backup.py", "receive", "scripts/bounded_transfer.py"),
+}
+SOURCE_COMMANDS = ("create_snapshot", "inspect_snapshot", "discard_snapshot")
+
+
+def scripts_imports(path):
+    """(repository file, enclosing function) for each import of a scripts module, at any depth.
+
+    `import scripts.a.b`, `from scripts.a import b` and `from scripts import a` all count; for
+    `from scripts import a` both `scripts` and `scripts.a` are checked. A relative import is
+    reported as "<relative>", so it can never match the pinned set.
+    """
+    found = []
+
+    def visit(node, function):
+        for child in ast.iter_child_nodes(node):
+            inner = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else function
+            if isinstance(child, ast.Import):
+                dotted = [alias.name for alias in child.names]
+            elif isinstance(child, ast.ImportFrom) and child.level:
+                found.append(("<relative>", function))
+                dotted = []
+            elif isinstance(child, ast.ImportFrom):
+                base = child.module or ""
+                dotted = [base] + [f"{base}.{alias.name}" for alias in child.names]
+            else:
+                dotted = []
+            for name in dotted:
+                module = _scripts_module_file(name)
+                if module is not None:
+                    found.append((module, function))
+            visit(child, inner)
+
+    visit(ast.parse(path.read_text()), "<module>")
+    return found
+
+
+def _scripts_module_file(dotted):
+    """scripts/<a>.py for the longest dotted prefix of a scripts name that is a file, else None."""
+    parts = dotted.split(".")
+    if parts[0] != "scripts":
+        return None
+    for end in range(len(parts), 1, -1):
+        candidate = "/".join(parts[:end]) + ".py"
+        if (REPOSITORY / candidate).is_file():
+            return candidate
+    return None
+
+
+def functions_reached_from(path, roots):
+    """Names of the module's functions reached by name from roots, following references in bodies."""
+    functions = {
+        node.name: node
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    reached, pending = set(), list(roots)
+    while pending:
+        name = pending.pop()
+        if name in reached or name not in functions:
+            continue
+        reached.add(name)
+        for node in ast.walk(functions[name]):
+            if isinstance(node, ast.Name):
+                pending.append(node.id)
+            elif isinstance(node, ast.Attribute):
+                pending.append(node.attr)
+    return reached
+
+
+def test_scripts_import_walk_sees_every_form_at_any_depth(tmp_path):
+    sample = tmp_path / "sample.py"
+    sample.write_text(
+        "import scripts.bounded_transfer\n"
+        "from scripts import bounded_transfer\n"
+        "from scripts.bounded_transfer import batches\n"
+        "from scripts import recovery as r\n"
+        "import os\n"
+        "def inner():\n"
+        "    import scripts.sanitized_helper_pin\n"
+        "    from scripts import bounded_transfer as b\n"
+        "from . import sibling\n"
+    )
+    assert set(scripts_imports(sample)) == {
+        ("scripts/bounded_transfer.py", "<module>"),
+        ("scripts/recovery.py", "<module>"),
+        ("scripts/sanitized_helper_pin.py", "inner"),
+        ("scripts/bounded_transfer.py", "inner"),
+        ("<relative>", "<module>"),
+    }
+
+
+def test_every_repository_import_of_the_source_helper_is_pinned_or_declared_receiver_only():
+    found = {
+        (name, function, module)
+        for name in pin.HELPER_FILES
+        for module, function in scripts_imports(REPOSITORY / name)
+        if module not in pin.HELPER_FILES
+    }
+    assert found <= RECEIVER_ONLY_IMPORTS, sorted(found - RECEIVER_ONLY_IMPORTS)
+    assert RECEIVER_ONLY_IMPORTS <= found, sorted(RECEIVER_ONLY_IMPORTS - found)
+    source_side = functions_reached_from(REPOSITORY / "scripts/sanitized_backup.py", SOURCE_COMMANDS)
+    declared = {function for name, function, _ in RECEIVER_ONLY_IMPORTS if name.endswith("sanitized_backup.py")}
+    assert declared.isdisjoint(source_side), sorted(declared & source_side)
 
 
 def test_receiver_refuses_an_interpreter_outside_the_documented_path_before_any_lease(
