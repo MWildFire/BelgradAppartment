@@ -2314,6 +2314,37 @@ def test_source_bootstrap_refuses_an_entry_outside_the_pinned_set(tmp_path):
     assert json.loads(result.stdout) == {"result": "blocked", "reason": "invalid_remote_helper_set"}
 
 
+def test_import_hook_refuses_a_repository_module_outside_the_pinned_set(tmp_path):
+    """Run-time refusal: the finder itself stops an import of an unpinned repository module.
+
+    The entry is pinned, so the bootstrap runs. Its final import is replaced by an import of a
+    repository module that is not in the set; only the finder can answer that import.
+    """
+    original = "module = importlib.import_module(entry)"
+    assert original in pin.HELPER_BOOT
+    boot = pin.HELPER_BOOT.replace(original, "module = importlib.import_module('scripts.bounded_transfer')")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            boot,
+            str(helper_tools(tmp_path)),
+            pin.HELPER_SET_SHA256,
+            json.dumps(sorted(pin.HELPER_FILES)),
+            "scripts.sanitized_backup",
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    assert result.returncode == 1
+    assert "ImportError: module outside the pinned helper set" in result.stderr
+    assert result.stdout == ""
+
+
 def test_fresh_request_is_refused_while_a_source_build_runs_and_writes_no_record(
     tmp_path, monkeypatch
 ):
