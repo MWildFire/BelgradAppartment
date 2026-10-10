@@ -1752,6 +1752,63 @@ def test_resume_refuses_a_requested_record_and_points_to_the_operator(tmp_path, 
         backup.receive(args)
 
 
+def test_record_written_while_waiting_for_the_lease_blocks_a_fresh_run(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    fake_transport(snapshot, args, monkeypatch)
+    rival = args.private_root / "resume" / (args.source_snapshot.name + ".json")
+
+    rival_copy = args.private_root / "pending" / args.source_snapshot.name
+
+    @contextmanager
+    def lease_after_a_rival_requests(_args):
+        # Another receiver recorded its request and copy while this one was waiting for the lease.
+        rival.write_text(json.dumps(backup._resume_record(args, None, state=backup.REQUESTED)))
+        rival_copy.mkdir()
+        (rival_copy / "rival.bin").write_bytes(b"rival copy")
+        yield
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("snapshot or transfer although a record is open")
+
+    monkeypatch.setattr(backup.transport, "remote_lease", lease_after_a_rival_requests)
+    monkeypatch.setattr(backup, "_snapshot_remote", forbidden)
+    monkeypatch.setattr(backup.transport, "run", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^unresolved_resume_record$"):
+        backup.receive(args)
+    assert backup.read_json(rival)["state"] == backup.REQUESTED  # the rival's record is untouched
+    assert (rival_copy / "rival.bin").read_bytes() == b"rival copy"  # nor its copy
+
+
+def test_resume_rechecks_its_record_under_the_lease_before_deleting_the_copy(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    fake_transport(snapshot, args, monkeypatch)
+    generation = args.source_snapshot.name
+    digest = recovery.digest(snapshot / "manifest.json")
+    record = args.private_root / "resume" / (generation + ".json")
+    record.write_text(json.dumps(backup._resume_record(args, digest, state=backup.RETAINED)))
+    partial = args.private_root / "pending" / generation
+    partial.mkdir()
+    (partial / "half.bin").write_bytes(b"copied by the earlier receiver")
+
+    @contextmanager
+    def lease_after_a_rival_verifies(_args):
+        # Another receiver verified this copy while this one waited for the lease.
+        record.write_text(json.dumps(backup._resume_record(args, digest, state=backup.VERIFIED)))
+        yield
+
+    monkeypatch.setattr(backup.transport, "remote_lease", lease_after_a_rival_verifies)
+    args.resume_manifest_sha256 = digest
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_requires_operator$"):
+        backup.receive(args)
+    assert (partial / "half.bin").read_bytes() == b"copied by the earlier receiver"
+
+
 def test_leftover_temporaries_never_block_a_fresh_run(snapshot, tmp_path, monkeypatch):
     args = receiver_args(tmp_path)
     write_namespace(args)

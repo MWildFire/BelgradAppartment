@@ -990,6 +990,10 @@ def receive(args):
     removed. Once verification has succeeded, or a restart finds verifying, the copy is kept and
     the record blocks resume and fresh runs until an operator resolves it. The record is removed
     last, after the generation and its receipt are durable.
+
+    Record checks run twice: before the lease, as refusals that contact nothing, and again under
+    the lease after the helper is verified. Only the second set decides, because another receiver
+    may write a record while this one waits for the lease.
     """
     # Local receiver only: the remote helper never imports the batching module.
     from scripts import bounded_transfer as bounded
@@ -1026,15 +1030,22 @@ def receive(args):
     ]
     source_checksum = None
     verify_may_have_started = False
+    created_copy = False  # True once this run made the copy; only such a copy is ever removed
     try:
         with transport.remote_lease(args):
             _require_pinned_helper(args)
+            # The same checks again, now that this process holds the lease: another receiver may
+            # have written a record or finished the generation while this one waited for it.
+            require(not destination.exists() and not receipt.exists(), "generation_exists")
             if resuming:
+                _require_resumable(args, resume_record)
                 source_checksum = args.resume_manifest_sha256
                 # Retained or transferring: no verification succeeded; the copy is not evidence.
                 if pending.exists():
                     shutil.rmtree(pending)
             else:
+                require(not any((root / "resume").iterdir()), "unresolved_resume_record")
+                require(not pending.exists(), "generation_exists")
                 # Written before the call: a lost answer leaves a record that blocks fresh runs.
                 _durable_write(resume_record, _resume_record(args, None, state=REQUESTED))
                 source = _snapshot_remote(
@@ -1063,6 +1074,7 @@ def receive(args):
                 source_checksum = status["manifest_sha256"]
                 _durable_write(resume_record, _resume_record(args, source_checksum, state=RETAINED))
             pending.mkdir(mode=0o700)
+            created_copy = True
             _durable_write(resume_record, _resume_record(args, source_checksum, state=TRANSFERRING))
             transport.run(
                 [
@@ -1151,9 +1163,10 @@ def receive(args):
         _fsync_path(resume_record.parent)
         return result
     except BaseException:
-        # A copy is removed here only while no verification has succeeded; its record says so
-        # (requested, retained or transferring). Anything else is kept for the operator.
-        if not verify_may_have_started and pending.exists():
+        # A copy is removed here only if this run made it and no verification has started. Its
+        # record says so (requested, retained or transferring). Anything else is kept for the
+        # operator, including a copy another receiver left behind.
+        if created_copy and not verify_may_have_started and pending.exists():
             shutil.rmtree(pending)
         raise
     finally:
