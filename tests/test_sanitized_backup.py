@@ -2558,6 +2558,32 @@ def test_full_flush_on_macos_succeeds_for_files_and_directories_of_this_volume(t
     assert backup._fsync_path(tmp_path) == "F_FULLFSYNC"
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="F_FULLFSYNC is a macOS call")
+def test_receive_issues_the_real_full_flush_on_every_file_and_directory_of_the_copy(
+    snapshot, tmp_path, monkeypatch
+):
+    # The autouse fixture replaces fcntl.fcntl with fsync for this module. Here the real call is put
+    # back, and the path of each descriptor it flushes is recorded, so the copy's own files are seen.
+    flushed = []
+
+    def real_flush(descriptor, command, *rest):
+        if command == fcntl.F_FULLFSYNC:
+            path = REAL_FCNTL(descriptor, fcntl.F_GETPATH, b"\0" * 1024)
+            flushed.append(path.rstrip(b"\0").decode())
+        return REAL_FCNTL(descriptor, command, *rest)
+
+    monkeypatch.setattr(backup.fcntl, "fcntl", real_flush)
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    result = backup.receive(args)
+    assert result["durability_mode"] == backup.BULK_DURABILITY_MODE
+    # The copy is flushed before it is published, so its paths are still under pending/.
+    copy = os.path.realpath(args.private_root / "pending" / args.source_snapshot.name)
+    names = [*manifest_at(snapshot)["files"], "manifest.json"]
+    assert copy in flushed
+    assert [name for name in names if os.path.join(copy, name) not in flushed] == []
+
+
 def test_refused_full_flush_on_the_copy_keeps_the_copy_and_never_discards_the_source(
     snapshot, tmp_path, monkeypatch
 ):
