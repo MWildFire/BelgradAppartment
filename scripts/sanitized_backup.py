@@ -76,8 +76,12 @@ KNOWN_STATES = frozenset(
     {REQUESTED, RETAINED, TRANSFERRING, VERIFYING, VERIFIED, KEPT_FOR_OPERATOR}
 )
 RESUMABLE_STATES = frozenset({RETAINED, TRANSFERRING})
-# The only durability the copy path accepts; recorded in the receipt.
+# The name of the call _flush issues. Returned by _flush; it says the call was issued, nothing more.
 DURABILITY_MODE = "F_FULLFSYNC"
+# The bulk copy: F_FULLFSYNC issued after close, through a read-only descriptor. The power-loss
+# result was not measured, so the receipt records that explicitly.
+BULK_DURABILITY_MODE = "F_FULLFSYNC_issued_after_close"
+POWER_LOSS_GUARANTEE = "not_established"
 require = scan.require
 
 
@@ -896,10 +900,11 @@ def _json_or_none(text):
 
 
 def _flush(descriptor):
-    """Flush to the device, or refuse. Never falls back to a plain fsync.
+    """Issue F_FULLFSYNC on the descriptor, or refuse. Never falls back to a plain fsync.
 
-    fsync alone does not reach the platter on macOS. A volume that declines F_FULLFSYNC cannot
-    give the durability the source discard depends on, so the caller must stop before discard.
+    fsync alone does not reach the platter on macOS, so a volume that declines F_FULLFSYNC is
+    refused and the caller stops before the source is discarded. Issuing the call is not a
+    power-loss measurement; no test in this repository makes one.
     """
     require(hasattr(fcntl, "F_FULLFSYNC"), "full_flush_unavailable")
     try:
@@ -952,11 +957,17 @@ def _discard_temporaries(directory):
 
 
 def _fsync_tree(folder):
-    """Flush every file, then every directory, deepest first. Returns the durability mode used."""
+    """Issue F_FULLFSYNC on every file, then every directory, deepest first.
+
+    The files were written by rsync, so each call is issued after its writer closed the file,
+    through a read-only descriptor. The result is BULK_DURABILITY_MODE: the call was issued, and no
+    power-loss guarantee is claimed for it.
+    """
     for path in sorted(folder.rglob("*"), key=lambda item: len(item.parts), reverse=True):
         if not path.is_symlink() and (path.is_file() or path.is_dir()):
             _fsync_path(path)
-    return _fsync_path(folder)
+    _fsync_path(folder)
+    return BULK_DURABILITY_MODE
 
 
 def _publish_generation(pending, destination):
@@ -1262,7 +1273,8 @@ def receive(args):
             )
             # A volume that refuses F_FULLFSYNC raises here, before the source can be discarded.
             durability_mode = _fsync_tree(pending)
-            # The copy's own entry lives in pending/; without this flush a power loss could lose it.
+            # The copy's own entry lives in pending/: its directory is flushed the same way, after
+            # close, and that is not measured as a power-loss guarantee either.
             _fsync_path(pending.parent)
             # Recorded before the call: a crash or a lost answer during discard keeps the copy.
             _durable_write(
@@ -1280,6 +1292,7 @@ def receive(args):
                 media_reused_from_verified_seed=0,
                 source_temporary_snapshot_removed=True,
                 durability_mode=durability_mode,
+                power_loss_guarantee=POWER_LOSS_GUARANTEE,
             )
         # Lease release can itself fail. Publish proof only after the context exits cleanly.
         _publish_generation(pending, destination)

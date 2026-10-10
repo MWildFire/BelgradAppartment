@@ -2300,14 +2300,19 @@ def test_refused_full_flush_on_the_copy_keeps_the_copy_and_never_discards_the_so
     assert not (args.private_root / "receipts" / (generation + ".json")).exists()
 
 
-def test_receipt_records_the_durability_mode_the_copy_was_flushed_with(
+def test_receipt_says_the_bulk_flush_was_issued_and_claims_no_power_loss_guarantee(
     snapshot, tmp_path, monkeypatch
 ):
     args = receiver_args(tmp_path)
     fake_transport(snapshot, args, monkeypatch)
     result = backup.receive(args)
     receipt = backup.read_json(args.private_root / "receipts" / (args.source_snapshot.name + ".json"))
-    assert result["durability_mode"] == receipt["durability_mode"] == "F_FULLFSYNC"
+    expected = {
+        "durability_mode": "F_FULLFSYNC_issued_after_close",
+        "power_loss_guarantee": "not_established",
+    }
+    assert {key: result[key] for key in expected} == expected
+    assert {key: receipt[key] for key in expected} == expected
 
 
 def test_fsync_tree_flushes_nested_directories_deepest_first_and_the_root_last(
