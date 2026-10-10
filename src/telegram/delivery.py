@@ -87,24 +87,29 @@ async def send_match_to_saved(
             force_resend=force_resend,
         )
         if result is None:
-            # Already-delivered short-circuit. Fetch the existing row to satisfy the return type.
+            # No-op: already delivered, or rejected (never sent). Only a delivered match has a row.
             async with get_session() as s:
                 existing = (
                     await s.execute(
                         select(PublishedPost).where(PublishedPost.match_id == match_id)
                     )
-                ).scalar_one()
-                return existing
+                ).scalar_one_or_none()
+            if existing is None:
+                raise DeliveryError(f"Match {match_id}: rejected; not sent")
+            return existing
         return result
     if client is None:
         raise DeliveryError(
             "userbot delivery mode requires a Telethon client — pass one or set TG_DELIVERY_MODE=bot"
         )
-    return await _send_match_via_userbot(
+    published = await _send_match_via_userbot(
         match_id, client,
         post_text_override=post_text_override,
         force_resend=force_resend,
     )
+    if published is None:
+        raise DeliveryError(f"Match {match_id}: rejected; not sent")
+    return published
 
 
 async def _send_match_via_userbot(
@@ -113,17 +118,20 @@ async def _send_match_via_userbot(
     *,
     post_text_override: str | None = None,
     force_resend: bool = False,
-) -> PublishedPost:
+) -> PublishedPost | None:
     """Send the inbound album + rendered post text to the user's own Saved Messages.
 
     Idempotent: if already delivered (PublishedPost exists), returns it without re-sending —
     unless `force_resend=True`. Marks Match.status = PUBLISHED on success (we reuse PUBLISHED
     semantically to mean "delivered to Darya — pending her manual repost into @RentBelgrad").
+    A REJECTED match is never sent and returns None.
     """
     async with get_session() as s:
         match = await s.get(Match, match_id)
         if match is None:
             raise DeliveryError(f"Match {match_id} not found")
+        if match.status == MatchStatus.REJECTED:
+            return None
         existing = (
             await s.execute(
                 select(PublishedPost).where(PublishedPost.match_id == match_id)

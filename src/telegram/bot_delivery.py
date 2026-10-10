@@ -145,6 +145,9 @@ async def send_match_via_bot(
         match = await s.get(Match, match_id)
         if match is None:
             raise BotDeliveryError(f"Match {match_id} not found")
+        if match.status == MatchStatus.REJECTED:
+            # A human rejection is terminal: a rejected match is never sent.
+            return None
         existing = (
             await s.execute(select(PublishedPost).where(PublishedPost.match_id == match_id))
         ).scalar_one_or_none()

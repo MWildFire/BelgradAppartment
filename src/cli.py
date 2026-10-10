@@ -739,47 +739,16 @@ def rematch_all(hamming: int | None, keep_published: bool) -> None:
 
 
 async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
-    from sqlalchemy import delete, update
-
-    from src.db.models import InboundPost, InboundStatus, Match, MatchStatus
-    from src.db.session import get_session
+    from src.matching.review_queue import reset_for_rematch
 
     settings = get_settings()
     if hamming is not None:
         settings.phash_max_hamming = hamming
         click.echo(f"→ Using Hamming threshold = {hamming} for this run only.")
 
-    async with get_session() as s:
-        if keep_published:
-            # Delete only non-published Match rows; preserve history.
-            await s.execute(
-                delete(Match).where(Match.status != MatchStatus.PUBLISHED)
-            )
-            # Reset inbound status — but never touch ones with a PublishedPost.
-            published_ib_ids = set(
-                (await s.execute(
-                    select(InboundPost.id)
-                    .join(Match, Match.inbound_post_id == InboundPost.id)
-                    .where(Match.status == MatchStatus.PUBLISHED)
-                )).scalars().all()
-            )
-            if published_ib_ids:
-                await s.execute(
-                    update(InboundPost)
-                    .where(~InboundPost.id.in_(published_ib_ids))
-                    .values(status=InboundStatus.NEW)
-                )
-            else:
-                await s.execute(update(InboundPost).values(status=InboundStatus.NEW))
-        else:
-            click.echo("⚠️  --reset-published: wiping ALL matches including published history")
-            await s.execute(delete(Match))
-            await s.execute(update(InboundPost).values(status=InboundStatus.NEW))
-        from src.db.models import ValidationJob
-
-        await s.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(
-            select(InboundPost.id).where(InboundPost.status == InboundStatus.NEW),
-        )))
+    if not keep_published:
+        click.echo("⚠️  --reset-published: wiping ALL matches including published history")
+    await reset_for_rematch(keep_published=keep_published)
     click.echo("→ State reset. Running matcher...")
 
     import time as _time

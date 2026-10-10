@@ -51,7 +51,10 @@ def evaluate_source(result) -> SourceEvaluation:
         reasons.append("no_observations")
     reasons.extend(result.quality_reasons)
     reasons = list(dict.fromkeys(reasons))
-    outcome = "degraded" if reasons else "ok"
+    # Item errors are warnings in the summary (see _nightly_unhealthy); they still block the
+    # sweep through sweep_allowed, but on their own they do not degrade the source outcome.
+    blocking = [reason for reason in reasons if reason != "item_errors"]
+    outcome = "degraded" if blocking else "ok"
     if (
         result.stop_reason in {"source_exception", "list_exception"}
         or (result.errors and not result.fetched)

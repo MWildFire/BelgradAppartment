@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import delete, exists, or_, select, update
 
 from src.db import InboundPost, InboundStatus, Match, MatchStatus, get_session
-from src.db.models import DigestWorkItem, ValidationJob
+from src.db.models import DigestWorkItem, MatchDelivery, ValidationJob
 
 REVIEW_DECISIONS = {"NO_MATCH": InboundStatus.NO_MATCH, "DUPLICATE": InboundStatus.DUPLICATE}
 REASON_MAX_LENGTH = 256
@@ -65,6 +65,7 @@ async def pending_report(limit: int = 50) -> dict[str, list[dict[str, Any]]]:
 
 
 async def requeue_validation(inbound_id: int) -> bool:
+    """Operator retry for an automatic case; a manual decision stays terminal."""
     now = datetime.now(UTC)
     async with get_session() as session:
         owned = (
@@ -73,6 +74,10 @@ async def requeue_validation(inbound_id: int) -> bool:
                 .where(
                     ValidationJob.inbound_id == inbound_id,
                     or_(ValidationJob.lease_until.is_(None), ValidationJob.lease_until <= now),
+                    or_(
+                        ValidationJob.reason_code.is_(None),
+                        ValidationJob.reason_code.not_like("manual_%"),
+                    ),
                     ~exists(select(Match.id).where(Match.inbound_post_id == inbound_id)),
                 )
                 .values(
@@ -158,7 +163,11 @@ async def close_review(inbound_id: int, decision: str, reason: str) -> None:
 
 
 async def reject_match(match_id: int, reason: str) -> str:
-    """Reject a PENDING match that was never sent; PUBLISHED matches stay with the admin tool."""
+    """Reject a PENDING match that was never sent; PUBLISHED matches stay with the admin tool.
+
+    The status change is one conditional statement that applies only while no delivery record
+    exists. The recipient claim refuses a REJECTED match, so the two cannot interleave.
+    """
     reason = _clean_reason(reason)
     async with get_session() as session:
         match = await session.get(Match, match_id)
@@ -170,6 +179,66 @@ async def reject_match(match_id: int, reason: str) -> str:
             raise ReviewError(
                 f"match {match_id}: статус {match.status.value}; отклоняйте через админку"
             )
-        match.status = MatchStatus.REJECTED
-        match.rejection_reason = reason
+        rejected = (
+            await session.execute(
+                update(Match)
+                .where(
+                    Match.id == match_id,
+                    Match.status == MatchStatus.PENDING,
+                    ~exists(select(MatchDelivery.id).where(MatchDelivery.match_id == match_id)),
+                )
+                .values(status=MatchStatus.REJECTED, rejection_reason=reason)
+                .returning(Match.id)
+            )
+        ).scalar_one_or_none()
+        if rejected is None:
+            raise ReviewError(f"match {match_id}: есть записи доставки или статус изменился")
         return "rejected"
+
+
+async def reset_for_rematch(*, keep_published: bool) -> None:
+    """Operator reset before a full rematch; operator decisions are not erased.
+
+    With keep_published, published matches, rejected matches and manual review decisions survive.
+    Other inbound posts return to NEW, and their non-published, non-rejected matches are removed.
+    Without keep_published the caller has already confirmed an explicit full wipe.
+    """
+    async with get_session() as session:
+        if keep_published:
+            await session.execute(
+                delete(Match).where(
+                    Match.status.notin_([MatchStatus.PUBLISHED, MatchStatus.REJECTED])
+                )
+            )
+            kept = set(
+                (
+                    await session.execute(
+                        select(InboundPost.id)
+                        .join(Match, Match.inbound_post_id == InboundPost.id)
+                        .where(Match.status == MatchStatus.PUBLISHED)
+                    )
+                ).scalars()
+            )
+            kept |= set(
+                (
+                    await session.execute(
+                        select(ValidationJob.inbound_id).where(
+                            ValidationJob.reason_code.like("manual_%")
+                        )
+                    )
+                ).scalars()
+            )
+            reset = update(InboundPost).values(status=InboundStatus.NEW)
+            if kept:
+                reset = reset.where(~InboundPost.id.in_(kept))
+            await session.execute(reset)
+        else:
+            await session.execute(delete(Match))
+            await session.execute(update(InboundPost).values(status=InboundStatus.NEW))
+        await session.execute(
+            delete(ValidationJob).where(
+                ValidationJob.inbound_id.in_(
+                    select(InboundPost.id).where(InboundPost.status == InboundStatus.NEW)
+                )
+            )
+        )
