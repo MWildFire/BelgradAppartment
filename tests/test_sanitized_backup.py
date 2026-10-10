@@ -4,6 +4,7 @@ import argparse
 import copy
 import errno
 import json
+import os
 import re
 import shutil
 import socket
@@ -1872,6 +1873,37 @@ def test_source_bootstrap_refuses_group_or_world_writable_files_and_directories(
     path = tools / target
     path.chmod(0o664 if path.is_file() else 0o775)
     result = run_bootstrap(tools, "--help")
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == {"result": "blocked", "reason": "remote_helper_mode_unsafe"}
+
+
+def test_source_bootstrap_refuses_files_not_owned_by_the_operator_or_root(tmp_path):
+    if os.getuid() == 0:
+        pytest.skip("as root every file is owned by root, which the bootstrap accepts")
+    tools = helper_tools(tmp_path)
+    # The wrapper only changes the euid the bootstrap compares with; the files keep their owner.
+    wrapper = (
+        "import os,sys; boot=sys.argv.pop(1); os.geteuid=lambda: 4242; "
+        "exec(compile(boot,'<boot>','exec'))"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            wrapper,
+            pin.HELPER_BOOT,
+            str(tools),
+            pin.HELPER_SET_SHA256,
+            json.dumps(sorted(pin.HELPER_FILES)),
+            "scripts.sanitized_backup",
+            "--help",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
     assert result.returncode == 1
     assert json.loads(result.stdout) == {"result": "blocked", "reason": "remote_helper_mode_unsafe"}
 
