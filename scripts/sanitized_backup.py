@@ -985,10 +985,10 @@ def receive(args):
       verified           verification passed and the result is recorded
       kept_for_operator  the source may be discarded or already is; the copy is kept
     A local copy is deleted only in retained and transferring, where no verification has
-    succeeded. A failed verification is written down as transferring before its copy is removed.
-    From verifying onward neither a failure nor a restart deletes the copy: the record blocks resume
-    and fresh runs until an operator resolves it. The record is removed last, after the generation
-    and its receipt are durable.
+    succeeded. A verification that raises is written down as transferring before its copy is
+    removed. Once verification has succeeded, or a restart finds verifying, the copy is kept and
+    the record blocks resume and fresh runs until an operator resolves it. The record is removed
+    last, after the generation and its receipt are durable.
     """
     # Local receiver only: the remote helper never imports the batching module.
     from scripts import bounded_transfer as bounded
@@ -1147,8 +1147,8 @@ def receive(args):
         _fsync_path(resume_record.parent)
         return result
     except BaseException:
-        # Before verification nothing has been verified, so a partial copy is removed and the
-        # record stays for a resume. From verifying onward the copy is kept for the operator.
+        # A copy is removed here only while no verification has succeeded; its record says so
+        # (requested, retained or transferring). Anything else is kept for the operator.
         if not verify_may_have_started and pending.exists():
             shutil.rmtree(pending)
         raise
