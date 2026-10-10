@@ -607,7 +607,9 @@ def create_snapshot(args):
     }
 
 
-def verify_snapshot(folder, *, application=False, progress=None, _scanned_media=None):
+def verify_snapshot(
+    folder, *, application=False, progress=None, _scanned_media=None, scratch_parent=None
+):
     require(not application or _scanned_media is None, "scan_reuse_for_restore_forbidden")
     folder = folder.absolute()
     require(folder.resolve() == folder and folder.is_dir(), "invalid_snapshot_directory")
@@ -696,20 +698,26 @@ def verify_snapshot(folder, *, application=False, progress=None, _scanned_media=
         "offhost_verified": False,
     }
     if application:
-        child = subprocess.run(
-            [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "_smoke",
-                str(folder),
-                "--application-project-root",
-                str(recovery.ROOT),
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=120,
-        )
+        # This process creates the scratch directory and removes it, also when the child is killed
+        # at the timeout. A killed child therefore cannot leave a copy of the database behind.
+        with tempfile.TemporaryDirectory(
+            prefix=".sanitized-restore-", dir=scratch_parent or folder.parent
+        ) as scratch:
+            child = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve()),
+                    "_smoke",
+                    str(folder),
+                    scratch,
+                    "--application-project-root",
+                    str(recovery.ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=120,
+            )
         require(child.returncode == 0, "offline_application_restore_failed")
         smoke = json.loads(child.stdout)
         require(
@@ -1120,7 +1128,7 @@ def receive(args):
             verify_may_have_started = True
             _durable_write(resume_record, _resume_record(args, source_checksum, state=VERIFYING))
             try:
-                result = verify_snapshot(pending, application=True)
+                result = verify_snapshot(pending, application=True, scratch_parent=pending)
             except BaseException:
                 # The copy is not evidence: write that down, then let the handler remove it. The
                 # source snapshot is still on the server, because the discard has not run yet.
@@ -1235,15 +1243,18 @@ def inspect_snapshot(args):
     }
 
 
-def _smoke(folder):
-    """Keep all disposable restore databases inside the approved backup namespace."""
-    with tempfile.TemporaryDirectory(prefix=".sanitized-restore-", dir=folder.parent) as work:
-        previous = tempfile.tempdir
-        try:
-            tempfile.tempdir = work
-            return _offline_smoke(folder)
-        finally:
-            tempfile.tempdir = previous
+def _smoke(folder, scratch):
+    """Child process: disposable restore databases go only into the scratch its parent removes."""
+    require(
+        scratch.is_dir() and scratch.name.startswith(".sanitized-restore-"),
+        "invalid_restore_scratch",
+    )
+    previous = tempfile.tempdir
+    try:
+        tempfile.tempdir = str(scratch)
+        return _offline_smoke(folder)
+    finally:
+        tempfile.tempdir = previous
 
 
 def _offline_smoke(folder):
@@ -1346,6 +1357,7 @@ def main():
     receiver.add_argument("--resume-manifest-sha256")
     smoke = commands.add_parser("_smoke")
     smoke.add_argument("directory", type=Path)
+    smoke.add_argument("scratch", type=Path)
     discard = commands.add_parser("discard-snapshot")
     discard.add_argument("directory", type=Path)
     discard.add_argument("--manifest-sha256", required=True)
@@ -1373,7 +1385,7 @@ def main():
         elif args.command == "resolve-requested":
             result = resolve_requested(args)
         elif args.command == "_smoke":
-            result = _smoke(args.directory.absolute())
+            result = _smoke(args.directory.absolute(), args.scratch.absolute())
         elif args.command == "discard-snapshot":
             result = discard_snapshot(args)
         elif args.command == "inspect-snapshot":

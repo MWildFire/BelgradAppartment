@@ -770,7 +770,7 @@ def test_application_child_failure_cannot_print_private_stderr_or_pass(snapshot,
         backup.verify_snapshot(snapshot, application=True)
 
 
-def test_child_network_guard_blocks_dns_and_connect_before_smoke(snapshot, monkeypatch):
+def test_child_network_guard_blocks_dns_and_connect_before_smoke(snapshot, tmp_path, monkeypatch):
     # Restore globals after testing the child-only guard in this process.
     monkeypatch.setattr(backup.os, "environ", copy.copy(backup.os.environ))
     for name in ("connect", "connect_ex", "sendto", "sendmsg"):
@@ -804,8 +804,10 @@ def test_child_network_guard_blocks_dns_and_connect_before_smoke(snapshot, monke
         raise RuntimeError("guard_verified_stop")
 
     monkeypatch.setattr(backup.recovery, "application_smoke", intercept)
+    scratch = tmp_path / ".sanitized-restore-guard"
+    scratch.mkdir()
     with pytest.raises(RuntimeError, match="guard_verified_stop"):
-        backup._smoke(snapshot)
+        backup._smoke(snapshot, scratch)
 
 
 def test_cli_errors_are_value_free_and_require_explicit_loss_acknowledgement(tmp_path):
@@ -1110,23 +1112,77 @@ def test_receipt_write_failure_retains_only_an_unaccepted_generation(
         backup.receive(args)
 
 
-def test_restore_scratch_stays_in_backup_namespace_and_is_removed(snapshot, monkeypatch):
-    previous = backup.tempfile.tempdir
-    scratch = []
+def smoke_child_result():
+    return {
+        "application": {
+            "catalog": 200,
+            "apartment": 200,
+            "photo": 200,
+            "photo_decoded": True,
+            "network": "disabled",
+        },
+        "listing_albums": backup.ALBUM_RESULT | {"network": "disabled"},
+    }
 
-    def inspect(_folder):
-        root = Path(backup.tempfile.gettempdir())
-        assert root.parent == snapshot.parent and root.stat().st_mode & 0o777 == 0o700
-        with backup.tempfile.TemporaryDirectory() as temporary:
-            assert Path(temporary).parent == root
-            scratch.append(Path(temporary))
-            (Path(temporary) / "synthetic.db").write_text("synthetic only")
-        scratch.append(root)
-        return {"test": "scratch_isolated"}
 
-    monkeypatch.setattr(backup, "_offline_smoke", inspect)
-    assert backup._smoke(snapshot) == {"test": "scratch_isolated"}
-    assert backup.tempfile.tempdir == previous and all(not p.exists() for p in scratch)
+def killed_child(command, **kwargs):
+    """A child that wrote a database copy into its scratch and was killed at the timeout."""
+    scratch = Path(command[command.index("_smoke") + 2])
+    (scratch / "admin-copy.db").write_bytes(b"synthetic copy of the database")
+    raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+
+def test_restore_scratch_is_made_by_the_parent_and_removed_after_the_child(snapshot, monkeypatch):
+    seen = {}
+
+    def child(command, **_kwargs):
+        scratch = Path(command[command.index("_smoke") + 2])
+        seen.update(path=scratch, parent=scratch.parent, mode=scratch.stat().st_mode & 0o777)
+        (scratch / "synthetic.db").write_text("synthetic only")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(smoke_child_result()))
+
+    monkeypatch.setattr(backup.subprocess, "run", child)
+    result = backup.verify_snapshot(snapshot, application=True)
+    assert result["result"] == "data_restore_verified"
+    assert seen["parent"] == snapshot.parent and seen["mode"] == 0o700
+    assert not seen["path"].exists()
+
+
+def test_child_refuses_a_scratch_that_is_not_a_dedicated_restore_directory(
+    snapshot, tmp_path, monkeypatch
+):
+    plain = tmp_path / "plain-directory"
+    plain.mkdir()
+    with pytest.raises(backup.scan.PreflightError, match=r"^invalid_restore_scratch$"):
+        backup._smoke(snapshot, plain)
+
+
+def test_killed_smoke_child_leaves_no_scratch_next_to_or_inside_the_snapshot(snapshot, monkeypatch):
+    monkeypatch.setattr(backup.subprocess, "run", killed_child)
+    with pytest.raises(subprocess.TimeoutExpired):
+        backup.verify_snapshot(snapshot, application=True)
+    assert not list(snapshot.parent.glob(".sanitized-restore-*"))
+    assert not list(snapshot.glob(".sanitized-restore-*"))
+
+
+def test_receive_removes_the_copy_scratch_when_the_child_is_killed(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    seen = {}
+
+    def killed_in_the_copy(command, **kwargs):
+        seen["parent"] = Path(command[command.index("_smoke") + 2]).parent
+        return killed_child(command, **kwargs)
+
+    monkeypatch.setattr(backup.subprocess, "run", killed_in_the_copy)
+    with pytest.raises(subprocess.TimeoutExpired):
+        backup.receive(args)
+    root, generation = args.private_root, args.source_snapshot.name
+    assert seen["parent"] == root / "pending" / generation  # the scratch lived inside the copy
+    assert not list(root.rglob(".sanitized-restore-*"))
+    assert not (root / "pending" / generation).exists()
+    record = backup.read_json(root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.TRANSFERRING
 
 
 def test_snapshot_has_explicit_long_deadline_and_retains_guarded_transport(tmp_path, monkeypatch):
