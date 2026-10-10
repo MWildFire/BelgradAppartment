@@ -1572,6 +1572,67 @@ def test_resume_replaces_a_partial_pending_copy_left_by_an_interrupted_transfer(
     assert (args.private_root / "generations" / generation).exists()
 
 
+def receive_while_a_resume_is_refused_the_lease(snapshot, tmp_path, monkeypatch):
+    """Receiver A holds the lease and is mid-transfer when receiver B, a resume, is refused it.
+
+    Returns A's result and what A's files looked like at the moment B failed.
+    """
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    generation = args.source_snapshot.name
+    pending = args.private_root / "pending" / generation
+    rival = receiver_args(tmp_path)
+    rival.resume_manifest_sha256 = recovery.digest(snapshot / "manifest.json")
+    busy = {"held": False}
+    seen = {}
+
+    @contextmanager
+    def exclusive_lease(_args):
+        if busy["held"]:
+            raise backup.scan.PreflightError("remote backup lock unavailable")
+        busy["held"] = True
+        try:
+            yield
+        finally:
+            busy["held"] = False
+
+    real_run = backup.transport.run
+
+    def transfer_with_a_refused_rival(command):
+        if "--files-from" in command and "listing" not in seen:
+            seen["listing"] = Path(command[command.index("--files-from") + 1])
+            with pytest.raises(backup.scan.PreflightError, match=r"^remote backup lock unavailable$"):
+                backup.receive(rival)
+            seen["listing_survived"] = seen["listing"].exists()
+            seen["pending_survived"] = pending.is_dir()
+            if not (seen["listing_survived"] and seen["pending_survived"]):
+                raise AssertionError(f"the refused receiver removed the holder's files: {seen}")
+        return real_run(command)
+
+    monkeypatch.setattr(backup.transport, "remote_lease", exclusive_lease)
+    monkeypatch.setattr(backup.transport, "run", transfer_with_a_refused_rival)
+    result = backup.receive(args)
+    return result, seen
+
+
+def test_a_refused_second_receiver_leaves_the_holders_listing_in_place(
+    snapshot, tmp_path, monkeypatch
+):
+    result, seen = receive_while_a_resume_is_refused_the_lease(snapshot, tmp_path, monkeypatch)
+    assert seen["listing_survived"] is True  # the refused receiver removed only its own listing
+    assert result["offhost_verified"] is True
+    assert not seen["listing"].exists()  # the holder removed its own listing when it finished
+
+
+def test_a_refused_second_receiver_leaves_the_holders_pending_copy_in_place(
+    snapshot, tmp_path, monkeypatch
+):
+    result, seen = receive_while_a_resume_is_refused_the_lease(snapshot, tmp_path, monkeypatch)
+    assert seen["pending_survived"] is True
+    assert result["offhost_verified"] is True
+    assert result["files_transferred"] == 150
+
+
 def test_copy_is_flushed_before_the_source_is_discarded(snapshot, tmp_path, monkeypatch):
     args = receiver_args(tmp_path)
     fake_transport(snapshot, args, monkeypatch)

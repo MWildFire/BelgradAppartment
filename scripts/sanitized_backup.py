@@ -1123,7 +1123,8 @@ def receive(args):
     pending, destination = root / "pending" / generation, root / "generations" / generation
     resume_record = root / "resume" / (generation + ".json")
     receipt = root / "receipts" / (generation + ".json")
-    listing = root / "pending" / (generation + ".files")
+    # Named per run: a receiver refused the lease must never remove the listing of the one holding it.
+    listing = root / "pending" / f"{generation}.{uuid.uuid4().hex}.files"
     resuming = getattr(args, "resume_manifest_sha256", None) is not None
     if resuming:
         require(
