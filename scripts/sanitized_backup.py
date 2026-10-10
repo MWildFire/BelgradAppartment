@@ -920,16 +920,19 @@ def _fsync_path(path):
 def _durable_write(path, value):
     """Replace path so that a power loss keeps the old record or the new one, never a torn file.
 
-    Order: temporary file flushed, renamed over the record, then the parent directory flushed.
-    Leftover temporaries never became records. Only resume/ is swept, under the lease, because
-    every resume write happens under the lease; other leftovers are ignored.
+    Order: the temporary file is written and flushed through the descriptor that wrote it, then
+    closed, renamed over the record, and the parent directory is flushed. F_FULLFSYNC is issued at
+    each flush; no power-loss test measures it. Leftover temporaries never became records. Only
+    resume/ is swept, under the lease, because every resume write happens under the lease; other
+    leftovers are ignored.
     """
     temporary = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.tmp")
     try:
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(json.dumps(value, sort_keys=True).encode())
-        _fsync_path(temporary)
+            handle.flush()  # from Python's buffer to the file, so the flush below covers the bytes
+            _flush(handle.fileno())
         os.replace(temporary, path)
     except BaseException:
         temporary.unlink(missing_ok=True)

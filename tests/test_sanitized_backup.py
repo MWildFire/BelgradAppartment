@@ -2190,25 +2190,42 @@ def test_failed_verification_records_an_unverified_copy_and_removes_it(
     assert backup.receive(args)["offhost_verified"] is True
 
 
-def test_durable_write_flushes_the_temporary_file_renames_then_flushes_the_directory(
+def test_durable_write_flushes_through_the_writing_descriptor_before_close_rename_and_dir_flush(
     tmp_path, monkeypatch
 ):
     events = []
     real_replace = backup.os.replace
 
+    def is_open(descriptor):
+        try:
+            REAL_FCNTL(descriptor, fcntl.F_GETFD)
+        except OSError:
+            return False
+        return True
+
+    def flush(descriptor):
+        # The descriptor is the one that wrote the record (O_WRONLY), and the bytes are already in
+        # the file when the flush runs: the Python buffer was flushed first.
+        access = REAL_FCNTL(descriptor, fcntl.F_GETFL) & os.O_ACCMODE
+        events.append(("flush", access, os.fstat(descriptor).st_size, descriptor))
+        return backup.DURABILITY_MODE
+
     def replace(source, target):
-        events.append(("rename", Path(target)))
+        # The writing descriptor must be closed before the temporary becomes the record.
+        events.append(("rename", Path(source), Path(target), is_open(events[0][3])))
         real_replace(source, target)
 
-    monkeypatch.setattr(backup, "_fsync_path", lambda path: events.append(("fsync", Path(path))))
+    monkeypatch.setattr(backup, "_flush", flush)
     monkeypatch.setattr(backup.os, "replace", replace)
     target = tmp_path / "record.json"
     backup._durable_write(target, {"state": "verified"})
-    assert [kind for kind, _ in events] == ["fsync", "rename", "fsync"]
-    temporary = events[0][1]
+    assert [event[0] for event in events] == ["flush", "rename", "flush"]
+    _, access, size, _ = events[0]
+    assert access == os.O_WRONLY and size > 0
+    _, temporary, renamed_to, writer_open = events[1]
     assert temporary.parent == tmp_path and temporary.suffix == ".tmp"
-    assert events[1] == ("rename", target)
-    assert events[2] == ("fsync", tmp_path)
+    assert renamed_to == target and writer_open is False
+    assert events[2][1] == os.O_RDONLY  # the parent directory, flushed after the rename
     assert json.loads(target.read_text()) == {"state": "verified"}
 
 
