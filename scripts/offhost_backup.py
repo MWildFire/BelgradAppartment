@@ -213,10 +213,27 @@ def remote_lease(args):
 
 
 def atomic_json(path, value):
+    """Replace path with JSON: flush the temporary file, rename it, then flush the directory.
+
+    A power loss keeps the old file or the new one, never a torn one. This is a plain fsync: the
+    source host has no F_FULLFSYNC, and receiver copies are checked by digest before use.
+    """
     temporary = path.with_suffix(f".{uuid4().hex}.tmp")
-    temporary.write_text(json.dumps(value, sort_keys=True))
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(json.dumps(value, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def completed(root):

@@ -636,3 +636,31 @@ def test_cleanup_failure_cannot_publish_receipt_after_failed_acceptance(
     assert not job.completed(args.private_root)
     if failed_step == "receipt":
         assert len(attempts) == 1
+
+
+def test_atomic_json_flushes_the_file_before_the_rename_and_the_directory_after(
+    tmp_path, monkeypatch
+):
+    import os
+    import stat
+
+    events = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(descriptor):
+        kind = "directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file"
+        events.append(("fsync", kind))
+        real_fsync(descriptor)
+
+    def replace(source, target):
+        events.append(("rename", Path(target).name))
+        real_replace(source, target)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    target = tmp_path / "progress.json"
+    job.atomic_json(target, {"phase": "copy"})
+    assert events == [("fsync", "file"), ("rename", "progress.json"), ("fsync", "directory")]
+    assert json.loads(target.read_text()) == {"phase": "copy"}
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert not list(tmp_path.glob("*.tmp"))
