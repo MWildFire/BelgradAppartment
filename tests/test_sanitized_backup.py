@@ -522,6 +522,25 @@ def test_receive_transfers_in_bounded_batches(snapshot, tmp_path, monkeypatch):
     assert result["offhost_verified"] is True
 
 
+def test_receive_refuses_a_file_over_the_batch_cap_before_any_transfer(
+    snapshot, tmp_path, monkeypatch
+):
+    # The size comes from the manifest, which the receiver trusts for batching; a file over the cap
+    # is refused on that size before the first transfer, whatever the bytes on the source are.
+    change_manifest(
+        snapshot, lambda m: m["files"]["data/otz.db"].update(size=256 * 1024**2 + 1)
+    )
+    args = receiver_args(tmp_path)
+    calls = fake_transport(snapshot, args, monkeypatch)
+    with pytest.raises(backup.scan.PreflightError, match=r"^file_over_batch_cap$"):
+        backup.receive(args)
+    assert not [call for call in calls if "--files-from" in call]
+    generation = args.source_snapshot.name
+    assert not (args.private_root / "pending" / generation).exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.TRANSFERRING  # a resume would transfer again, and refuse again
+
+
 def test_receive_keeps_verified_copy_when_lease_fails_after_source_discard(
     snapshot, tmp_path, monkeypatch
 ):

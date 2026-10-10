@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.bounded_transfer import batches, encode_batch
+from scripts.bounded_transfer import MAX_CONTENT_BYTES, batches, encode_batch
 
 
 class BoundedTransferTests(unittest.TestCase):
@@ -29,11 +29,22 @@ class BoundedTransferTests(unittest.TestCase):
         self.assertEqual([n for c in chunks for n in c], names)
         self.assertEqual([len(c) for c in chunks], [2, 2, 2])  # 2 x 400 fits, 3 x 400 does not
 
-    def test_a_file_larger_than_the_content_limit_is_sent_alone(self):
-        names = ["data/otz.db", "data/a.jpg", "data/b.jpg"]
-        sizes = {"data/otz.db": 5000, "data/a.jpg": 10, "data/b.jpg": 10}
-        chunks = list(batches(names, sizes=sizes, max_content_bytes=1000))
-        self.assertEqual(chunks, [["data/otz.db"], ["data/a.jpg", "data/b.jpg"]])
+    def test_a_file_larger_than_the_content_limit_is_refused_not_batched(self):
+        names = ["data/a.jpg", "data/otz.db", "data/b.jpg"]
+        sizes = {"data/a.jpg": 10, "data/otz.db": 5000, "data/b.jpg": 10}
+        with self.assertRaisesRegex(ValueError, "^file_over_batch_cap$"):
+            list(batches(names, sizes=sizes, max_content_bytes=1000))
+
+    def test_the_default_content_limit_is_256_mib_and_splits_batches_by_size(self):
+        self.assertEqual(MAX_CONTENT_BYTES, 256 * 1024**2)
+        names = [f"data/listings/{n:03d}.jpg" for n in range(3)]
+        sizes = {name: 100 * 1024**2 for name in names}
+        self.assertEqual([len(c) for c in batches(names, sizes=sizes)], [2, 1])  # 200 MiB, then 100
+        sizes = {name: MAX_CONTENT_BYTES for name in names}  # exactly the cap is still accepted
+        self.assertEqual([len(c) for c in batches(names, sizes=sizes)], [1, 1, 1])
+        sizes = {name: MAX_CONTENT_BYTES + 1 for name in names}
+        with self.assertRaisesRegex(ValueError, "^file_over_batch_cap$"):
+            list(batches(names, sizes=sizes))
 
     def test_content_limit_needs_a_size_for_every_name(self):
         with self.assertRaises(ValueError):

@@ -1,9 +1,11 @@
 """Bound rsync's files-from exchange; never broaden the manifest allowlist."""
 from pathlib import PurePosixPath
 
-# One rsync call moves at most MAX_CONTENT_BYTES of file content. The 7200 s timeout is reached only
-# on a link slower than about 150 kB/s, and a failed call repeats its own batch, not the copy.
-MAX_CONTENT_BYTES = 1024**3
+# One rsync call moves at most MAX_CONTENT_BYTES of file content and at most 1000 names. A batch
+# that runs longer than the 7200 s transport timeout fails. A failed batch is not retried: the run
+# stops, and a resume deletes the partial copy and transfers again. A full batch of 256 MiB takes
+# 7200 s at about 37 kB/s, so a channel slower than that fails every full batch.
+MAX_CONTENT_BYTES = 256 * 1024**2
 
 
 def batches(
@@ -12,7 +14,8 @@ def batches(
     """Split names into batches of at most max_files names and max_bytes encoded name bytes.
 
     When sizes maps every name to its file size, a batch also holds at most max_content_bytes of
-    file content. A single file above that limit is sent alone.
+    file content. A file above that limit cannot be batched: ValueError("file_over_batch_cap"). The
+    receiver refuses such a snapshot before its first transfer, on the manifest size.
     """
     if max_files < 1 or max_bytes < 2 or max_content_bytes < 1:
         raise ValueError("invalid_batch_limit")
@@ -42,6 +45,8 @@ def batches(
             file_bytes = sizes.get(name)
             if type(file_bytes) is not int or file_bytes < 0:
                 raise ValueError("invalid_file_size")
+            if file_bytes > max_content_bytes:
+                raise ValueError("file_over_batch_cap")
         if batch and (
             len(batch) >= max_files
             or size + length > max_bytes

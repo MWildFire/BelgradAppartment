@@ -1126,7 +1126,7 @@ def receive(args):
     pending, destination = root / "pending" / generation, root / "generations" / generation
     resume_record = root / "resume" / (generation + ".json")
     receipt = root / "receipts" / (generation + ".json")
-    # Named per run: a receiver refused the lease must never remove the listing of the one holding it.
+    # Named per run: a receiver refused the lease must never remove the listing of the holder.
     listing = root / "pending" / f"{generation}.{uuid.uuid4().hex}.files"
     resuming = getattr(args, "resume_manifest_sha256", None) is not None
     if resuming:
@@ -1155,8 +1155,8 @@ def receive(args):
         with transport.remote_lease(args):
             try:
                 _require_pinned_helper(args)
-                # Holding the lease, no other receiver is writing resume/: a temporary there was left
-                # by a receiver that was killed while it wrote a record.
+                # Holding the lease, no other receiver is writing resume/: a temporary there was
+                # left by a receiver that was killed while it wrote a record.
                 _discard_temporaries(root / "resume")
                 # The same checks again, now that this process holds the lease: another receiver may
                 # have written a record or finished the generation while this one waited for it.
@@ -1200,12 +1200,14 @@ def receive(args):
                     )
                     source_checksum = status["manifest_sha256"]
                     _durable_write(
-                        resume_record, _resume_record(args, source_checksum, request_id, state=RETAINED)
+                        resume_record,
+                        _resume_record(args, source_checksum, request_id, state=RETAINED),
                     )
                 pending.mkdir(mode=0o700)
                 created_copy = True
                 _durable_write(
-                    resume_record, _resume_record(args, source_checksum, request_id, state=TRANSFERRING)
+                    resume_record,
+                    _resume_record(args, source_checksum, request_id, state=TRANSFERRING),
                 )
                 transport.run(
                     [
@@ -1221,11 +1223,21 @@ def receive(args):
                 manifest = read_json(pending / "manifest.json")
                 check_manifest(manifest)
                 require(
-                    manifest["source_project_root"] == str(args.remote_root), "wrong_snapshot_source"
+                    manifest["source_project_root"] == str(args.remote_root),
+                    "wrong_snapshot_source",
+                )
+                # A file over the cap is refused before the first transfer, on its manifest size.
+                require(
+                    all(
+                        meta["size"] <= bounded.MAX_CONTENT_BYTES
+                        for meta in manifest["files"].values()
+                    ),
+                    "file_over_batch_cap",
                 )
                 require(
                     shutil.disk_usage(root).free
-                    >= args.min_free_gib * 1024**3 + sum(m["size"] for m in manifest["files"].values()),
+                    >= args.min_free_gib * 1024**3
+                    + sum(m["size"] for m in manifest["files"].values()),
                     "insufficient_receiver_space",
                 )
                 # Materialized first: every name is validated before the first transfer.
@@ -1255,7 +1267,8 @@ def receive(args):
                 # leaves a record that refuses the deletion a resume would otherwise perform.
                 verify_may_have_started = True
                 _durable_write(
-                    resume_record, _resume_record(args, source_checksum, request_id, state=VERIFYING)
+                    resume_record,
+                    _resume_record(args, source_checksum, request_id, state=VERIFYING),
                 )
                 try:
                     result = verify_snapshot(pending, application=True, scratch_parent=pending)
@@ -1278,8 +1291,8 @@ def receive(args):
                 )
                 # A volume that refuses F_FULLFSYNC raises here, before the source can be discarded.
                 durability_mode = _fsync_tree(pending)
-                # The copy's own entry lives in pending/: its directory is flushed the same way, after
-                # close, and that is not measured as a power-loss guarantee either.
+                # The copy's own entry lives in pending/: its directory is flushed the same way,
+                # after close, and that is not measured as a power-loss guarantee either.
                 _fsync_path(pending.parent)
                 # Recorded before the call: a crash or a lost answer during discard keeps the copy.
                 _durable_write(
@@ -1301,9 +1314,9 @@ def receive(args):
                 )
             except BaseException:
                 # Still under the lease: a copy this run made is removed only while no verification
-                # has started, and before the lease is released, so no other receiver can be writing
-                # it. Once verification has started, the copy is kept for the operator; a copy another
-                # receiver left behind is never removed here.
+                # has started, and before the lease is released, so no other receiver can be
+                # writing it. Once verification has started, the copy is kept for the operator; a
+                # copy another receiver left behind is never removed here.
                 if created_copy and not verify_may_have_started and pending.exists():
                     shutil.rmtree(pending)
                 raise
