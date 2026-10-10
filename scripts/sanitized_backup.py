@@ -74,6 +74,8 @@ KNOWN_STATES = frozenset(
     {REQUESTED, RETAINED, TRANSFERRING, VERIFYING, VERIFIED, KEPT_FOR_OPERATOR}
 )
 RESUMABLE_STATES = frozenset({RETAINED, TRANSFERRING})
+# The only durability the copy path accepts; recorded in the receipt.
+DURABILITY_MODE = "F_FULLFSYNC"
 require = scan.require
 
 
@@ -808,20 +810,23 @@ def _json_or_none(text):
 
 
 def _flush(descriptor):
-    # fsync alone does not reach the platter on macOS; F_FULLFSYNC does where the volume allows it.
-    if hasattr(fcntl, "F_FULLFSYNC"):
-        try:
-            fcntl.fcntl(descriptor, fcntl.F_FULLFSYNC)
-            return
-        except OSError:
-            pass  # this volume does not support it; plain fsync is the strongest flush left
-    os.fsync(descriptor)
+    """Flush to the device, or refuse. Never falls back to a plain fsync.
+
+    fsync alone does not reach the platter on macOS. A volume that declines F_FULLFSYNC cannot
+    give the durability the source discard depends on, so the caller must stop before discard.
+    """
+    require(hasattr(fcntl, "F_FULLFSYNC"), "full_flush_unavailable")
+    try:
+        fcntl.fcntl(descriptor, fcntl.F_FULLFSYNC)
+    except OSError:
+        raise scan.PreflightError("full_flush_refused") from None
+    return DURABILITY_MODE
 
 
 def _fsync_path(path):
     descriptor = os.open(path, os.O_RDONLY)
     try:
-        _flush(descriptor)
+        return _flush(descriptor)
     finally:
         os.close(descriptor)
 
@@ -851,11 +856,11 @@ def _discard_temporaries(directory):
 
 
 def _fsync_tree(folder):
-    """Flush every file, then every directory, deepest first, before the source is discarded."""
+    """Flush every file, then every directory, deepest first. Returns the durability mode used."""
     for path in sorted(folder.rglob("*"), key=lambda item: len(item.parts), reverse=True):
         if not path.is_symlink() and (path.is_file() or path.is_dir()):
             _fsync_path(path)
-    _fsync_path(folder)
+    return _fsync_path(folder)
 
 
 def _publish_generation(pending, destination):
@@ -1118,7 +1123,8 @@ def receive(args):
                 recovery.digest(pending / "manifest.json") == source_checksum,
                 "source_manifest_changed",
             )
-            _fsync_tree(pending)
+            # A volume that refuses F_FULLFSYNC raises here, before the source can be discarded.
+            durability_mode = _fsync_tree(pending)
             # Recorded before the call: a crash or a lost answer during discard keeps the copy.
             _durable_write(
                 resume_record,
@@ -1134,6 +1140,7 @@ def receive(args):
                 files_transferred=len(manifest["files"]),
                 media_reused_from_verified_seed=0,
                 source_temporary_snapshot_removed=True,
+                durability_mode=durability_mode,
             )
         # Lease release can itself fail. Publish proof only after the context exits cleanly.
         _publish_generation(pending, destination)

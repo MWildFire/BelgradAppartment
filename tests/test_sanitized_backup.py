@@ -3,6 +3,7 @@
 import argparse
 import copy
 import errno
+import fcntl
 import json
 import os
 import re
@@ -312,6 +313,19 @@ def test_frozen_snapshot_failures_never_yield_a_receipt(snapshot, fault):
         )
     with pytest.raises(backup.scan.PreflightError):
         backup.verify_snapshot(snapshot)
+
+
+REAL_FCNTL = fcntl.fcntl  # the real call, captured before any test patches it
+
+
+@pytest.fixture(autouse=True)
+def copy_volume_accepts_full_flush(monkeypatch):
+    """Model a volume that accepts F_FULLFSYNC, so the copy path runs on hosts without it (Linux CI).
+
+    Refusal and absence of the call are tested explicitly, where they matter.
+    """
+    monkeypatch.setattr(backup.fcntl, "F_FULLFSYNC", 51, raising=False)
+    monkeypatch.setattr(backup.fcntl, "fcntl", lambda descriptor, command: os.fsync(descriptor) or 0)
 
 
 def receiver_args(tmp_path):
@@ -1340,7 +1354,7 @@ def test_copy_is_flushed_before_the_source_is_discarded(snapshot, tmp_path, monk
     flush = backup._fsync_tree
     discard = backup._discard_remote
     monkeypatch.setattr(
-        backup, "_fsync_tree", lambda folder: (order.append("fsync"), flush(folder))
+        backup, "_fsync_tree", lambda folder: (order.append("fsync"), flush(folder))[1]
     )
     monkeypatch.setattr(
         backup, "_discard_remote", lambda a, checksum: (order.append("discard"), discard(a, checksum))
@@ -1766,7 +1780,7 @@ def test_durable_write_flushes_the_temporary_file_renames_then_flushes_the_direc
     assert json.loads(target.read_text()) == {"state": "verified"}
 
 
-def test_flush_uses_f_fullfsync_and_falls_back_to_fsync_when_the_volume_refuses(monkeypatch):
+def test_flush_uses_f_fullfsync_and_never_falls_back_to_fsync(monkeypatch):
     calls = []
     refuse = {"value": False}
 
@@ -1778,10 +1792,68 @@ def test_flush_uses_f_fullfsync_and_falls_back_to_fsync_when_the_volume_refuses(
 
     monkeypatch.setattr(backup, "fcntl", SimpleNamespace(F_FULLFSYNC=51, fcntl=fake_fcntl))
     monkeypatch.setattr(backup.os, "fsync", lambda descriptor: calls.append(("fsync", descriptor)))
-    backup._flush(7)
+    assert backup._flush(7) == "F_FULLFSYNC"
     refuse["value"] = True
-    backup._flush(8)
-    assert calls == [("F_FULLFSYNC", 7, 51), ("F_FULLFSYNC", 8, 51), ("fsync", 8)]
+    with pytest.raises(backup.scan.PreflightError, match=r"^full_flush_refused$"):
+        backup._flush(8)
+    assert calls == [("F_FULLFSYNC", 7, 51), ("F_FULLFSYNC", 8, 51)]
+
+
+def test_flush_refuses_a_platform_without_f_fullfsync(monkeypatch):
+    monkeypatch.setattr(backup, "fcntl", SimpleNamespace(fcntl=lambda descriptor, command: 0))
+    with pytest.raises(backup.scan.PreflightError, match=r"^full_flush_unavailable$"):
+        backup._flush(7)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="F_FULLFSYNC is a macOS call")
+def test_full_flush_on_macos_succeeds_for_files_and_directories_of_this_volume(tmp_path, monkeypatch):
+    monkeypatch.setattr(backup.fcntl, "fcntl", REAL_FCNTL)
+    probe = tmp_path / "probe.json"
+    probe.write_bytes(b"{}")
+    assert backup._fsync_path(probe) == "F_FULLFSYNC"
+    assert backup._fsync_path(tmp_path) == "F_FULLFSYNC"
+
+
+def test_refused_full_flush_on_the_copy_keeps_the_copy_and_never_discards_the_source(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    refusing = {"on": False}
+
+    def declined(descriptor, command):
+        if refusing["on"]:
+            raise OSError(errno.ENOTSUP, "volume declines F_FULLFSYNC")
+        return os.fsync(descriptor) or 0
+
+    monkeypatch.setattr(backup.fcntl, "fcntl", declined)
+    real_tree = backup._fsync_tree
+
+    def copy_on_a_declining_volume(folder):
+        refusing["on"] = True
+        return real_tree(folder)
+
+    monkeypatch.setattr(backup, "_fsync_tree", copy_on_a_declining_volume)
+    discards = []
+    monkeypatch.setattr(backup, "_discard_remote", lambda *call: discards.append(call))
+    with pytest.raises(backup.scan.PreflightError, match=r"^full_flush_refused$"):
+        backup.receive(args)
+    assert discards == []
+    generation = args.source_snapshot.name
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.VERIFIED  # not kept_for_operator: the discard never began
+    assert (args.private_root / "pending" / generation / "manifest.json").exists()
+    assert not (args.private_root / "receipts" / (generation + ".json")).exists()
+
+
+def test_receipt_records_the_durability_mode_the_copy_was_flushed_with(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    result = backup.receive(args)
+    receipt = backup.read_json(args.private_root / "receipts" / (args.source_snapshot.name + ".json"))
+    assert result["durability_mode"] == receipt["durability_mode"] == "F_FULLFSYNC"
 
 
 def test_fsync_tree_flushes_nested_directories_deepest_first_and_the_root_last(
