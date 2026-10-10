@@ -1080,6 +1080,17 @@ def test_isolated_helper_bundle_runs_snapshot_and_restore_against_separate_appli
         check=False,
         cwd=tmp_path,
     )
+    if sys.platform != "darwin":
+        # The receipt is flushed with F_FULLFSYNC, which only macOS has. Off macOS the verify
+        # step must stop before the receipt exists; that refusal is what this test checks there.
+        assert restore.returncode == 1
+        assert json.loads(restore.stdout) == {
+            "result": "blocked",
+            "reason": "full_flush_unavailable",
+        }
+        assert not receipt.exists()
+        assert not (helpers.parent / "src").exists()
+        return
     assert restore.returncode == 0, restore.stdout
     result = backup.read_json(receipt)
     assert result["result"] == "data_restore_verified"
