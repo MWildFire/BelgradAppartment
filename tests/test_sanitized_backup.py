@@ -833,6 +833,22 @@ def test_cli_errors_are_value_free_and_require_explicit_loss_acknowledgement(tmp
     assert json.loads(result.stdout) == {"result": "blocked", "reason": "url_loss_not_acknowledged"}
 
 
+def test_manifest_for_the_full_source_copy_is_read_within_the_limit(tmp_path):
+    # About 415,000 files at realistic name lengths. This is larger than the former 64 MiB limit.
+    entries = {
+        f"data/listings/CETIRI_ZIDA/{index:08d}-synthetic-listing-identifier/{index % 1000:03d}.webp": {
+            "size": 123456,
+            "sha256": "0" * 64,
+        }
+        for index in range(420_000)
+    }
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps({"files": entries}, sort_keys=True))
+    assert 64 * 1024 * 1024 < path.stat().st_size < backup.MAX_MANIFEST_BYTES
+    assert backup.MAX_MANIFEST_BYTES >= 2 * 415_000 * 230  # two times the largest measured entry
+    assert set(backup.read_json(path)["files"]) == set(entries)
+
+
 def test_exact_photo_evidence_manifest_is_accepted(source):
     with sqlite3.connect(source.db) as db:
         for identity, platform, external, hashes in db.execute(

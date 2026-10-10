@@ -39,7 +39,9 @@ from scripts import sanitized_contract as policy
 
 FORMAT = policy.FORMAT
 SCOPE = policy.SCOPE
-MAX_MANIFEST_BYTES = 64 * 1024 * 1024
+# A manifest entry is about 170 to 230 bytes in the real format (measured for 60 to 120 character
+# names). 415,000 files therefore need 67 to 91 MiB; 256 MiB leaves about 2.8x headroom at 120.
+MAX_MANIFEST_BYTES = 256 * 1024 * 1024
 SNAPSHOT_TIMEOUT_SECONDS = 6 * 60 * 60
 REVISIONS = ["0016_identity_edges"]
 MANIFEST_KEYS = {
