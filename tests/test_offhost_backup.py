@@ -707,6 +707,25 @@ def test_completed_counts_only_this_drivers_generations_so_rotation_cannot_reach
         backup_format="data_only_directory_generation",
         manifest={"format": "renfinder-db-media-v1", "scope": "db_media", "created_at": created},
     )
+    # Each marker alone is enough to exclude a generation.
+    write_generation(
+        root,
+        "20261005-120000-dddddddd",
+        backup_format="sanitized_directory_generation",
+        manifest={"format": recovery.FORMAT, "created_at": created},
+    )
+    write_generation(
+        root,
+        "20261005-130000-eeeeeeee",
+        backup_format="directory_generation",
+        manifest={"format": "renfinder-db-media-v1", "created_at": created},
+    )
+    write_generation(
+        root,
+        "20261005-140000-ffffffff",
+        backup_format="directory_generation",
+        manifest={"format": recovery.FORMAT, "scope": "db_media", "created_at": created},
+    )
     assert [entry[1].name for entry in job.completed(root)] == ["20261005-090000-aaaaaaaa"]
 
 
