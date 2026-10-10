@@ -248,3 +248,39 @@ async def reset_for_rematch(*, keep_published: bool) -> None:
         if kept:
             jobs = jobs.where(~ValidationJob.inbound_id.in_(kept))
         await session.execute(jobs)
+
+
+async def decided_inbound_ids(inbound_ids: list[int]) -> set[int]:
+    """Posts an operator tool must not wipe.
+
+    Covered: manual review decisions, rejected or published matches, and matches with a delivery
+    that was sent, is being sent, or is unknown. Wiping such a post would let its recipients be
+    offered the same pair again.
+    """
+    if not inbound_ids:
+        return set()
+    async with get_session() as session:
+        manual = (
+            await session.execute(
+                select(ValidationJob.inbound_id).where(
+                    ValidationJob.inbound_id.in_(inbound_ids),
+                    ValidationJob.reason_code.like("manual_%"),
+                )
+            )
+        ).scalars().all()
+        protected = (
+            await session.execute(
+                select(Match.inbound_post_id).where(
+                    Match.inbound_post_id.in_(inbound_ids),
+                    or_(
+                        Match.status.in_([MatchStatus.PUBLISHED, MatchStatus.REJECTED]),
+                        Match.id.in_(
+                            select(MatchDelivery.match_id).where(
+                                MatchDelivery.status.in_(["sending", "sent", "unknown"])
+                            )
+                        ),
+                    ),
+                )
+            )
+        ).scalars().all()
+    return set(manual) | set(protected)

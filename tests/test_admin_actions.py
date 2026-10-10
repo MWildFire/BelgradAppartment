@@ -237,6 +237,17 @@ async def test_mark_posted_is_idempotent(client, db):
 
 
 @pytest.mark.asyncio
+async def test_mark_posted_refuses_a_rejected_match(client, db):
+    match_id = await _seed_match(db, status=MatchStatus.REJECTED)
+    r = client.post(f"/match/{match_id}/mark-posted", headers={**AUTH, **CSRF})
+    assert r.status_code == 400
+    assert "отклонён" in r.text
+    status, _ = await _match_state(db, match_id)
+    assert status == MatchStatus.REJECTED
+    assert await _published_count(db) == 0
+
+
+@pytest.mark.asyncio
 async def test_actions_on_missing_match_return_error_card(client, db):
     r = client.post("/match/999/reject", headers={**AUTH, **CSRF}, data={"reason": ""})
     assert r.status_code == 400

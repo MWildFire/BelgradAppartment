@@ -1257,12 +1257,12 @@ async def _test_batch(n: int, from_id: int | None) -> None:
         InboundPost,
         InboundStatus,
         Match,
-        MatchStatus,
         PublishedPost,
         ValidationJob,
     )
     from src.db.session import get_session
     from src.jobs.pipeline import process_new_inbound
+    from src.matching.review_queue import decided_inbound_ids
     from src.telegram.delivery import send_run_summary
 
     async with get_session() as s:
@@ -1276,28 +1276,8 @@ async def _test_batch(n: int, from_id: int | None) -> None:
         click.echo("  (no inbound posts found)")
         return
 
-    # Operator decisions are never wiped: skip posts with a manual decision or a rejected match.
-    async with get_session() as s:
-        decided = set(
-            (
-                await s.execute(
-                    select(ValidationJob.inbound_id).where(
-                        ValidationJob.inbound_id.in_(inbound_ids),
-                        ValidationJob.reason_code.like("manual_%"),
-                    )
-                )
-            ).scalars().all()
-        )
-        decided |= set(
-            (
-                await s.execute(
-                    select(Match.inbound_post_id).where(
-                        Match.inbound_post_id.in_(inbound_ids),
-                        Match.status == MatchStatus.REJECTED,
-                    )
-                )
-            ).scalars().all()
-        )
+    # Operator decisions and delivery history are never wiped: such posts are skipped.
+    decided = await decided_inbound_ids(inbound_ids)
     if decided:
         click.echo(f"  skipped posts with operator decisions: {sorted(decided)}")
         inbound_ids = [i for i in inbound_ids if i not in decided]

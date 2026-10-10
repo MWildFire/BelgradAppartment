@@ -40,11 +40,16 @@ async def test_requeue_still_retries_an_automatic_case(db):
     assert job.reason_code == "operator_retry"
 
 
-async def test_reject_is_refused_once_a_recipient_is_in_flight(db):
+@pytest.mark.parametrize("delivery_state", ["sending", "sent", "unknown"])
+async def test_reject_is_refused_once_a_recipient_is_in_flight(db, delivery_state):
     _, match_id = await seed_case(match_status=MatchStatus.PENDING)
     await prepare_recipients(match_id, [111])
     async with get_session() as s:
-        await s.execute(update(MatchDelivery).where(MatchDelivery.match_id == match_id).values(status="sent"))
+        await s.execute(
+            update(MatchDelivery)
+            .where(MatchDelivery.match_id == match_id)
+            .values(status=delivery_state)
+        )
 
     with pytest.raises(review_queue.ReviewError):
         await review_queue.reject_match(match_id, "объявление снято")
@@ -123,3 +128,26 @@ async def test_reset_still_rematches_a_pending_case_without_deliveries(db):
         assert await s.get(ValidationJob, iid) is None
     assert inbound.status == InboundStatus.NEW
     assert iid in await automatic_inbound_ids()
+
+
+async def test_decided_inbounds_protect_published_and_delivered_posts(db):
+    published_iid, _ = await seed_case(
+        inbound_status=InboundStatus.MATCHED, job_state="complete", match_status=MatchStatus.PUBLISHED
+    )
+    sent_iid, sent_match = await seed_case(
+        inbound_status=InboundStatus.MATCHED, job_state="complete", match_status=MatchStatus.PENDING
+    )
+    await prepare_recipients(sent_match, [111])
+    async with get_session() as s:
+        await s.execute(
+            update(MatchDelivery).where(MatchDelivery.match_id == sent_match).values(status="sent")
+        )
+    plain_iid, _ = await seed_case(match_status=MatchStatus.PENDING)
+    manual_iid, _ = await seed_case()
+    await review_queue.close_review(manual_iid, "NO_MATCH", NO_MATCH_REASON)
+
+    decided = await review_queue.decided_inbound_ids(
+        [published_iid, sent_iid, plain_iid, manual_iid]
+    )
+
+    assert decided == {published_iid, sent_iid, manual_iid}

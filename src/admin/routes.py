@@ -291,15 +291,23 @@ async def mark_posted_action(
         match = await s.get(Match, match_id)
         if match is None:
             return _flash_card(request, match_id, error=f"Match {match_id} не найден")
-        if match.status == MatchStatus.REJECTED:
+        # Conditional write: a rejection that lands after the read above is never overwritten.
+        marked = (
+            await s.execute(
+                update(Match)
+                .where(Match.id == match_id, Match.status != MatchStatus.REJECTED)
+                .values(status=MatchStatus.PUBLISHED, rejection_reason=None)
+                .returning(Match.id)
+            )
+        ).scalar_one_or_none()
+        if marked is None:
             # A rejection is terminal: a rejected match is never marked as posted or exposed.
             return _flash_card(
                 request,
                 match_id,
                 error=f"Match {match_id} отклонён: отметить как опубликованный нельзя",
             )
-        match.status = MatchStatus.PUBLISHED
-        match.rejection_reason = None
+        await s.refresh(match)
         # Same idempotent upsert + create-time flag defaulting the delivery hot path uses
         # (X1). is_public stays the DB default (True) — decision #3; an existing overlay keeps
         # Дарья's manual flags/is_public/note.
