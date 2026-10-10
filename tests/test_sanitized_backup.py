@@ -1830,8 +1830,13 @@ def test_refused_full_flush_on_the_copy_keeps_the_copy_and_never_discards_the_so
     real_tree = backup._fsync_tree
 
     def copy_on_a_declining_volume(folder):
+        # Only the copy's own flush is refused; the records written after it flush normally, so
+        # the copy-path check is the one thing standing between the discard and the source.
         refusing["on"] = True
-        return real_tree(folder)
+        try:
+            return real_tree(folder)
+        finally:
+            refusing["on"] = False
 
     monkeypatch.setattr(backup, "_fsync_tree", copy_on_a_declining_volume)
     discards = []
