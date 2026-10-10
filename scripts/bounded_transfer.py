@@ -9,15 +9,17 @@ from pathlib import PurePosixPath
 MAX_CONTENT_BYTES = 4 * 1024**3
 
 
-def batches(
-    names, max_files=1000, max_bytes=128 * 1024, sizes=None, max_content_bytes=MAX_CONTENT_BYTES
-):
+def batches(names, max_files=1000, max_bytes=128 * 1024, sizes=None, max_content_bytes=None):
     """Split names into batches of at most max_files names and max_bytes encoded name bytes.
 
     When sizes maps every name to its file size, a batch also holds at most max_content_bytes of
-    file content. A file above that limit cannot be batched: ValueError("file_over_batch_cap"). The
-    receiver refuses such a snapshot before its first transfer, on the manifest size.
+    file content. Without an explicit value the limit is MAX_CONTENT_BYTES as it is when this call
+    runs, not when the module was imported. A file above that limit cannot be batched:
+    ValueError("file_over_batch_cap"). The receiver refuses such a snapshot before its first
+    transfer, on the manifest size.
     """
+    if max_content_bytes is None:
+        max_content_bytes = MAX_CONTENT_BYTES
     if max_files < 1 or max_bytes < 2 or max_content_bytes < 1:
         raise ValueError("invalid_batch_limit")
     seen = set()

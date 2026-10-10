@@ -1280,6 +1280,7 @@ def receive(args):
                     bounded.batches(
                         manifest["files"],
                         sizes={name: meta["size"] for name, meta in manifest["files"].items()},
+                        max_content_bytes=bounded.MAX_CONTENT_BYTES,
                     )
                 )
                 for group in groups:

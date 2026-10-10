@@ -522,6 +522,39 @@ def test_receive_transfers_in_bounded_batches(snapshot, tmp_path, monkeypatch):
     assert result["offhost_verified"] is True
 
 
+def test_receive_passes_the_content_cap_it_checks_to_the_batcher(snapshot, tmp_path, monkeypatch):
+    # The cap is passed to the batcher explicitly, with the value the module holds when receive runs.
+    from scripts import bounded_transfer
+
+    real_batches = bounded_transfer.batches
+    seen = []
+
+    def spy(names, **kwargs):
+        seen.append(kwargs.get("max_content_bytes"))
+        return real_batches(names, **kwargs)
+
+    monkeypatch.setattr(bounded_transfer, "MAX_CONTENT_BYTES", 2 * 1024**3)
+    monkeypatch.setattr(bounded_transfer, "batches", spy)
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    assert backup.receive(args)["offhost_verified"] is True
+    assert seen == [2 * 1024**3]
+
+
+def test_receive_refuses_under_a_patched_content_cap_before_any_transfer(
+    snapshot, tmp_path, monkeypatch
+):
+    from scripts import bounded_transfer
+
+    monkeypatch.setattr(bounded_transfer, "MAX_CONTENT_BYTES", 1024)
+    change_manifest(snapshot, lambda m: m["files"]["data/otz.db"].update(size=2048))
+    args = receiver_args(tmp_path)
+    calls = fake_transport(snapshot, args, monkeypatch)
+    with pytest.raises(backup.scan.PreflightError, match=r"^file_over_batch_cap$"):
+        backup.receive(args)
+    assert not [call for call in calls if "--files-from" in call]
+
+
 def test_receive_refuses_a_file_over_the_batch_cap_before_any_transfer(
     snapshot, tmp_path, monkeypatch
 ):

@@ -3,7 +3,9 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
+from scripts import bounded_transfer
 from scripts.bounded_transfer import MAX_CONTENT_BYTES, batches, encode_batch
 
 
@@ -45,6 +47,13 @@ class BoundedTransferTests(unittest.TestCase):
         sizes = {name: MAX_CONTENT_BYTES + 1 for name in names}
         with self.assertRaisesRegex(ValueError, "^file_over_batch_cap$"):
             list(batches(names, sizes=sizes))
+
+    def test_the_default_cap_is_read_when_the_call_runs(self):
+        # The default is read from the module when batches() runs, so a patched value applies here.
+        with mock.patch.object(bounded_transfer, "MAX_CONTENT_BYTES", 100):
+            self.assertEqual(list(batches(["a", "b"], sizes={"a": 60, "b": 60})), [["a"], ["b"]])
+            with self.assertRaisesRegex(ValueError, "^file_over_batch_cap$"):
+                list(batches(["c"], sizes={"c": 101}))
 
     def test_a_database_sized_file_is_batched_within_the_default_cap(self):
         # Sizes are the manifest's, as the receiver passes them; no bytes are read. The staged
