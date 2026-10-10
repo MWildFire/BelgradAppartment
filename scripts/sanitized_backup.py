@@ -1091,6 +1091,15 @@ def _inspect_remote(args):
     return {"result": "snapshot_present", "manifest_sha256": status["manifest_sha256"]}
 
 
+def _lease_still_held():
+    """assert_lease as a question: False once the lease is lost, and no exception leaves here."""
+    try:
+        transport.assert_lease()
+    except recovery.RecoveryError:
+        return False
+    return True
+
+
 def receive(args):
     """Explicit receiver for one generation: bounded batches, no seed, hardlinks or retention.
 
@@ -1103,7 +1112,9 @@ def receive(args):
       verified           verification passed and the result is recorded
       kept_for_operator  the source may be discarded or already is; the copy is kept
     A local copy is deleted only in retained and transferring, where no verification has
-    succeeded. A verification that raises is written down as transferring before its copy is
+    succeeded. A failure deletes such a copy only while the lease is still held; once the lease
+    is lost the copy stays, and the next resume removes it under the lease. A verification that
+    raises is written down as transferring before its copy is
     removed. Once verification has succeeded, or a restart finds verifying, the copy is kept and
     the record blocks resume and fresh runs until an operator resolves it. The record is removed
     last, after the generation and its receipt are durable. That removal alone runs after the lease
@@ -1318,11 +1329,18 @@ def receive(args):
                     power_loss_guarantee=POWER_LOSS_GUARANTEE,
                 )
             except BaseException:
-                # Still under the lease: a copy this run made is removed only while no verification
-                # has started, and before the lease is released, so no other receiver can be
-                # writing it. Once verification has started, the copy is kept for the operator; a
-                # copy another receiver left behind is never removed here.
-                if created_copy and not verify_may_have_started and pending.exists():
+                # A copy this run made is removed only while no verification has started, and only
+                # if the lease is still held when the removal begins. A lost lease keeps the copy
+                # and writes nothing: the record still says transferring (or retained), and the next
+                # resume removes the copy under its own lease. Once verification has started, the
+                # copy is kept for the operator; a copy another receiver left behind is never
+                # removed here.
+                if (
+                    created_copy
+                    and not verify_may_have_started
+                    and pending.exists()
+                    and _lease_still_held()
+                ):
                     shutil.rmtree(pending)
                 raise
         # Lease release can itself fail. Publish proof only after the context exits cleanly.

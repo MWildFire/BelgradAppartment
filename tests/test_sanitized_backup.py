@@ -1704,6 +1704,86 @@ def test_a_failed_copy_is_removed_while_the_lease_is_still_held(snapshot, tmp_pa
     assert record["state"] == backup.TRANSFERRING
 
 
+class FakeLeaseOwner:
+    """The ssh process that holds the lease. poll() answers like Popen.poll() and counts losses."""
+
+    def __init__(self):
+        self.returncode = None
+        self.lost_reports = 0
+
+    def poll(self):
+        if self.returncode is not None:
+            self.lost_reports += 1
+        return self.returncode
+
+
+def test_a_failed_copy_is_kept_when_the_lease_is_lost_before_its_removal(
+    snapshot, tmp_path, monkeypatch
+):
+    """The lease exits during a batch. The failure path keeps the copy; a healthy resume removes it."""
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    generation = args.source_snapshot.name
+    pending = args.private_root / "pending" / generation
+    record_path = args.private_root / "resume" / (generation + ".json")
+    owners, pending_at_release, discards = [], [], []
+
+    @contextmanager
+    def lease_double(_args):
+        # The same ContextVar remote_lease sets, so the real assert_lease() reads this owner.
+        owner = FakeLeaseOwner()
+        owners.append(owner)
+        token = backup.transport._LEASE.set(owner)
+        try:
+            yield
+        finally:
+            backup.transport._LEASE.reset(token)
+            pending_at_release.append(pending.exists())
+
+    real_run = backup.transport.run
+    lose_once = {"armed": True}
+
+    def transfer_that_loses_the_lease(command):
+        real_run(command)
+        if "--files-from" in command and lose_once["armed"]:
+            lose_once["armed"] = False
+            owners[-1].returncode = 255  # the ssh process that holds the lease exits mid-batch
+
+    real_discard = backup._discard_remote
+
+    def recording_discard(remote_args, checksum):
+        discards.append(checksum)
+        return real_discard(remote_args, checksum)
+
+    monkeypatch.setattr(backup.transport, "remote_lease", lease_double)
+    monkeypatch.setattr(backup.transport, "run", transfer_that_loses_the_lease)
+    monkeypatch.setattr(backup, "_discard_remote", recording_discard)
+    with pytest.raises(recovery.RecoveryError, match=r"^source backup lease was lost$"):
+        backup.receive(args)
+    # The failure path found the lease lost: the copy was still there at release, nothing was
+    # discarded, and the record stays in a state that a resume accepts.
+    assert pending_at_release == [True]
+    assert (pending / "manifest.json").exists()
+    assert discards == []
+    record = backup.read_json(record_path)
+    assert record["state"] == backup.TRANSFERRING
+    assert record["state"] in backup.RESUMABLE_STATES
+    for name in ("receipts", "generations"):
+        assert not list((args.private_root / name).iterdir())
+    # The loss was reported twice: by the check after the batch, and again by the failure path.
+    assert owners[0].lost_reports >= 2
+
+    # A later resume under a healthy lease removes the kept copy before it copies again.
+    stale = pending / "stale-copy-marker"
+    stale.write_text("left by the run that lost its lease")
+    args.resume_manifest_sha256 = record["manifest_sha256"]
+    result = backup.receive(args)
+    assert result["offhost_verified"] is True
+    assert not (args.private_root / "generations" / generation / stale.name).exists()
+    assert len(discards) == 1
+    assert not record_path.exists()
+
+
 def test_copy_is_flushed_before_the_source_is_discarded(snapshot, tmp_path, monkeypatch):
     args = receiver_args(tmp_path)
     fake_transport(snapshot, args, monkeypatch)
