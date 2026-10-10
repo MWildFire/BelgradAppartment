@@ -961,6 +961,23 @@ def test_build_directory_left_by_a_killed_build_is_removed_under_the_build_lock(
     assert (source.output_dir / "manifest.json").exists()
 
 
+@pytest.mark.parametrize("invalid", ["output_exists", "output_inside_project"])
+def test_an_invalid_output_directory_removes_nothing_in_its_parent(source, invalid):
+    if invalid == "output_exists":
+        source.output_dir.mkdir(parents=True, mode=0o700)
+    else:
+        source.output_dir = source.project_root / "snapshot"  # inside the project that is read
+    parent = source.output_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    parent.chmod(0o700)
+    orphan = parent / ".sanitized-build-0badc0de"  # the sweep would remove this before the refusal
+    orphan.mkdir(mode=0o700)
+    (orphan / "partial.db").write_bytes(b"synthetic partial copy")
+    with pytest.raises(backup.scan.PreflightError, match=r"^invalid_snapshot_paths$"):
+        backup.create_snapshot(source)
+    assert (orphan / "partial.db").read_bytes() == b"synthetic partial copy"
+
+
 def test_source_build_refuses_a_manifest_over_the_limit_before_the_full_recheck(source, monkeypatch):
     def recheck_must_not_run(*_args, **_kwargs):
         raise AssertionError("the full recheck ran although the manifest is over the limit")

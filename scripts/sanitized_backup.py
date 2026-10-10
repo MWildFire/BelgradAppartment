@@ -523,11 +523,25 @@ def _build_running(parent):
 
 def create_snapshot(args):
     """Build one generation while holding the namespace's build lock; a second build is refused."""
+    _check_request(args)  # before the namespace is created or any leftover build is removed
     parent = args.output_dir.absolute().parent
     recovery.private_dir(parent)
     with _build_lock(parent):
         _remove_orphaned_builds(parent)
         return _create_snapshot(args)
+
+
+def _check_request(args):
+    require(getattr(args, "acknowledge_url_loss", False) is True, "url_loss_not_acknowledged")
+    require(math.isfinite(args.min_free_gib) and args.min_free_gib >= 0, "invalid_space_limit")
+    project, output = args.project_root.absolute(), args.output_dir.absolute()
+    require(
+        project.resolve() == project
+        and output.resolve() == output
+        and not output.exists()
+        and not output.is_relative_to(project),
+        "invalid_snapshot_paths",
+    )
 
 
 def _remove_orphaned_builds(parent):
@@ -542,16 +556,7 @@ def _remove_orphaned_builds(parent):
 
 
 def _create_snapshot(args):
-    require(getattr(args, "acknowledge_url_loss", False) is True, "url_loss_not_acknowledged")
-    require(math.isfinite(args.min_free_gib) and args.min_free_gib >= 0, "invalid_space_limit")
     project, output = args.project_root.absolute(), args.output_dir.absolute()
-    require(
-        project.resolve() == project
-        and output.resolve() == output
-        and not output.exists()
-        and not output.is_relative_to(project),
-        "invalid_snapshot_paths",
-    )
     source_db = project / "data/otz.db"
     require(source_db.resolve() == source_db and source_db.is_file(), "invalid_database_path")
     require(
