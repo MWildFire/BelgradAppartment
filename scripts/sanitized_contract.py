@@ -10,6 +10,9 @@ from scripts import data_only_preflight as preflight
 FORMAT = "renfinder-db-media-sanitized-v1"
 SCOPE = "db_media_sanitized"
 SOURCE_REVISION = "f477601b43593b35596e561d7b9a6d4a4a86ef23"
+# sha256 of scripts/sanitized_backup.py as the source helper must be installed. Editing that file
+# changes the digest; tests/test_sanitized_backup.py fails until this pin is updated with it.
+HELPER_SHA256 = "d2f0ce5dc5c1f24b735b317b58eb7742d5cb2aba5a94419411c248daca86e4bd"
 EXPECTED = {
     "affected_cells": 5,
     "replaced_url_values": 43,

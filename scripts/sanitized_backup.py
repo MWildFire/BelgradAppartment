@@ -8,6 +8,7 @@ The acknowledgement flag is an operator guard, not a replacement for user consen
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import io
 import json
@@ -20,6 +21,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections import Counter
 from contextlib import closing
 from datetime import UTC, datetime
@@ -60,6 +62,18 @@ MANIFEST_KEYS = {
 }
 ALBUM_RESULT = {"listings": 5, "photos": 147, "markers": 43}
 SOURCE_SNAPSHOT = re.compile(r"/var/tmp/otz-data-only-sanitized/[0-9]{8}-[0-9]{6}-[a-f0-9]{8}")
+
+# Durable record states; receive() documents what each one allows.
+REQUESTED = "requested"
+RETAINED = "retained"
+TRANSFERRING = "transferring"
+VERIFYING = "verifying"
+VERIFIED = "verified"
+KEPT_FOR_OPERATOR = "kept_for_operator"
+KNOWN_STATES = frozenset(
+    {REQUESTED, RETAINED, TRANSFERRING, VERIFYING, VERIFIED, KEPT_FOR_OPERATOR}
+)
+RESUMABLE_STATES = frozenset({RETAINED, TRANSFERRING})
 require = scan.require
 
 
@@ -753,6 +767,7 @@ def discard_snapshot(args):
 
 
 def _discard_remote(args, checksum):
+    _require_pinned_helper(args)
     response = transport.remote(
         args,
         [
@@ -776,7 +791,7 @@ def _discard_remote(args, checksum):
     )
 
 
-def _resume_record(args, manifest_sha256, state="retained_after_failure"):
+def _resume_record(args, manifest_sha256, state=RETAINED):
     return {
         "format": FORMAT,
         "scope": SCOPE,
@@ -787,39 +802,98 @@ def _resume_record(args, manifest_sha256, state="retained_after_failure"):
     }
 
 
-def _fsync_path(path):
-    fd = os.open(path, os.O_RDONLY)
+def _json_or_none(text):
     try:
-        os.fsync(fd)
+        return json.loads(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _flush(descriptor):
+    # fsync alone does not reach the platter on macOS; F_FULLFSYNC does where the volume allows it.
+    if hasattr(fcntl, "F_FULLFSYNC"):
+        try:
+            fcntl.fcntl(descriptor, fcntl.F_FULLFSYNC)
+            return
+        except OSError:
+            pass  # this volume does not support it; plain fsync is the strongest flush left
+    os.fsync(descriptor)
+
+
+def _fsync_path(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        _flush(descriptor)
     finally:
-        os.close(fd)
+        os.close(descriptor)
+
+
+def _durable_write(path, value):
+    """Replace path so that a power loss keeps the old record or the new one, never a torn file.
+
+    Order: temporary file flushed, renamed over the record, then the parent directory flushed.
+    Leftover temporaries never became records and are removed by _discard_temporaries.
+    """
+    temporary = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.tmp")
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(json.dumps(value, sort_keys=True).encode())
+        _fsync_path(temporary)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    _fsync_path(path.parent)
+
+
+def _discard_temporaries(directory):
+    for path in directory.glob("*.tmp"):
+        path.unlink()
 
 
 def _fsync_tree(folder):
-    """Flush every file and directory of a verified copy before the source copy is discarded.
-
-    Plain fsync is used here; on macOS a stronger F_FULLFSYNC may be required for power-loss
-    durability, which has to be measured on the target disk before this is relied on.
-    """
-    for path in folder.rglob("*"):
-        if path.is_file() and not path.is_symlink():
+    """Flush every file, then every directory, deepest first, before the source is discarded."""
+    for path in sorted(folder.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if not path.is_symlink() and (path.is_file() or path.is_dir()):
             _fsync_path(path)
     _fsync_path(folder)
 
 
-def receive(args):
-    """Future explicit transport; no seed, hardlinks, retention or ordinary scope writes.
+def _publish_generation(pending, destination):
+    pending.rename(destination)
+    _fsync_path(pending.parent)
+    _fsync_path(destination.parent)
 
-    Bounded batches only. A failure after the source snapshot exists keeps that snapshot and
-    its manifest digest for an explicit resume; it is never discarded automatically. A verified
-    local copy, or a discard that may have run, is never deleted automatically either: it is
-    kept for an operator, and its resume record refuses resume. A fresh run refuses to start
-    while any resume record is open.
-    """
-    # Local receiver only: the remote helper never imports the batching module.
-    from scripts import bounded_transfer as bounded
 
-    require(getattr(args, "acknowledge_url_loss", False) is True, "url_loss_not_acknowledged")
+# Runs on the server before any helper call; it reports the helper's digest and mode only.
+HELPER_DIGEST_CHECK = (
+    "import hashlib,json,os,stat,sys; p=sys.argv[1]; "
+    "print(json.dumps({'mode': stat.S_IMODE(os.stat(p).st_mode), "
+    "'sha256': hashlib.sha256(open(p,'rb').read()).hexdigest()}))"
+)
+
+
+def _require_pinned_helper(args):
+    """Refuse to run a server helper unless its bytes match the digest pinned in this repository."""
+    response = transport.remote(
+        args, [args.remote_python, "-c", HELPER_DIGEST_CHECK, str(args.remote_helper)]
+    )
+    status = _json_or_none(response.stdout)
+    require(
+        isinstance(status, dict)
+        and set(status) == {"mode", "sha256"}
+        and status["sha256"] == policy.HELPER_SHA256,
+        "remote_helper_digest_mismatch",
+    )
+    require(
+        type(status["mode"]) is int and (status["mode"] & 0o022) == 0,
+        "remote_helper_mode_unsafe",
+    )
+
+
+def _receiver_root(args):
+    # Every local and remote input is checked against the reviewed namespace before any transport.
     require(args.remote_user == "otz", "unsupported_source_operator")
     root = args.private_root.absolute()
     require(
@@ -827,10 +901,7 @@ def receive(args):
         "separate_sanitized_namespace_required",
     )
     require(args.remote_root == Path("/opt/otz"), "unsupported_source_root")
-    require(
-        SOURCE_SNAPSHOT.fullmatch(str(args.source_snapshot)),
-        "invalid_source_snapshot_path",
-    )
+    require(SOURCE_SNAPSHOT.fullmatch(str(args.source_snapshot)), "invalid_source_snapshot_path")
     require(
         re.fullmatch(
             r"/tmp/otz-sanitized-tools-[a-f0-9]{8}/scripts/sanitized_backup.py",
@@ -838,8 +909,10 @@ def receive(args):
         ),
         "invalid_remote_helper_path",
     )
-    require(math.isfinite(args.min_free_gib) and args.min_free_gib >= 0, "invalid_space_limit")
-    recovery.private_dir(root)
+    return root
+
+
+def _bind_namespace(root):
     for name in ("pending", "generations", "receipts", "resume"):
         recovery.private_dir(root / name)
     binding = {"format": FORMAT, "scope": SCOPE}
@@ -853,35 +926,95 @@ def receive(args):
             ),
             "unbound_generation_namespace",
         )
-        transport.atomic_json(root / "scope.json", binding)
+        _durable_write(root / "scope.json", binding)
+    for directory in (root, root / "resume", root / "receipts"):
+        _discard_temporaries(directory)
+
+
+def _require_resumable(args, resume_record):
+    # Only a record whose copy was never verified may resume; every other state needs an operator.
+    record = read_json(resume_record) if resume_record.exists() else None
+    require(isinstance(record, dict), "resume_record_mismatch")
+    state = record.get("state") if isinstance(record.get("state"), str) else None
+    require(state not in KNOWN_STATES - RESUMABLE_STATES, "resume_requires_operator")
+    require(
+        state in RESUMABLE_STATES
+        and record == _resume_record(args, args.resume_manifest_sha256, state=state),
+        "resume_record_mismatch",
+    )
+
+
+def _inspect_remote(args):
+    """Read-only remote answer for one generation: absent, or present with its manifest digest."""
+    _require_pinned_helper(args)
+    response = transport.remote(
+        args,
+        [
+            args.remote_python,
+            str(args.remote_helper),
+            "inspect-snapshot",
+            str(args.source_snapshot),
+            "--application-project-root",
+            str(args.remote_root),
+        ],
+    )
+    status = _json_or_none(response.stdout)
+    if status == {"result": "snapshot_absent", "scope": SCOPE}:
+        return {"result": "snapshot_absent"}
+    require(
+        isinstance(status, dict)
+        and set(status) == {"result", "scope", "manifest_sha256"}
+        and status["result"] == "snapshot_present"
+        and status["scope"] == SCOPE
+        and isinstance(status["manifest_sha256"], str)
+        and re.fullmatch(r"[a-f0-9]{64}", status["manifest_sha256"]),
+        "remote_state_ambiguous",
+    )
+    return {"result": "snapshot_present", "manifest_sha256": status["manifest_sha256"]}
+
+
+def receive(args):
+    """Explicit receiver for one generation: bounded batches, no seed, hardlinks or retention.
+
+    Each step writes its durable record before it runs, so a restart can tell where it stopped.
+    States in resume/<generation>.json:
+      requested          snapshot request sent, no digest yet (operator: resolve_requested)
+      retained           remote snapshot digest known, nothing copied locally yet
+      transferring       local copy is incomplete or unverified; a resume may replace it
+      verifying          transfer finished; the verification result is not recorded yet
+      verified           verification passed and the result is recorded
+      kept_for_operator  the source may be discarded or already is; the copy is kept
+    A local copy is deleted only in retained and transferring, where no verification has
+    succeeded. A failed verification is written down as transferring before its copy is removed.
+    From verifying onward neither a failure nor a restart deletes the copy: the record blocks resume
+    and fresh runs until an operator resolves it. The record is removed last, after the generation
+    and its receipt are durable.
+    """
+    # Local receiver only: the remote helper never imports the batching module.
+    from scripts import bounded_transfer as bounded
+
+    require(getattr(args, "acknowledge_url_loss", False) is True, "url_loss_not_acknowledged")
+    root = _receiver_root(args)
+    require(math.isfinite(args.min_free_gib) and args.min_free_gib >= 0, "invalid_space_limit")
+    recovery.private_dir(root)
+    _bind_namespace(root)
     generation = args.source_snapshot.name
     pending, destination = root / "pending" / generation, root / "generations" / generation
     resume_record = root / "resume" / (generation + ".json")
+    receipt = root / "receipts" / (generation + ".json")
+    listing = root / "pending" / (generation + ".files")
     resuming = getattr(args, "resume_manifest_sha256", None) is not None
-    require(
-        not destination.exists() and not (root / "receipts" / (generation + ".json")).exists(),
-        "generation_exists",
-    )
     if resuming:
         require(
             re.fullmatch(r"[a-f0-9]{64}", args.resume_manifest_sha256),
             "invalid_resume_manifest_sha256",
         )
-        require(
-            resume_record.exists()
-            and read_json(resume_record) == _resume_record(args, args.resume_manifest_sha256),
-            "resume_record_mismatch",
-        )
-        # The record proves this copy was never verified, so a partial pending copy from an
-        # interrupted transfer is removed before the retained snapshot is transferred again.
-        if pending.exists():
-            shutil.rmtree(pending)
-    else:
+        _require_resumable(args, resume_record)
+    require(not destination.exists() and not receipt.exists(), "generation_exists")
+    if not resuming:
         require(not pending.exists(), "generation_exists")
-        # An open resume record names a retained or requested snapshot; a fresh run must not
-        # create another one.
+        # An open record names a requested, retained or kept generation; a fresh run adds none.
         require(not any((root / "resume").iterdir()), "unresolved_resume_record")
-    pending.mkdir(mode=0o700)
     rsync = [
         "/usr/bin/rsync",
         "-rt",
@@ -890,18 +1023,19 @@ def receive(args):
         "-e",
         shlex.join(transport.ssh(args)[:-1]),
     ]
-    listing = root / "pending" / (generation + ".files")
     source_checksum = None
-    verified = False
-    discard_attempted = False
+    verify_may_have_started = False
     try:
         with transport.remote_lease(args):
+            _require_pinned_helper(args)
             if resuming:
                 source_checksum = args.resume_manifest_sha256
+                # Retained or transferring: no verification succeeded; the copy is not evidence.
+                if pending.exists():
+                    shutil.rmtree(pending)
             else:
-                # Written before the call: a lost answer leaves a visible record that blocks fresh
-                # runs, so the snapshot cannot be orphaned silently.
-                transport.atomic_json(resume_record, _resume_record(args, None, state="requested"))
+                # Written before the call: a lost answer leaves a record that blocks fresh runs.
+                _durable_write(resume_record, _resume_record(args, None, state=REQUESTED))
                 source = _snapshot_remote(
                     args,
                     [
@@ -927,8 +1061,9 @@ def receive(args):
                     "source_snapshot_unconfirmed",
                 )
                 source_checksum = status["manifest_sha256"]
-                # Recorded before the first transfer, so an interruption keeps a resume path.
-                transport.atomic_json(resume_record, _resume_record(args, source_checksum))
+                _durable_write(resume_record, _resume_record(args, source_checksum, state=RETAINED))
+            pending.mkdir(mode=0o700)
+            _durable_write(resume_record, _resume_record(args, source_checksum, state=TRANSFERRING))
             transport.run(
                 [
                     *rsync,
@@ -968,23 +1103,33 @@ def receive(args):
                 )
                 transport.assert_lease()
             listing.unlink(missing_ok=True)
-            result = verify_snapshot(pending, application=True)
-            verified = True
+            # Recorded before verification starts: a result that is never written down still
+            # leaves a record that refuses the deletion a resume would otherwise perform.
+            verify_may_have_started = True
+            _durable_write(resume_record, _resume_record(args, source_checksum, state=VERIFYING))
+            try:
+                result = verify_snapshot(pending, application=True)
+            except BaseException:
+                # The copy is not evidence: write that down, then let the handler remove it. The
+                # source snapshot is still on the server, because the discard has not run yet.
+                _durable_write(
+                    resume_record, _resume_record(args, source_checksum, state=TRANSFERRING)
+                )
+                verify_may_have_started = False
+                raise
+            _durable_write(resume_record, _resume_record(args, source_checksum, state=VERIFIED))
             transport.assert_lease()
             require(
                 recovery.digest(pending / "manifest.json") == source_checksum,
                 "source_manifest_changed",
             )
             _fsync_tree(pending)
-            discard_attempted = True
-            # Marked before the call: a crash or a lost answer during discard keeps the copy and
-            # refuses resume. The marker is removed only once the discard is confirmed.
-            transport.atomic_json(
-                resume_record, _resume_record(args, source_checksum, state="kept_for_operator")
+            # Recorded before the call: a crash or a lost answer during discard keeps the copy.
+            _durable_write(
+                resume_record,
+                _resume_record(args, source_checksum, state=KEPT_FOR_OPERATOR),
             )
             _discard_remote(args, source_checksum)
-            resume_record.unlink(missing_ok=True)
-            source_checksum = None
             transport.assert_lease()
             result.update(
                 backup_format="sanitized_directory_generation",
@@ -996,31 +1141,81 @@ def receive(args):
                 source_temporary_snapshot_removed=True,
             )
         # Lease release can itself fail. Publish proof only after the context exits cleanly.
-        pending.rename(destination)
-        transport.atomic_json(root / "receipts" / (generation + ".json"), result)
+        _publish_generation(pending, destination)
+        _durable_write(receipt, result)
         resume_record.unlink(missing_ok=True)
+        _fsync_path(resume_record.parent)
         return result
-    except BaseException as error:
-        if verified or discard_attempted:
-            # A verified copy, or a discard that may have run, is never deleted automatically.
-            # Keep the copy for an operator; the record moves to a state that refuses resume.
-            if source_checksum is not None:
-                try:
-                    transport.atomic_json(
-                        resume_record,
-                        _resume_record(args, source_checksum, state="kept_for_operator"),
-                    )
-                except Exception as write_error:
-                    # The original cause stays the raised error; the write failure is attached.
-                    error.add_note(f"resume record not updated: {type(write_error).__name__}")
-            raise
-        if pending.exists():
+    except BaseException:
+        # Before verification nothing has been verified, so a partial copy is removed and the
+        # record stays for a resume. From verifying onward the copy is kept for the operator.
+        if not verify_may_have_started and pending.exists():
             shutil.rmtree(pending)
-        # A retained source snapshot is never discarded here; its resume record was written before
-        # the first transfer, or not at all if the snapshot was never created.
         raise
     finally:
         listing.unlink(missing_ok=True)
+
+
+def resolve_requested(args):
+    """Operator decision for a requested record whose snapshot answer was lost.
+
+    keep adopts a remote snapshot that exists: its manifest digest becomes a retained record, so
+    resume can use it. abandon removes the record only when the remote proves that no snapshot
+    exists. Any ambiguous or unexpected remote answer refuses and leaves every file unchanged.
+    """
+    require(args.decision in ("keep", "abandon"), "invalid_decision")
+    root = _receiver_root(args)
+    require(
+        (root / "scope.json").exists()
+        and read_json(root / "scope.json") == {"format": FORMAT, "scope": SCOPE},
+        "namespace_scope_mismatch",
+    )
+    generation = args.source_snapshot.name
+    record_path = root / "resume" / (generation + ".json")
+    require(record_path.exists(), "requested_record_missing")
+    require(
+        read_json(record_path) == _resume_record(args, None, state=REQUESTED),
+        "requested_record_mismatch",
+    )
+    require(not (root / "pending" / generation).exists(), "pending_copy_present")
+    with transport.remote_lease(args):
+        remote = _inspect_remote(args)
+        if args.decision == "abandon":
+            require(remote["result"] == "snapshot_absent", "remote_snapshot_present")
+            record_path.unlink()
+            _fsync_path(record_path.parent)
+            return {"result": "requested_record_abandoned", "generation": generation}
+        require(remote["result"] == "snapshot_present", "remote_snapshot_absent")
+        _durable_write(record_path, _resume_record(args, remote["manifest_sha256"], state=RETAINED))
+    return {
+        "result": "requested_record_kept",
+        "generation": generation,
+        "manifest_sha256": remote["manifest_sha256"],
+    }
+
+
+def inspect_snapshot(args):
+    """Read-only answer for an operator resolution: never creates, changes or removes anything."""
+    folder = args.directory.absolute()
+    require(
+        SOURCE_SNAPSHOT.fullmatch(str(folder)) and folder.resolve() == folder,
+        "invalid_source_snapshot_path",
+    )
+    if not os.path.lexists(folder):
+        return {"result": "snapshot_absent", "scope": SCOPE}
+    manifest = folder / "manifest.json"
+    require(
+        folder.is_dir()
+        and not folder.is_symlink()
+        and manifest.is_file()
+        and not manifest.is_symlink(),
+        "snapshot_state_ambiguous",
+    )
+    return {
+        "result": "snapshot_present",
+        "scope": SCOPE,
+        "manifest_sha256": recovery.digest(manifest),
+    }
 
 
 def _smoke(folder):
@@ -1137,7 +1332,16 @@ def main():
     discard = commands.add_parser("discard-snapshot")
     discard.add_argument("directory", type=Path)
     discard.add_argument("--manifest-sha256", required=True)
-    for subparser in (snapshot, verify, receiver, smoke, discard):
+    inspect = commands.add_parser("inspect-snapshot")
+    inspect.add_argument("directory", type=Path)
+    resolver = commands.add_parser("resolve-requested")
+    for name in ("private-root", "source-snapshot", "remote-root", "remote-helper", "ssh-key"):
+        resolver.add_argument("--" + name, type=Path, required=True)
+    for name in ("ssh-target", "remote-python"):
+        resolver.add_argument("--" + name, required=True)
+    resolver.add_argument("--remote-user", default="otz", choices=["otz"])
+    resolver.add_argument("--decision", required=True, choices=["keep", "abandon"])
+    for subparser in (snapshot, verify, receiver, smoke, discard, inspect, resolver):
         subparser.add_argument("--application-project-root", type=Path)
     args = parser.parse_args()
     os.umask(0o077)
@@ -1149,10 +1353,14 @@ def main():
             result = create_snapshot(args)
         elif args.command == "receive":
             result = receive(args)
+        elif args.command == "resolve-requested":
+            result = resolve_requested(args)
         elif args.command == "_smoke":
             result = _smoke(args.directory.absolute())
         elif args.command == "discard-snapshot":
             result = discard_snapshot(args)
+        elif args.command == "inspect-snapshot":
+            result = inspect_snapshot(args)
         else:
             require(
                 not args.receipt.absolute().is_relative_to(args.directory.absolute()),
@@ -1166,7 +1374,7 @@ def main():
             )
             result = verify_snapshot(args.directory, application=True)
             recovery.private_dir(args.receipt.parent)
-            transport.atomic_json(args.receipt, result)
+            _durable_write(args.receipt, result)
     except Exception as error:
         reason = str(error) if isinstance(error, scan.PreflightError) else "sanitized_backup_failed"
         print(json.dumps({"result": "blocked", "reason": reason}))

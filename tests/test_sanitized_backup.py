@@ -2,6 +2,8 @@
 
 import argparse
 import copy
+import errno
+import hashlib
 import json
 import re
 import shutil
@@ -344,6 +346,10 @@ def fake_transport(snapshot, args, monkeypatch, fault=None):
     calls = []
 
     def source(_args, command):
+        if "-c" in command:  # the pinned-helper digest check precedes every helper call
+            return SimpleNamespace(
+                stdout=json.dumps({"mode": 0o644, "sha256": policy.HELPER_SHA256})
+            )
         if "discard-snapshot" in command:
             assert command[command.index("--manifest-sha256") + 1] == expected_hash
             return SimpleNamespace(
@@ -516,7 +522,8 @@ def test_receive_keeps_verified_copy_when_lease_fails_after_source_discard(
         backup.receive(args)
     generation = args.source_snapshot.name
     assert (args.private_root / "pending" / generation / "manifest.json").exists()
-    assert not (args.private_root / "resume" / (generation + ".json")).exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == "kept_for_operator"
     for name in ("receipts", "generations"):
         assert not list((args.private_root / name).iterdir())
 
@@ -543,7 +550,7 @@ def test_receive_failure_keeps_remote_snapshot_and_records_resume(snapshot, tmp_
         "generation": args.source_snapshot.name,
         "source_snapshot": str(args.source_snapshot),
         "manifest_sha256": recovery.digest(snapshot / "manifest.json"),
-        "state": "retained_after_failure",
+        "state": "transferring",
     }
     for name in ("pending", "receipts", "generations"):
         assert not list((args.private_root / name).iterdir())
@@ -604,7 +611,7 @@ def test_unconfirmed_discard_keeps_copy_and_refuses_resume(snapshot, tmp_path, m
     for name in ("receipts", "generations"):
         assert not list((args.private_root / name).iterdir())
     args.resume_manifest_sha256 = record["manifest_sha256"]
-    with pytest.raises(backup.scan.PreflightError, match=r"^resume_record_mismatch$"):
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_requires_operator$"):
         backup.receive(args)
     assert (args.private_root / "pending" / generation / "manifest.json").exists()
 
@@ -635,32 +642,34 @@ def test_verified_copy_survives_a_lease_loss_before_discard(snapshot, tmp_path, 
     generation = args.source_snapshot.name
     assert (args.private_root / "pending" / generation / "manifest.json").exists()
     record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
-    assert record["state"] == "kept_for_operator"
+    assert record["state"] == "verified"
     for name in ("receipts", "generations"):
         assert not list((args.private_root / name).iterdir())
 
 
-def test_record_write_failure_keeps_the_original_cause(snapshot, tmp_path, monkeypatch):
+def test_record_write_failure_before_discard_stops_and_keeps_the_verified_copy(
+    snapshot, tmp_path, monkeypatch
+):
     args = receiver_args(tmp_path)
     fake_transport(snapshot, args, monkeypatch)
-    write = backup.transport.atomic_json
-    state = {"discard_attempted": False}
+    write = backup._durable_write
 
-    def discard_fails(*_args, **_kwargs):
-        state["discard_attempted"] = True
-        raise backup.scan.PreflightError("source_snapshot_cleanup_unconfirmed")
-
-    def write_fails_after_discard(path, value):
-        if state["discard_attempted"] and "resume" in path.parts:
+    def write_fails_for_kept(path, value):
+        if value.get("state") == backup.KEPT_FOR_OPERATOR:
             raise OSError(28, "No space left on device")
         return write(path, value)
 
-    monkeypatch.setattr(backup, "_discard_remote", discard_fails)
-    monkeypatch.setattr(backup.transport, "atomic_json", write_fails_after_discard)
-    with pytest.raises(backup.scan.PreflightError, match="source_snapshot_cleanup_unconfirmed") as info:
+    def forbidden_discard(*_args, **_kwargs):
+        raise AssertionError("the source must not be discarded without a durable kept record")
+
+    monkeypatch.setattr(backup, "_durable_write", write_fails_for_kept)
+    monkeypatch.setattr(backup, "_discard_remote", forbidden_discard)
+    with pytest.raises(OSError, match="No space left"):
         backup.receive(args)
-    assert any("resume record not updated: OSError" in note for note in info.value.__notes__)
-    assert (args.private_root / "pending" / args.source_snapshot.name / "manifest.json").exists()
+    generation = args.source_snapshot.name
+    assert (args.private_root / "pending" / generation / "manifest.json").exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.VERIFIED
 
 
 def test_unresolved_resume_record_blocks_a_fresh_run(tmp_path, monkeypatch):
@@ -698,16 +707,21 @@ def test_resume_record_is_written_before_the_first_transfer(snapshot, tmp_path, 
 
 
 @pytest.mark.parametrize(
-    "field,value",
+    "field,value,code",
     [
-        ("manifest_sha256", "b" * 64),
-        ("generation", "20261006-090001-123abc45"),
-        ("source_snapshot", "/var/tmp/otz-data-only-sanitized/20261006-090001-123abc45"),
-        ("state", "kept_for_operator"),
+        ("manifest_sha256", "b" * 64, "resume_record_mismatch"),
+        ("generation", "20261006-090001-123abc45", "resume_record_mismatch"),
+        (
+            "source_snapshot",
+            "/var/tmp/otz-data-only-sanitized/20261006-090001-123abc45",
+            "resume_record_mismatch",
+        ),
+        ("state", "kept_for_operator", "resume_requires_operator"),
+        ("state", "bogus", "resume_record_mismatch"),
     ],
 )
 def test_resume_refuses_a_tampered_record_before_transport(
-    snapshot, tmp_path, monkeypatch, field, value
+    snapshot, tmp_path, monkeypatch, field, value, code
 ):
     args = receiver_args(tmp_path)
     fake_transport(snapshot, args, monkeypatch, "manifest")
@@ -723,7 +737,7 @@ def test_resume_refuses_a_tampered_record_before_transport(
         raise AssertionError("transport before the resume record check")
 
     monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
-    with pytest.raises(backup.scan.PreflightError, match=r"^resume_record_mismatch$"):
+    with pytest.raises(backup.scan.PreflightError, match=rf"^{code}$"):
         backup.receive(args)
 
 
@@ -1061,14 +1075,14 @@ def test_receipt_write_failure_retains_only_an_unaccepted_generation(
 ):
     args = receiver_args(tmp_path)
     fake_transport(snapshot, args, monkeypatch)
-    write = backup.transport.atomic_json
+    write = backup._durable_write
 
     def fail_receipt(path, value):
         if path.parent.name == "receipts":
             raise PermissionError("synthetic write failure")
         return write(path, value)
 
-    monkeypatch.setattr(backup.transport, "atomic_json", fail_receipt)
+    monkeypatch.setattr(backup, "_durable_write", fail_receipt)
     with pytest.raises(PermissionError):
         backup.receive(args)
     assert not list((args.private_root / "receipts").iterdir())
@@ -1293,7 +1307,7 @@ def test_lost_snapshot_answer_leaves_a_requested_record_that_blocks_fresh_runs(
     with pytest.raises(backup.scan.PreflightError, match=r"^unresolved_resume_record$"):
         backup.receive(args)
     args.resume_manifest_sha256 = recovery.digest(snapshot / "manifest.json")
-    with pytest.raises(backup.scan.PreflightError, match=r"^resume_record_mismatch$"):
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_requires_operator$"):
         backup.receive(args)
 
 
@@ -1331,3 +1345,513 @@ def test_copy_is_flushed_before_the_source_is_discarded(snapshot, tmp_path, monk
     result = backup.receive(args)
     assert order == ["fsync", "discard"]
     assert result["offhost_verified"] is True
+
+
+class PowerLoss(BaseException):
+    """Simulated power loss: nothing after the armed point reaches the disk or the server."""
+
+
+@pytest.fixture
+def power(snapshot, tmp_path, monkeypatch):
+    from scripts import bounded_transfer
+
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    real_batches = bounded_transfer.batches
+    monkeypatch.setattr(
+        bounded_transfer, "batches", lambda names: real_batches(names, max_files=40)
+    )
+    state = SimpleNamespace(point=None, dead=False, present=False, batches=0)
+    source_remote = backup.transport.remote
+    source_snapshot = backup._snapshot_remote
+    source_run = backup.transport.run
+    real_write = backup._durable_write
+    real_verify = backup.verify_snapshot
+    real_discard = backup._discard_remote
+    real_publish = backup._publish_generation
+    real_rmtree = shutil.rmtree
+
+    def guard(function):
+        def guarded(*call_args, **call_kwargs):
+            if state.dead:
+                raise PowerLoss()
+            return function(*call_args, **call_kwargs)
+
+        return guarded
+
+    def reached(point):
+        if state.point == point:
+            state.dead = True
+            raise PowerLoss()
+
+    def remote(remote_args, command):
+        if "inspect-snapshot" not in command:
+            return source_remote(remote_args, command)
+        if not state.present:
+            return SimpleNamespace(
+                stdout=json.dumps({"result": "snapshot_absent", "scope": policy.SCOPE})
+            )
+        digest = recovery.digest(snapshot / "manifest.json")
+        return SimpleNamespace(
+            stdout=json.dumps(
+                {
+                    "result": "snapshot_present",
+                    "scope": policy.SCOPE,
+                    "manifest_sha256": digest,
+                }
+            )
+        )
+
+    def snapshot_rpc(remote_args, command):
+        result = source_snapshot(remote_args, command)
+        state.present = True
+        reached("snapshot_rpc")
+        return result
+
+    def discard(remote_args, checksum):
+        real_discard(remote_args, checksum)
+        state.present = False
+        reached("discard")
+
+    def write(path, value):
+        real_write(path, value)
+        if path.parent.name == "receipts":
+            reached("receipt")
+        elif "state" in value:
+            reached(value["state"])
+
+    def verify(folder, **kwargs):
+        result = real_verify(folder, **kwargs)
+        reached("verify")
+        return result
+
+    def publish(pending, destination):
+        real_publish(pending, destination)
+        reached("published")
+
+    def transfer(command):
+        source_run(command)
+        if "--files-from" in command:
+            state.batches += 1
+            reached(f"batch_{state.batches}")
+
+    monkeypatch.setattr(backup.transport, "remote", guard(remote))
+    monkeypatch.setattr(backup, "_snapshot_remote", guard(snapshot_rpc))
+    monkeypatch.setattr(backup.transport, "run", guard(transfer))
+    monkeypatch.setattr(backup, "_durable_write", guard(write))
+    monkeypatch.setattr(backup, "verify_snapshot", guard(verify))
+    monkeypatch.setattr(backup, "_discard_remote", guard(discard))
+    monkeypatch.setattr(backup, "_publish_generation", guard(publish))
+    monkeypatch.setattr(shutil, "rmtree", guard(real_rmtree))
+    return SimpleNamespace(args=args, snapshot=snapshot, state=state)
+
+
+# Durable points in receive(): the record state left on disk, where the copy is, and what the
+# restart must do. "resume" means the record allows it; "operator" means it must refuse.
+CRASH_CASES = [
+    ("retained", "retained", None, "resume"),
+    ("transferring", "transferring", None, "resume"),
+    ("batch_2", "transferring", "pending", "resume"),
+    ("batch_4", "transferring", "pending", "resume"),
+    ("verifying", "verifying", "pending", "operator"),
+    ("verify", "verifying", "pending", "operator"),
+    ("verified", "verified", "pending", "operator"),
+    ("kept_for_operator", "kept_for_operator", "pending", "operator"),
+    ("discard", "kept_for_operator", "pending", "operator"),
+    ("published", "kept_for_operator", "generations", "operator"),
+    ("receipt", "kept_for_operator", "generations", "operator"),
+]
+
+
+@pytest.mark.parametrize("point,state,copy_at,restart", CRASH_CASES)
+def test_power_loss_at_each_durable_point_keeps_the_copy_and_reaches_the_documented_state(
+    power, point, state, copy_at, restart
+):
+    args, generation = power.args, power.args.source_snapshot.name
+    record = args.private_root / "resume" / (generation + ".json")
+    digest = recovery.digest(power.snapshot / "manifest.json")
+    power.state.point = point
+    with pytest.raises(PowerLoss):
+        backup.receive(args)
+    power.state.dead, power.state.point = False, None  # restart: new process, same disk and server
+    assert backup.read_json(record)["state"] == state
+    if copy_at:
+        assert (args.private_root / copy_at / generation / "manifest.json").exists()
+    if restart == "resume":
+        args.resume_manifest_sha256 = digest
+        result = backup.receive(args)
+        assert result["offhost_verified"] is True
+        receipt = args.private_root / "receipts" / (generation + ".json")
+        assert backup.read_json(receipt) == result
+        assert not record.exists()
+        assert (args.private_root / "generations" / generation / "manifest.json").exists()
+        return
+    with pytest.raises(
+        backup.scan.PreflightError, match=r"^(unresolved_resume_record|generation_exists)$"
+    ):
+        backup.receive(args)
+    args.resume_manifest_sha256 = digest
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_requires_operator$"):
+        backup.receive(args)
+    assert backup.read_json(record)["state"] == state
+    assert (args.private_root / copy_at / generation / "manifest.json").exists()
+
+
+def test_verified_copy_survives_a_restart_after_the_source_is_gone(power):
+    args, generation = power.args, power.args.source_snapshot.name
+    digest = recovery.digest(power.snapshot / "manifest.json")
+    power.state.point = "verified"
+    with pytest.raises(PowerLoss):
+        backup.receive(args)
+    power.state.dead, power.state.point = False, None
+    shutil.rmtree(power.snapshot)  # the source snapshot no longer exists on either side
+    args.resume_manifest_sha256 = digest
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_requires_operator$"):
+        backup.receive(args)
+    assert (args.private_root / "pending" / generation / "manifest.json").exists()
+
+
+def test_lost_snapshot_answer_is_resolved_by_keep_and_then_resumed(power):
+    args, generation = power.args, power.args.source_snapshot.name
+    record = args.private_root / "resume" / (generation + ".json")
+    power.state.point = "snapshot_rpc"
+    with pytest.raises(PowerLoss):
+        backup.receive(args)
+    power.state.dead, power.state.point = False, None
+    assert backup.read_json(record)["state"] == backup.REQUESTED
+    with pytest.raises(backup.scan.PreflightError, match=r"^unresolved_resume_record$"):
+        backup.receive(args)
+    args.decision = "keep"
+    kept = backup.resolve_requested(args)
+    assert kept == {
+        "result": "requested_record_kept",
+        "generation": generation,
+        "manifest_sha256": recovery.digest(power.snapshot / "manifest.json"),
+    }
+    args.resume_manifest_sha256 = kept["manifest_sha256"]
+    assert backup.receive(args)["offhost_verified"] is True
+    assert not record.exists()
+
+
+def test_crash_after_the_request_marker_is_abandoned_and_a_fresh_run_then_succeeds(power):
+    args, generation = power.args, power.args.source_snapshot.name
+    record = args.private_root / "resume" / (generation + ".json")
+    power.state.point = "requested"
+    with pytest.raises(PowerLoss):
+        backup.receive(args)
+    power.state.dead, power.state.point = False, None
+    args.decision = "keep"
+    with pytest.raises(backup.scan.PreflightError, match=r"^remote_snapshot_absent$"):
+        backup.resolve_requested(args)
+    assert record.exists()
+    args.decision = "abandon"
+    assert backup.resolve_requested(args) == {
+        "result": "requested_record_abandoned",
+        "generation": generation,
+    }
+    assert not record.exists()
+    assert backup.receive(args)["offhost_verified"] is True
+
+
+def write_namespace(args):
+    root = args.private_root
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    for name in ("pending", "generations", "receipts", "resume"):
+        (root / name).mkdir(mode=0o700, exist_ok=True)
+    (root / "scope.json").write_text(json.dumps({"format": policy.FORMAT, "scope": policy.SCOPE}))
+
+
+def requested_record(args):
+    record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
+    record.write_text(json.dumps(backup._resume_record(args, None, state=backup.REQUESTED)))
+    return record
+
+
+def scripted_inspect(monkeypatch, answer):
+    def remote(_args, command):
+        if "-c" in command:
+            return SimpleNamespace(
+                stdout=json.dumps({"mode": 0o644, "sha256": policy.HELPER_SHA256})
+            )
+        assert "inspect-snapshot" in command
+        if isinstance(answer, BaseException):
+            raise answer
+        return SimpleNamespace(stdout=answer)
+
+    monkeypatch.setattr(backup.transport, "remote", remote)
+    monkeypatch.setattr(backup.transport, "remote_lease", fake_lease)
+
+
+def absent_answer():
+    return json.dumps({"result": "snapshot_absent", "scope": policy.SCOPE})
+
+
+def present_answer(digest):
+    return json.dumps(
+        {"result": "snapshot_present", "scope": policy.SCOPE, "manifest_sha256": digest}
+    )
+
+
+@pytest.mark.parametrize(
+    "decision,answer,code",
+    [
+        ("keep", absent_answer(), "remote_snapshot_absent"),
+        ("abandon", present_answer("c" * 64), "remote_snapshot_present"),
+    ],
+)
+def test_requested_resolution_refuses_when_the_remote_contradicts_the_decision(
+    tmp_path, monkeypatch, decision, answer, code
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = requested_record(args)
+    scripted_inspect(monkeypatch, answer)
+    args.decision = decision
+    before = record.read_bytes()
+    with pytest.raises(backup.scan.PreflightError, match=rf"^{code}$"):
+        backup.resolve_requested(args)
+    assert record.read_bytes() == before
+
+
+@pytest.mark.parametrize("decision", ["keep", "abandon"])
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "not json",
+        json.dumps({"result": "snapshot_absent", "scope": "db_media"}),
+        json.dumps({"result": "snapshot_present", "scope": policy.SCOPE}),
+        json.dumps(
+            {"result": "snapshot_present", "scope": policy.SCOPE, "manifest_sha256": "XYZ"}
+        ),
+        json.dumps({"result": "snapshot_absent", "scope": policy.SCOPE, "extra": 1}),
+    ],
+)
+def test_ambiguous_remote_answer_refuses_both_decisions_and_changes_nothing(
+    tmp_path, monkeypatch, decision, answer
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = requested_record(args)
+    scripted_inspect(monkeypatch, answer)
+    args.decision = decision
+    before = record.read_bytes()
+    with pytest.raises(backup.scan.PreflightError, match=r"^remote_state_ambiguous$"):
+        backup.resolve_requested(args)
+    assert record.read_bytes() == before
+
+
+@pytest.mark.parametrize("decision", ["keep", "abandon"])
+def test_remote_failure_during_resolution_refuses_and_changes_nothing(
+    tmp_path, monkeypatch, decision
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = requested_record(args)
+    scripted_inspect(monkeypatch, subprocess.CalledProcessError(255, "ssh"))
+    args.decision = decision
+    before = record.read_bytes()
+    with pytest.raises(subprocess.CalledProcessError):
+        backup.resolve_requested(args)
+    assert record.read_bytes() == before
+
+
+def test_requested_record_is_removed_only_on_a_proven_absent_abandon(tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = requested_record(args)
+    scripted_inspect(monkeypatch, absent_answer())
+    args.decision = "abandon"
+    assert backup.resolve_requested(args) == {
+        "result": "requested_record_abandoned",
+        "generation": args.source_snapshot.name,
+    }
+    assert not record.exists()
+
+
+def test_resolution_refuses_other_states_and_missing_records_before_remote_contact(
+    tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    args.decision = "keep"
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("remote contact before the local record check")
+
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^requested_record_missing$"):
+        backup.resolve_requested(args)
+    record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
+    record.write_text(
+        json.dumps(
+            backup._resume_record(args, "d" * 64, state=backup.RETAINED)
+        )
+    )
+    with pytest.raises(backup.scan.PreflightError, match=r"^requested_record_mismatch$"):
+        backup.resolve_requested(args)
+    args.decision = "delete"
+    with pytest.raises(backup.scan.PreflightError, match=r"^invalid_decision$"):
+        backup.resolve_requested(args)
+
+
+def test_resume_refuses_a_requested_record_and_points_to_the_operator(tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    requested_record(args)
+    args.resume_manifest_sha256 = "a" * 64
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("transport before the operator check")
+
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^resume_requires_operator$"):
+        backup.receive(args)
+
+
+def test_leftover_temporaries_never_block_a_fresh_run(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    leftover = args.private_root / "resume" / (
+        args.source_snapshot.name + "." + "0" * 32 + ".tmp"
+    )
+    leftover.write_text("{")
+    fake_transport(snapshot, args, monkeypatch)
+    assert backup.receive(args)["offhost_verified"] is True
+    assert not leftover.exists()
+
+
+def test_failed_verification_records_an_unverified_copy_and_removes_it(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    real_verify = backup.verify_snapshot
+
+    def failing_verify(*_args, **_kwargs):
+        raise backup.scan.PreflightError("stale_snapshot")
+
+    monkeypatch.setattr(backup, "verify_snapshot", failing_verify)
+    with pytest.raises(backup.scan.PreflightError, match=r"^stale_snapshot$"):
+        backup.receive(args)
+    generation = args.source_snapshot.name
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.TRANSFERRING
+    assert not (args.private_root / "pending" / generation).exists()
+    # The source was never discarded, so the generation can be transferred and verified again.
+    monkeypatch.setattr(backup, "verify_snapshot", real_verify)
+    args.resume_manifest_sha256 = recovery.digest(snapshot / "manifest.json")
+    assert backup.receive(args)["offhost_verified"] is True
+
+
+def test_durable_write_flushes_the_temporary_file_renames_then_flushes_the_directory(
+    tmp_path, monkeypatch
+):
+    events = []
+    real_replace = backup.os.replace
+
+    def replace(source, target):
+        events.append(("rename", Path(target)))
+        real_replace(source, target)
+
+    monkeypatch.setattr(backup, "_fsync_path", lambda path: events.append(("fsync", Path(path))))
+    monkeypatch.setattr(backup.os, "replace", replace)
+    target = tmp_path / "record.json"
+    backup._durable_write(target, {"state": "verified"})
+    assert [kind for kind, _ in events] == ["fsync", "rename", "fsync"]
+    temporary = events[0][1]
+    assert temporary.parent == tmp_path and temporary.suffix == ".tmp"
+    assert events[1] == ("rename", target)
+    assert events[2] == ("fsync", tmp_path)
+    assert json.loads(target.read_text()) == {"state": "verified"}
+
+
+def test_flush_uses_f_fullfsync_and_falls_back_to_fsync_when_the_volume_refuses(monkeypatch):
+    calls = []
+    refuse = {"value": False}
+
+    def fake_fcntl(descriptor, command):
+        calls.append(("F_FULLFSYNC", descriptor, command))
+        if refuse["value"]:
+            raise OSError(errno.ENOTSUP, "unsupported")
+        return 0
+
+    monkeypatch.setattr(backup, "fcntl", SimpleNamespace(F_FULLFSYNC=51, fcntl=fake_fcntl))
+    monkeypatch.setattr(backup.os, "fsync", lambda descriptor: calls.append(("fsync", descriptor)))
+    backup._flush(7)
+    refuse["value"] = True
+    backup._flush(8)
+    assert calls == [("F_FULLFSYNC", 7, 51), ("F_FULLFSYNC", 8, 51), ("fsync", 8)]
+
+
+def test_fsync_tree_flushes_nested_directories_deepest_first_and_the_root_last(
+    tmp_path, monkeypatch
+):
+    folder = tmp_path / "copy"
+    for relative in ("data/listings/ID1", "data/inbound", "config"):
+        (folder / relative).mkdir(parents=True)
+    (folder / "manifest.json").write_text("{}")
+    (folder / "data/listings/ID1/photo.jpg").write_bytes(b"x")
+    (folder / "config/app.json").write_text("{}")
+    order = []
+
+    def record(path):
+        order.append(Path(path).relative_to(folder).as_posix())
+
+    monkeypatch.setattr(backup, "_fsync_path", record)
+    backup._fsync_tree(folder)
+    assert order[-1] == "."
+    assert set(order) >= {
+        "data/listings/ID1",
+        "data/listings",
+        "data",
+        "data/inbound",
+        "config",
+        "manifest.json",
+        "data/listings/ID1/photo.jpg",
+    }
+    assert order.index("data/listings/ID1/photo.jpg") < order.index("data/listings/ID1")
+    assert order.index("data/listings/ID1") < order.index("data/listings") < order.index("data")
+
+
+def test_helper_with_unpinned_bytes_is_refused_before_any_record_or_transport(
+    tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    monkeypatch.setattr(
+        backup.transport,
+        "remote",
+        lambda _args, _command: SimpleNamespace(
+            stdout=json.dumps({"mode": 0o644, "sha256": "f" * 64})
+        ),
+    )
+    monkeypatch.setattr(backup.transport, "remote_lease", fake_lease)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("snapshot or transfer before the helper digest check")
+
+    monkeypatch.setattr(backup, "_snapshot_remote", forbidden)
+    monkeypatch.setattr(backup.transport, "run", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^remote_helper_digest_mismatch$"):
+        backup.receive(args)
+    assert not list((args.private_root / "resume").iterdir())
+
+
+def test_helper_writable_by_group_or_others_is_refused(tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    monkeypatch.setattr(
+        backup.transport,
+        "remote",
+        lambda _args, _command: SimpleNamespace(
+            stdout=json.dumps({"mode": 0o666, "sha256": policy.HELPER_SHA256})
+        ),
+    )
+    monkeypatch.setattr(backup.transport, "remote_lease", fake_lease)
+    with pytest.raises(backup.scan.PreflightError, match=r"^remote_helper_mode_unsafe$"):
+        backup.receive(args)
+    assert not list((args.private_root / "resume").iterdir())
+
+
+def test_pinned_helper_digest_matches_the_repository_helper():
+    digest = hashlib.sha256(Path(backup.__file__).read_bytes()).hexdigest()
+    assert digest == policy.HELPER_SHA256
