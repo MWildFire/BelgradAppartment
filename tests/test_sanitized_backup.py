@@ -339,7 +339,7 @@ def receiver_args(tmp_path):
         ssh_target="fixture",
         ssh_key=key,
         remote_user="otz",
-        remote_python="python",
+        remote_python="/opt/otz/.venv/bin/python",
         min_free_gib=0,
         acknowledge_url_loss=True,
     )
@@ -2315,3 +2315,18 @@ def test_pinned_set_contains_every_module_the_source_helper_imports():
     # Receiver-only lazy imports: the source helper never runs these functions.
     receiver_only = {"scripts/bounded_transfer.py", "scripts/sanitized_helper_pin.py"}
     assert imported - set(pin.HELPER_FILES) <= receiver_only
+
+
+def test_receiver_refuses_an_interpreter_outside_the_documented_path_before_any_lease(
+    tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    args.remote_python = "python"
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("ssh although the interpreter is not the documented one")
+
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden)
+    monkeypatch.setattr(backup.transport, "remote", forbidden)
+    with pytest.raises(backup.scan.PreflightError, match=r"^unsupported_remote_python$"):
+        backup.receive(args)

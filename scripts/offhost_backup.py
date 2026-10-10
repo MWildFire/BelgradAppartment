@@ -151,6 +151,9 @@ def ssh(args):
         "/usr/bin/ssh",
         "-i",
         str(args.ssh_key),
+        # Only the explicit key: no identity offered by an agent or by the user's configuration.
+        "-o",
+        "IdentitiesOnly=yes",
         "-o",
         "BatchMode=yes",
         "-o",
@@ -163,10 +166,24 @@ def ssh(args):
     ]
 
 
+# The interpreter the source may run under sudo: the path documented for the source host.
+REMOTE_PYTHON_ALLOWLIST = frozenset({"/opt/otz/.venv/bin/python"})
+
+
+def check_remote_python(args):
+    """Under sudo, only the documented source interpreter runs; any other path is refused."""
+    if getattr(args, "remote_user", None):
+        recovery.require(
+            getattr(args, "remote_python", None) in REMOTE_PYTHON_ALLOWLIST,
+            "unsupported_remote_python",
+        )
+
+
 def prefix(args):
     user = getattr(args, "remote_user", None)
     if user:
         recovery.require(re.fullmatch(r"[a-z_][a-z0-9_-]*", user), "invalid service user")
+        check_remote_python(args)
         return ["sudo", "-n", "-u", user, "--"]
     return []
 

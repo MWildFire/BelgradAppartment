@@ -964,6 +964,7 @@ def _receiver_root(args):
         "separate_sanitized_namespace_required",
     )
     require(args.remote_root == Path("/opt/otz"), "unsupported_source_root")
+    require(args.remote_python in transport.REMOTE_PYTHON_ALLOWLIST, "unsupported_remote_python")
     require(SOURCE_SNAPSHOT.fullmatch(str(args.source_snapshot)), "invalid_source_snapshot_path")
     require(
         re.fullmatch(

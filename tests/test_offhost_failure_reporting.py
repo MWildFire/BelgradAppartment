@@ -61,7 +61,7 @@ def test_cli_failure_only_emits_static_phase_type_and_exit_code(
             "--remote-root",
             "/opt/otz",
             "--remote-python",
-            "/fake-python",
+            "/opt/otz/.venv/bin/python",
             "--remote-published-dir",
             "/opt/otz/data/public",
         ],

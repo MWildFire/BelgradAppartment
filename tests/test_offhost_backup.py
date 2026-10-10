@@ -95,6 +95,8 @@ def environment(source, tmp_path, monkeypatch):
     seed_dir, _receipt = seed(source, tmp_path)
     key = tmp_path / "fake-key"
     key.write_text("fixture only; SSH never invoked")
+    # The fake rsync runs commands through this interpreter locally; the allowlist covers it here.
+    monkeypatch.setattr(job, "REMOTE_PYTHON_ALLOWLIST", frozenset({sys.executable}))
     args = argparse.Namespace(
         private_root=tmp_path / "offhost",
         seed_dir=seed_dir,
@@ -750,3 +752,21 @@ def test_plain_driver_refuses_a_namespace_another_driver_owns_before_touching_it
     with pytest.raises(recovery.RecoveryError, match="foreign_namespace_marker"):
         job.backup(args)
     assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*")) == before
+
+
+def test_ssh_offers_only_the_explicit_key(tmp_path):
+    key = tmp_path / "fixture-key"
+    key.write_text("synthetic only; no SSH executed")
+    command = job.ssh(argparse.Namespace(ssh_target="fixture", ssh_key=key))
+    assert command[command.index("-i") + 1] == str(key)
+    assert command[command.index("IdentitiesOnly=yes") - 1] == "-o"
+
+
+def test_sudo_runs_only_the_documented_source_interpreter():
+    documented = argparse.Namespace(remote_user="otz", remote_python="/opt/otz/.venv/bin/python")
+    assert job.prefix(documented) == ["sudo", "-n", "-u", "otz", "--"]
+    for unlisted in ("python", "/usr/bin/python3", "/opt/otz/.venv/bin/python3"):
+        args = argparse.Namespace(remote_user="otz", remote_python=unlisted)
+        with pytest.raises(recovery.RecoveryError, match=r"^unsupported_remote_python$"):
+            job.prefix(args)
+    assert job.prefix(argparse.Namespace(remote_user=None, remote_python="python")) == []
