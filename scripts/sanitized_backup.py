@@ -767,19 +767,17 @@ def discard_snapshot(args):
 
 
 def _discard_remote(args, checksum):
-    _require_pinned_helper(args)
     response = transport.remote(
         args,
-        [
-            args.remote_python,
-            str(args.remote_helper),
+        _helper_command(
+            args,
             "discard-snapshot",
-            str(args.source_snapshot),
+            args.source_snapshot,
             "--manifest-sha256",
             checksum,
             "--application-project-root",
-            str(args.remote_root),
-        ],
+            args.remote_root,
+        ),
     )
     require(
         json.loads(response.stdout)
@@ -866,30 +864,30 @@ def _publish_generation(pending, destination):
     _fsync_path(destination.parent)
 
 
-# Runs on the server before any helper call; it reports the helper's digest and mode only.
-HELPER_DIGEST_CHECK = (
-    "import hashlib,json,os,stat,sys; p=sys.argv[1]; "
-    "print(json.dumps({'mode': stat.S_IMODE(os.stat(p).st_mode), "
-    "'sha256': hashlib.sha256(open(p,'rb').read()).hexdigest()}))"
-)
+def _helper_command(args, *helper_args):
+    """The only command the receiver runs on the source helper.
+
+    The bootstrap verifies the whole pinned helper set and runs exactly those bytes from memory,
+    so the check and the run are one process and no helper module is imported from disk.
+    """
+    from scripts import sanitized_helper_pin as pin  # receiver only; the source never imports it
+
+    return [
+        args.remote_python,
+        "-I",
+        "-c",
+        pin.HELPER_BOOT,
+        str(args.remote_helper.parent.parent),
+        pin.HELPER_SET_SHA256,
+        json.dumps(sorted(pin.HELPER_FILES)),
+        "scripts.sanitized_backup",
+        *[str(part) for part in helper_args],
+    ]
 
 
 def _require_pinned_helper(args):
-    """Refuse to run a server helper unless its bytes match the digest pinned in this repository."""
-    response = transport.remote(
-        args, [args.remote_python, "-c", HELPER_DIGEST_CHECK, str(args.remote_helper)]
-    )
-    status = _json_or_none(response.stdout)
-    require(
-        isinstance(status, dict)
-        and set(status) == {"mode", "sha256"}
-        and status["sha256"] == policy.HELPER_SHA256,
-        "remote_helper_digest_mismatch",
-    )
-    require(
-        type(status["mode"]) is int and (status["mode"] & 0o022) == 0,
-        "remote_helper_mode_unsafe",
-    )
+    """First helper run under the lease. The bootstrap refuses before the inspection can answer."""
+    _inspect_remote(args)
 
 
 def _receiver_root(args):
@@ -946,17 +944,15 @@ def _require_resumable(args, resume_record):
 
 def _inspect_remote(args):
     """Read-only remote answer for one generation: absent, or present with its manifest digest."""
-    _require_pinned_helper(args)
     response = transport.remote(
         args,
-        [
-            args.remote_python,
-            str(args.remote_helper),
+        _helper_command(
+            args,
             "inspect-snapshot",
-            str(args.source_snapshot),
+            args.source_snapshot,
             "--application-project-root",
-            str(args.remote_root),
-        ],
+            args.remote_root,
+        ),
     )
     status = _json_or_none(response.stdout)
     if status == {"result": "snapshot_absent", "scope": SCOPE}:
@@ -1038,20 +1034,19 @@ def receive(args):
                 _durable_write(resume_record, _resume_record(args, None, state=REQUESTED))
                 source = _snapshot_remote(
                     args,
-                    [
-                        args.remote_python,
-                        str(args.remote_helper),
+                    _helper_command(
+                        args,
                         "snapshot",
                         "--project-root",
-                        str(args.remote_root),
+                        args.remote_root,
                         "--output-dir",
-                        str(args.source_snapshot),
+                        args.source_snapshot,
                         "--application-project-root",
-                        str(args.remote_root),
+                        args.remote_root,
                         "--min-free-gib",
-                        str(args.min_free_gib),
+                        args.min_free_gib,
                         "--acknowledge-url-loss",
-                    ],
+                    ),
                 )
                 status = json.loads(source.stdout)
                 require(

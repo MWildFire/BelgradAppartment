@@ -3,7 +3,6 @@
 import argparse
 import copy
 import errno
-import hashlib
 import json
 import re
 import shutil
@@ -25,6 +24,7 @@ from sqlalchemy.orm import Session
 from scripts import recovery
 from scripts import sanitized_backup as backup
 from scripts import sanitized_contract as policy
+from scripts import sanitized_helper_pin as pin
 from src.db.models import Listing, Platform
 from src.matching.phash import compute_phash_from_path
 from tests.test_recovery import source as recovery_source
@@ -346,9 +346,11 @@ def fake_transport(snapshot, args, monkeypatch, fault=None):
     calls = []
 
     def source(_args, command):
-        if "-c" in command:  # the pinned-helper digest check precedes every helper call
+        # Every source helper run is the pinned bootstrap, never a bare helper path.
+        assert command[1:4] == ["-I", "-c", pin.HELPER_BOOT]
+        if "inspect-snapshot" in command:
             return SimpleNamespace(
-                stdout=json.dumps({"mode": 0o644, "sha256": policy.HELPER_SHA256})
+                stdout=json.dumps({"result": "snapshot_absent", "scope": policy.SCOPE})
             )
         if "discard-snapshot" in command:
             assert command[command.index("--manifest-sha256") + 1] == expected_hash
@@ -1570,10 +1572,7 @@ def requested_record(args):
 
 def scripted_inspect(monkeypatch, answer):
     def remote(_args, command):
-        if "-c" in command:
-            return SimpleNamespace(
-                stdout=json.dumps({"mode": 0o644, "sha256": policy.HELPER_SHA256})
-            )
+        assert command[1:4] == ["-I", "-c", pin.HELPER_BOOT]
         assert "inspect-snapshot" in command
         if isinstance(answer, BaseException):
             raise answer
@@ -1814,44 +1813,115 @@ def test_fsync_tree_flushes_nested_directories_deepest_first_and_the_root_last(
     assert order.index("data/listings/ID1") < order.index("data/listings") < order.index("data")
 
 
-def test_helper_with_unpinned_bytes_is_refused_before_any_record_or_transport(
-    tmp_path, monkeypatch
-):
-    args = receiver_args(tmp_path)
-    monkeypatch.setattr(
-        backup.transport,
-        "remote",
-        lambda _args, _command: SimpleNamespace(
-            stdout=json.dumps({"mode": 0o644, "sha256": "f" * 64})
-        ),
+REPOSITORY = Path(__file__).resolve().parents[1]
+
+
+def helper_tools(tmp_path):
+    """The pinned helper set laid out as /tmp/otz-sanitized-tools-XXXX/scripts/ (copies only)."""
+    tools = tmp_path / "otz-sanitized-tools-123abc45"
+    for name in pin.HELPER_FILES:
+        target = tools / name
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+        shutil.copyfile(REPOSITORY / name, target)
+        target.chmod(0o644)
+    (tools / "scripts").chmod(0o755)
+    return tools
+
+
+def run_bootstrap(tools, *helper_args, entry="scripts.sanitized_backup", cwd=None):
+    """Run the real bootstrap exactly as the receiver sends it, against a local directory."""
+    return subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            pin.HELPER_BOOT,
+            str(tools),
+            pin.HELPER_SET_SHA256,
+            json.dumps(sorted(pin.HELPER_FILES)),
+            entry,
+            *helper_args,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+        cwd=cwd,
     )
-    monkeypatch.setattr(backup.transport, "remote_lease", fake_lease)
+
+
+def test_source_bootstrap_runs_the_pinned_set_from_memory(tmp_path):
+    result = run_bootstrap(helper_tools(tmp_path), "--help")
+    assert result.returncode == 0
+    assert result.stdout.startswith("usage: sanitized_backup.py")
+
+
+def test_source_bootstrap_refuses_any_changed_byte_before_the_helper_runs(tmp_path):
+    tools = helper_tools(tmp_path)
+    with (tools / "scripts/sanitized_contract.py").open("ab") as handle:
+        handle.write(b"\n# drift\n")
+    result = run_bootstrap(tools, "--help")
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == {"result": "blocked", "reason": "remote_helper_digest_mismatch"}
+    assert "usage:" not in result.stdout
+
+
+@pytest.mark.parametrize("target", ["scripts/recovery.py", "scripts"])
+def test_source_bootstrap_refuses_group_or_world_writable_files_and_directories(tmp_path, target):
+    tools = helper_tools(tmp_path)
+    path = tools / target
+    path.chmod(0o664 if path.is_file() else 0o775)
+    result = run_bootstrap(tools, "--help")
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == {"result": "blocked", "reason": "remote_helper_mode_unsafe"}
+
+
+def test_source_bootstrap_never_imports_a_module_from_its_own_directory(tmp_path):
+    tools = helper_tools(tmp_path)
+    marker = tmp_path / "planted-module-ran"
+    # shlex is imported by the helper; a copy beside the helper must never be the one that runs.
+    (tools / "shlex.py").write_text(f"open({str(marker)!r}, 'w').close()\n")
+    result = run_bootstrap(tools, "--help", cwd=tools)
+    assert result.returncode == 0
+    assert result.stdout.startswith("usage: sanitized_backup.py")
+    assert not marker.exists()
+
+
+def test_source_bootstrap_refuses_an_entry_outside_the_pinned_set(tmp_path):
+    result = run_bootstrap(helper_tools(tmp_path), "--help", entry="scripts.bounded_transfer")
+    assert result.returncode == 1
+    assert json.loads(result.stdout) == {"result": "blocked", "reason": "invalid_remote_helper_set"}
+
+
+def test_refused_bootstrap_stops_before_any_record_snapshot_or_transfer(tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+
+    def refused(_args, command):
+        assert command[1:4] == ["-I", "-c", pin.HELPER_BOOT]
+        raise subprocess.CalledProcessError(1, "ssh")  # the bootstrap exits 1 on a refused set
 
     def forbidden(*_args, **_kwargs):
-        raise AssertionError("snapshot or transfer before the helper digest check")
+        raise AssertionError("snapshot or transfer after a refused bootstrap")
 
+    monkeypatch.setattr(backup.transport, "remote", refused)
+    monkeypatch.setattr(backup.transport, "remote_lease", fake_lease)
     monkeypatch.setattr(backup, "_snapshot_remote", forbidden)
     monkeypatch.setattr(backup.transport, "run", forbidden)
-    with pytest.raises(backup.scan.PreflightError, match=r"^remote_helper_digest_mismatch$"):
+    with pytest.raises(subprocess.CalledProcessError):
         backup.receive(args)
     assert not list((args.private_root / "resume").iterdir())
 
 
-def test_helper_writable_by_group_or_others_is_refused(tmp_path, monkeypatch):
-    args = receiver_args(tmp_path)
-    monkeypatch.setattr(
-        backup.transport,
-        "remote",
-        lambda _args, _command: SimpleNamespace(
-            stdout=json.dumps({"mode": 0o666, "sha256": policy.HELPER_SHA256})
-        ),
-    )
-    monkeypatch.setattr(backup.transport, "remote_lease", fake_lease)
-    with pytest.raises(backup.scan.PreflightError, match=r"^remote_helper_mode_unsafe$"):
-        backup.receive(args)
-    assert not list((args.private_root / "resume").iterdir())
+def test_pinned_helper_set_matches_the_repository_files():
+    files = {name: (REPOSITORY / name).read_bytes() for name in pin.HELPER_FILES}
+    assert pin.helper_set_digest(files) == pin.HELPER_SET_SHA256
 
 
-def test_pinned_helper_digest_matches_the_repository_helper():
-    digest = hashlib.sha256(Path(backup.__file__).read_bytes()).hexdigest()
-    assert digest == policy.HELPER_SHA256
+def test_pinned_set_contains_every_module_the_source_helper_imports():
+    imported = set()
+    for name in pin.HELPER_FILES:
+        for match in re.finditer(r"^\s*from scripts import (\w+)", (REPOSITORY / name).read_text(), re.M):
+            imported.add(f"scripts/{match.group(1)}.py")
+    # Receiver-only lazy imports: the source helper never runs these functions.
+    receiver_only = {"scripts/bounded_transfer.py", "scripts/sanitized_helper_pin.py"}
+    assert imported - set(pin.HELPER_FILES) <= receiver_only
