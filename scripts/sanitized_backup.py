@@ -928,8 +928,9 @@ def _durable_write(path, value):
     Order: the temporary file is written and flushed through the descriptor that wrote it, then
     closed, renamed over the record, and the parent directory is flushed. F_FULLFSYNC is issued at
     each flush; no power-loss test measures it. Leftover temporaries never became records. Only
-    resume/ is swept, under the lease, because every resume write happens under the lease; other
-    leftovers are ignored.
+    resume/ is swept, under the lease, because every resume write happens under the lease. The
+    last removal of a record is the one step after the release; see receive. Other leftovers are
+    ignored.
     """
     temporary = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.tmp")
     try:
@@ -1105,7 +1106,9 @@ def receive(args):
     succeeded. A verification that raises is written down as transferring before its copy is
     removed. Once verification has succeeded, or a restart finds verifying, the copy is kept and
     the record blocks resume and fresh runs until an operator resolves it. The record is removed
-    last, after the generation and its receipt are durable.
+    last, after the generation and its receipt are durable. That removal alone runs after the lease
+    is released: publication waits for a clean release, and until the removal the record still says
+    kept_for_operator, which refuses every other run.
 
     Record checks run twice: before the lease, as refusals that contact nothing, and again under
     the lease after the helper is verified. Only the second set decides, because another receiver
