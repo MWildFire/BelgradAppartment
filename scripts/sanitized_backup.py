@@ -1240,6 +1240,11 @@ def receive(args):
                     + sum(m["size"] for m in manifest["files"].values()),
                     "insufficient_receiver_space",
                 )
+                # Batching and the free-space check use the sizes in the manifest; the receiver does
+                # not measure the source files first. A wrong size changes only the batch
+                # boundaries, the cap check and the free-space check. verify_snapshot then compares
+                # every copied file with the manifest, so a copy whose size or digest differs is
+                # refused.
                 # Materialized first: every name is validated before the first transfer.
                 groups = list(
                     bounded.batches(
