@@ -2283,7 +2283,10 @@ def test_source_bootstrap_refuses_an_entry_outside_the_pinned_set(tmp_path):
     assert json.loads(result.stdout) == {"result": "blocked", "reason": "invalid_remote_helper_set"}
 
 
-def test_refused_bootstrap_stops_before_any_record_snapshot_or_transfer(tmp_path, monkeypatch):
+def test_refused_bootstrap_stops_before_any_resume_record_snapshot_or_transfer(tmp_path, monkeypatch):
+    """The lease and the bootstrap run are both ssh connections; the namespace binding (scope.json)
+    is written locally before the lease. A refused bootstrap writes no resume record and starts
+    no snapshot or transfer."""
     args = receiver_args(tmp_path)
 
     def refused(_args, command):
