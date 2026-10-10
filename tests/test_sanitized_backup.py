@@ -541,6 +541,26 @@ def test_receive_refuses_a_file_over_the_batch_cap_before_any_transfer(
     assert record["state"] == backup.TRANSFERRING  # a resume would transfer again, and refuse again
 
 
+def test_a_manifest_size_that_differs_from_the_copy_is_refused_after_transfer(
+    snapshot, tmp_path, monkeypatch
+):
+    # Batching trusts the manifest sizes; the copy is still compared with them after the transfer.
+    change_manifest(
+        snapshot,
+        lambda m: m["files"]["data/otz.db"].update(size=m["files"]["data/otz.db"]["size"] + 1),
+    )
+    args = receiver_args(tmp_path)
+    calls = fake_transport(snapshot, args, monkeypatch)
+    with pytest.raises(backup.scan.PreflightError, match=r"^snapshot_checksum_differs$"):
+        backup.receive(args)
+    assert [call for call in calls if "--files-from" in call]  # the transfer did run
+    generation = args.source_snapshot.name
+    assert not (args.private_root / "receipts" / (generation + ".json")).exists()
+    assert not (args.private_root / "generations" / generation).exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == backup.TRANSFERRING
+
+
 def test_receive_keeps_verified_copy_when_lease_fails_after_source_discard(
     snapshot, tmp_path, monkeypatch
 ):
