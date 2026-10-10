@@ -143,3 +143,17 @@ def probe_sweep_broken(*, checked: int, failed: int) -> bool:
     if checked <= 0 or failed >= checked:
         return True
     return failed / checked > PROBE_FAILURE_ALARM_SHARE
+
+
+# Share of the listings one run attempted that it deactivated as source-removed (404/410). Real
+# churn is a few percent; a changed URL scheme or a broken route turns most attempts into 404s,
+# and that must not pass as a normal run. Owner decision: 0.3 is a proposal, not a measured value.
+REMOVAL_ALARM_SHARE = 0.3
+
+
+def source_removal_alarm(*, deactivated: int, attempted: int) -> bool:
+    """True when the removal share of one run is above REMOVAL_ALARM_SHARE.
+
+    `attempted` counts every listing the run tried: refreshed, errored and removed.
+    """
+    return deactivated > 0 and attempted > 0 and deactivated / attempted > REMOVAL_ALARM_SHARE

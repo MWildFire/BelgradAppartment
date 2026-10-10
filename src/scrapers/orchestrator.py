@@ -1593,6 +1593,8 @@ class RollingRefreshResult:
     source_errors: dict[str, str] = field(default_factory=dict)
     inventory_count: int = 0
     retry_deferred: int = 0
+    # Listings the source removed (404/410) and this run deactivated; never counted in `errors`.
+    deactivated: int = 0
 
 
 async def rolling_detail_refresh(
@@ -1634,7 +1636,7 @@ async def rolling_detail_refresh(
     return RollingRefreshResult(
         len(plan.rows), stats.verified, stats.errors, stats.price_changes, stats.skipped,
         stats.source_errors,
-        plan.inventory_count, plan.retry_deferred,
+        plan.inventory_count, plan.retry_deferred, deactivated=stats.deactivated,
     )
 
 

@@ -330,3 +330,12 @@ def test_probe_sweep_broken_only_when_probes_failed_wholesale():
     assert not probe_sweep_broken(checked=10, failed=5)  # exactly at the threshold
     assert probe_sweep_broken(checked=10, failed=6)
     assert not probe_sweep_broken(checked=100, failed=1)  # ordinary noise
+
+
+def test_source_removal_alarm_only_above_the_removal_share():
+    from src.scrapers.run_safety import source_removal_alarm
+
+    assert not source_removal_alarm(deactivated=0, attempted=10)
+    assert not source_removal_alarm(deactivated=3, attempted=10)  # exactly at the threshold
+    assert source_removal_alarm(deactivated=4, attempted=10)
+    assert source_removal_alarm(deactivated=9, attempted=9)  # what a changed URL scheme looks like

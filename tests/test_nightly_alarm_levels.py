@@ -184,8 +184,10 @@ def test_real_item_errors_degrade_the_source_and_fail_the_night():
 
 
 def _public_refresh(monkeypatch, **fields):
+    values = {"selected": 10, "refreshed": 8, "price_changes": [], "deactivated": 0, **fields}
+
     async def fake_rolling(*, limit, public_only, scrapers, deadline):
-        return SimpleNamespace(selected=10, refreshed=8, price_changes=[], **fields)
+        return SimpleNamespace(**values)
 
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
 
@@ -203,3 +205,50 @@ async def test_public_refresh_source_failure_exits_one(monkeypatch, capsys):
         await cli_mod._refetch_details(None, False, None, False, public_only=True)
     assert exit_info.value.code == 1
     assert "🚨 Ошибки площадок: NEKRETNINE: TimeoutError" in capsys.readouterr().out
+
+
+async def test_public_refresh_mass_removal_is_alarm_and_exits_one(monkeypatch, capsys):
+    """A changed URL scheme deactivates most attempted listings: print the count, alarm, exit 1."""
+    _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={}, deactivated=9)
+    with pytest.raises(SystemExit) as exit_info:
+        await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    assert exit_info.value.code == 1
+    out = capsys.readouterr().out
+    assert "деактивировано (404/410): 9" in out
+    assert "🚨 Массовое снятие: 9 из 17" in out
+
+
+async def test_public_refresh_few_removals_are_counted_without_alarm(monkeypatch, capsys):
+    _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={}, deactivated=1)
+    await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    out = capsys.readouterr().out
+    assert "деактивировано (404/410): 1" in out
+    assert "🚨" not in out
+
+
+async def test_nightly_mass_removal_is_alarm_with_count(db, heal_rolling_links):
+    idle_heal = orchestrator.HealResult(selected=0, fixed=0, remaining=0, errors=0)
+
+    lines = await _nightly_lines(
+        heal_rolling_links, idle_heal,
+        orchestrator.RollingRefreshResult(
+            selected=10, refreshed=1, errors=0, price_changes=[], deactivated=9,
+        ),
+        orchestrator.LinkVerifyStats(),
+    )
+    detail_line = next(line for line in lines if "деталей обновлено" in line)
+    assert detail_line.startswith("🚨 ")
+    assert "деактивировано (404/410): 9" in detail_line
+    assert any("🚨" in line for line in lines)  # the night's maintenance_failed trigger
+
+    lines = await _nightly_lines(
+        heal_rolling_links, idle_heal,
+        orchestrator.RollingRefreshResult(
+            selected=10, refreshed=9, errors=0, price_changes=[], deactivated=1,
+        ),
+        orchestrator.LinkVerifyStats(),
+    )
+    detail_line = next(line for line in lines if "деталей обновлено" in line)
+    assert not detail_line.startswith("🚨 ")
+    assert "деактивировано (404/410): 1" in detail_line
+    assert not any("🚨" in line for line in lines)

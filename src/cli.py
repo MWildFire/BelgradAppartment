@@ -21,7 +21,7 @@ from src.jobs.lifecycle import remaining_budget, run_budget, run_cooperatively
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
-from src.scrapers.run_safety import probe_sweep_broken
+from src.scrapers.run_safety import probe_sweep_broken, source_removal_alarm
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
@@ -1949,9 +1949,16 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             if settings.nightly_detail_refresh_all:
                 line += (f", выбрано: {rolling.selected} / база: {rolling.inventory_count}, "
                          f"ожидают повторной попытки: {rolling.retry_deferred}")
+            if rolling.deactivated:
+                line += f", деактивировано (404/410): {rolling.deactivated}"
+            mass_removal = source_removal_alarm(
+                deactivated=rolling.deactivated,
+                attempted=rolling.refreshed + rolling.errors + rolling.deactivated,
+            )
             if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
+                    or mass_removal
                     or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
-                alarm = "🚨 " if getattr(rolling, "source_errors", {}) else "⚠️ "
+                alarm = "🚨 " if getattr(rolling, "source_errors", {}) or mass_removal else "⚠️ "
                 line = (f"{alarm}{line}, ошибок: {rolling.errors}; "
                         f"ошибок источников: {len(getattr(rolling, 'source_errors', {}))}")
             lines.append(line)
@@ -2702,15 +2709,25 @@ async def _refetch_details(
             f"errors={result.errors} skipped={result.skipped} "
             f"source_errors={len(result.source_errors)} ==="
         )
+        removed = result.deactivated
+        attempted = result.refreshed + result.errors + removed
+        click.echo(f"деактивировано (404/410): {removed}")
         if result.errors:
             click.echo(f"⚠️ Ошибки: {result.errors}")
         if result.skipped:
             click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
-        # Only source-level failures fail the run; item errors and budget skips are warnings.
+        mass_removal = source_removal_alarm(deactivated=removed, attempted=attempted)
+        if mass_removal:
+            click.echo(
+                f"🚨 Массовое снятие: {removed} из {attempted} попыток за прогон — "
+                "проверь схему URL и парсер площадки"
+            )
+        # Source failures and mass removals fail the run; item errors and budget skips only warn.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())
             ))
+        if result.source_errors or mass_removal:
             raise SystemExit(1)
         return
 

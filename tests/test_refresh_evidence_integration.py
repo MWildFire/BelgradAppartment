@@ -222,6 +222,23 @@ async def test_retry_backoff_and_success_age_control_next_automatic_batch(db, mo
     assert next_result.selected == 0 and next_result.errors == 0
 
 
+async def test_rolling_refresh_counts_source_removals_as_deactivated_not_errors(db, monkeypatch):
+    """A source takedown deactivates the listing and is reported as a removal, not a run error."""
+    from src.scrapers.base import SourceListingRemovedError
+
+    rows = [await seed(str(index)) for index in range(3)]
+    monkeypatch.setattr(orch, "_download_photos", save_photos)
+
+    class Gone(scraper_for(None)):
+        async def fetch_detail(self, url):
+            raise SourceListingRemovedError(url)
+
+    result = await orch.rolling_detail_refresh(limit=3, scrapers={Platform.NEKRETNINE: Gone})
+    assert (result.deactivated, result.errors, result.refreshed) == (3, 0, 0)
+    for row in rows:
+        assert (await read(row)).is_active is False
+
+
 async def test_rolling_donates_unused_source_slots_and_advances_persistent_cursor(db, monkeypatch):
     first = await seed("only", Platform.CETIRI_ZIDA)
     rest = [await seed(str(index), Platform.NEKRETNINE) for index in range(3)]
