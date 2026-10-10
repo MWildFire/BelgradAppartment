@@ -346,8 +346,6 @@ def fake_transport(snapshot, args, monkeypatch, fault=None):
     def source(_args, command):
         if "discard-snapshot" in command:
             assert command[command.index("--manifest-sha256") + 1] == expected_hash
-            if fault == "cleanup":
-                raise backup.scan.PreflightError("source_snapshot_cleanup_unconfirmed")
             return SimpleNamespace(
                 stdout=json.dumps(
                     {
@@ -608,6 +606,60 @@ def test_unconfirmed_discard_keeps_copy_and_refuses_resume(snapshot, tmp_path, m
     args.resume_manifest_sha256 = record["manifest_sha256"]
     with pytest.raises(backup.scan.PreflightError, match=r"^generation_exists$"):
         backup.receive(args)
+
+
+def test_verified_copy_survives_a_lease_loss_before_discard(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    verify = backup.verify_snapshot
+    state = {"verified": False}
+
+    def verified_then_flag(*call_args, **call_kwargs):
+        result = verify(*call_args, **call_kwargs)
+        state["verified"] = True
+        return result
+
+    def lease_lost_after_verify():
+        if state["verified"]:
+            raise backup.scan.PreflightError("lease_lost_after_verify")
+
+    def forbidden_discard(*_args, **_kwargs):
+        raise AssertionError("discard must not run after the lease was lost")
+
+    monkeypatch.setattr(backup, "verify_snapshot", verified_then_flag)
+    monkeypatch.setattr(backup.transport, "assert_lease", lease_lost_after_verify)
+    monkeypatch.setattr(backup, "_discard_remote", forbidden_discard)
+    with pytest.raises(backup.scan.PreflightError, match=r"^lease_lost_after_verify$"):
+        backup.receive(args)
+    generation = args.source_snapshot.name
+    assert (args.private_root / "pending" / generation / "manifest.json").exists()
+    record = backup.read_json(args.private_root / "resume" / (generation + ".json"))
+    assert record["state"] == "kept_for_operator"
+    for name in ("receipts", "generations"):
+        assert not list((args.private_root / name).iterdir())
+
+
+def test_record_write_failure_keeps_the_original_cause(snapshot, tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    write = backup.transport.atomic_json
+    state = {"discard_attempted": False}
+
+    def discard_fails(*_args, **_kwargs):
+        state["discard_attempted"] = True
+        raise backup.scan.PreflightError("source_snapshot_cleanup_unconfirmed")
+
+    def write_fails_after_discard(path, value):
+        if state["discard_attempted"] and "resume" in path.parts:
+            raise OSError(28, "No space left on device")
+        return write(path, value)
+
+    monkeypatch.setattr(backup, "_discard_remote", discard_fails)
+    monkeypatch.setattr(backup.transport, "atomic_json", write_fails_after_discard)
+    with pytest.raises(backup.scan.PreflightError, match="source_snapshot_cleanup_unconfirmed") as info:
+        backup.receive(args)
+    assert any("resume record not updated: OSError" in note for note in info.value.__notes__)
+    assert (args.private_root / "pending" / args.source_snapshot.name / "manifest.json").exists()
 
 
 def test_unresolved_resume_record_blocks_a_fresh_run(tmp_path, monkeypatch):

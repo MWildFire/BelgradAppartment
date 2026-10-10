@@ -793,7 +793,8 @@ def receive(args):
     Bounded batches only. A failure after the source snapshot exists keeps that snapshot and
     its manifest digest for an explicit resume; it is never discarded automatically. A verified
     local copy, or a discard that may have run, is never deleted automatically either: it is
-    kept for an operator, and its resume record refuses resume.
+    kept for an operator, and its resume record refuses resume. A fresh run refuses to start
+    while any resume record is open.
     """
     # Local receiver only: the remote helper never imports the batching module.
     from scripts import bounded_transfer as bounded
@@ -948,9 +949,14 @@ def receive(args):
                 "source_manifest_changed",
             )
             discard_attempted = True
+            # Marked before the call: a crash or a lost answer during discard keeps the copy and
+            # refuses resume. The marker is removed only once the discard is confirmed.
+            transport.atomic_json(
+                resume_record, _resume_record(args, source_checksum, state="kept_for_operator")
+            )
             _discard_remote(args, source_checksum)
-            source_checksum = None
             resume_record.unlink(missing_ok=True)
+            source_checksum = None
             transport.assert_lease()
             result.update(
                 backup_format="sanitized_directory_generation",
@@ -966,19 +972,24 @@ def receive(args):
         transport.atomic_json(root / "receipts" / (generation + ".json"), result)
         resume_record.unlink(missing_ok=True)
         return result
-    except BaseException:
+    except BaseException as error:
         if verified or discard_attempted:
             # A verified copy, or a discard that may have run, is never deleted automatically.
             # Keep the copy for an operator; the record moves to a state that refuses resume.
             if source_checksum is not None:
-                transport.atomic_json(
-                    resume_record,
-                    _resume_record(args, source_checksum, state="kept_for_operator"),
-                )
+                try:
+                    transport.atomic_json(
+                        resume_record,
+                        _resume_record(args, source_checksum, state="kept_for_operator"),
+                    )
+                except OSError as write_error:
+                    # The original cause stays the raised error; the write failure is attached.
+                    error.add_note(f"resume record not updated: {type(write_error).__name__}")
             raise
         if pending.exists():
             shutil.rmtree(pending)
-        # A retained source snapshot is never discarded here; its resume record is already on disk.
+        # A retained source snapshot is never discarded here; its resume record was written before
+        # the first transfer, or not at all if the snapshot was never created.
         raise
     finally:
         listing.unlink(missing_ok=True)
