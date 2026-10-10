@@ -291,6 +291,13 @@ async def mark_posted_action(
         match = await s.get(Match, match_id)
         if match is None:
             return _flash_card(request, match_id, error=f"Match {match_id} не найден")
+        if match.status == MatchStatus.REJECTED:
+            # A rejection is terminal: a rejected match is never marked as posted or exposed.
+            return _flash_card(
+                request,
+                match_id,
+                error=f"Match {match_id} отклонён: отметить как опубликованный нельзя",
+            )
         match.status = MatchStatus.PUBLISHED
         match.rejection_reason = None
         # Same idempotent upsert + create-time flag defaulting the delivery hot path uses

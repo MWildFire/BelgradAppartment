@@ -163,10 +163,11 @@ async def close_review(inbound_id: int, decision: str, reason: str) -> None:
 
 
 async def reject_match(match_id: int, reason: str) -> str:
-    """Reject a PENDING match that was never sent; PUBLISHED matches stay with the admin tool.
+    """Reject a PENDING match that no recipient has started to receive.
 
-    The status change is one conditional statement that applies only while no delivery record
-    exists. The recipient claim refuses a REJECTED match, so the two cannot interleave.
+    The status change is one conditional statement that applies only while no recipient is in
+    sending, sent or unknown state. Queued rows stay pending and are never claimed for a REJECTED
+    match. PUBLISHED matches stay with the admin tool.
     """
     reason = _clean_reason(reason)
     async with get_session() as session:
@@ -185,7 +186,12 @@ async def reject_match(match_id: int, reason: str) -> str:
                 .where(
                     Match.id == match_id,
                     Match.status == MatchStatus.PENDING,
-                    ~exists(select(MatchDelivery.id).where(MatchDelivery.match_id == match_id)),
+                    ~exists(
+                        select(MatchDelivery.id).where(
+                            MatchDelivery.match_id == match_id,
+                            MatchDelivery.status.in_(["sending", "sent", "unknown"]),
+                        )
+                    ),
                 )
                 .values(status=MatchStatus.REJECTED, rejection_reason=reason)
                 .returning(Match.id)
@@ -197,25 +203,24 @@ async def reject_match(match_id: int, reason: str) -> str:
 
 
 async def reset_for_rematch(*, keep_published: bool) -> None:
-    """Operator reset before a full rematch; operator decisions are not erased.
+    """Operator reset before a full rematch; operator decisions and delivery history survive.
 
-    With keep_published, published matches, rejected matches and manual review decisions survive.
-    Other inbound posts return to NEW, and their non-published, non-rejected matches are removed.
-    Without keep_published the caller has already confirmed an explicit full wipe.
+    With keep_published, these stay unchanged together with their inbound posts: published
+    matches, rejected matches, matches that already have delivery rows, and every manual review
+    decision. The other matches are removed and their inbound posts return to NEW. Without
+    keep_published the caller has already confirmed an explicit full wipe.
     """
     async with get_session() as session:
+        kept: set[int] = set()
         if keep_published:
-            await session.execute(
-                delete(Match).where(
-                    Match.status.notin_([MatchStatus.PUBLISHED, MatchStatus.REJECTED])
-                )
+            keep_match = or_(
+                Match.status.in_([MatchStatus.PUBLISHED, MatchStatus.REJECTED]),
+                Match.id.in_(select(MatchDelivery.match_id)),
             )
             kept = set(
                 (
                     await session.execute(
-                        select(InboundPost.id)
-                        .join(Match, Match.inbound_post_id == InboundPost.id)
-                        .where(Match.status == MatchStatus.PUBLISHED)
+                        select(Match.inbound_post_id).where(keep_match)
                     )
                 ).scalars()
             )
@@ -228,17 +233,18 @@ async def reset_for_rematch(*, keep_published: bool) -> None:
                     )
                 ).scalars()
             )
-            reset = update(InboundPost).values(status=InboundStatus.NEW)
-            if kept:
-                reset = reset.where(~InboundPost.id.in_(kept))
-            await session.execute(reset)
+            await session.execute(delete(Match).where(~keep_match))
         else:
             await session.execute(delete(Match))
-            await session.execute(update(InboundPost).values(status=InboundStatus.NEW))
-        await session.execute(
-            delete(ValidationJob).where(
-                ValidationJob.inbound_id.in_(
-                    select(InboundPost.id).where(InboundPost.status == InboundStatus.NEW)
-                )
+        reset = update(InboundPost).values(status=InboundStatus.NEW)
+        if kept:
+            reset = reset.where(~InboundPost.id.in_(kept))
+        await session.execute(reset)
+        jobs = delete(ValidationJob).where(
+            ValidationJob.inbound_id.in_(
+                select(InboundPost.id).where(InboundPost.status == InboundStatus.NEW)
             )
         )
+        if kept:
+            jobs = jobs.where(~ValidationJob.inbound_id.in_(kept))
+        await session.execute(jobs)

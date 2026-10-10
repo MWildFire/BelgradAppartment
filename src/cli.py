@@ -1253,7 +1253,14 @@ async def _test_batch(n: int, from_id: int | None) -> None:
 
     from sqlalchemy import delete, update
 
-    from src.db.models import InboundPost, InboundStatus, Match, PublishedPost
+    from src.db.models import (
+        InboundPost,
+        InboundStatus,
+        Match,
+        MatchStatus,
+        PublishedPost,
+        ValidationJob,
+    )
     from src.db.session import get_session
     from src.jobs.pipeline import process_new_inbound
     from src.telegram.delivery import send_run_summary
@@ -1268,6 +1275,35 @@ async def _test_batch(n: int, from_id: int | None) -> None:
     if not inbound_ids:
         click.echo("  (no inbound posts found)")
         return
+
+    # Operator decisions are never wiped: skip posts with a manual decision or a rejected match.
+    async with get_session() as s:
+        decided = set(
+            (
+                await s.execute(
+                    select(ValidationJob.inbound_id).where(
+                        ValidationJob.inbound_id.in_(inbound_ids),
+                        ValidationJob.reason_code.like("manual_%"),
+                    )
+                )
+            ).scalars().all()
+        )
+        decided |= set(
+            (
+                await s.execute(
+                    select(Match.inbound_post_id).where(
+                        Match.inbound_post_id.in_(inbound_ids),
+                        Match.status == MatchStatus.REJECTED,
+                    )
+                )
+            ).scalars().all()
+        )
+    if decided:
+        click.echo(f"  skipped posts with operator decisions: {sorted(decided)}")
+        inbound_ids = [i for i in inbound_ids if i not in decided]
+        if not inbound_ids:
+            click.echo("  (nothing left to test)")
+            return
 
     # Reset state: drop non-published matches + flip status to NEW.
     async with get_session() as s:
@@ -1284,8 +1320,6 @@ async def _test_batch(n: int, from_id: int | None) -> None:
             .where(InboundPost.id.in_(inbound_ids))
             .values(status=InboundStatus.NEW)
         )
-        from src.db.models import ValidationJob
-
         await s.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(inbound_ids)))
     click.echo(f"  reset: dropped {len(match_ids)} prior matches")
 
@@ -1604,7 +1638,8 @@ def _nightly_unhealthy(*, dead, low_coverage, degraded, parse_degraded, sweep_re
                        maintenance_failed, results) -> bool:
     """Exit 1 only for real failures: dead platform, incomplete coverage, failed steps (🚨).
 
-    Item errors (⚠️ Ошибки: N) and budget skips stay warnings in the summary and do not fail.
+    Item errors (⚠️ Ошибки: N) stay warnings in the summary. Partial crawls (skipped pages),
+    failed steps and dead or low-coverage platforms still fail the night.
     """
     return bool(dead or low_coverage or degraded or parse_degraded or sweep_reasons
                 or maintenance_failed or any(r.outcome in {"failed", "degraded"} for r in results))

@@ -139,7 +139,8 @@ async def send_match_via_bot(
     """Send a match (caption + album) to every recipient in TG_BOT_RECIPIENTS.
 
     Returns the PublishedPost row created on the FIRST recipient's send (we record once per
-    match; subsequent recipients are fan-out). Returns None on no-op (already-delivered).
+    match; subsequent recipients are fan-out). Returns None on no-op: already delivered, or
+    rejected (a rejected match is never sent).
     """
     async with get_session() as s:
         match = await s.get(Match, match_id)
