@@ -835,20 +835,67 @@ def test_cli_errors_are_value_free_and_require_explicit_loss_acknowledgement(tmp
     assert json.loads(result.stdout) == {"result": "blocked", "reason": "url_loss_not_acknowledged"}
 
 
-def test_manifest_for_the_full_source_copy_is_read_within_the_limit(tmp_path):
-    # About 415,000 files at realistic name lengths. This is larger than the former 64 MiB limit.
-    entries = {
-        f"data/listings/CETIRI_ZIDA/{index:08d}-synthetic-listing-identifier/{index % 1000:03d}.webp": {
-            "size": 123456,
-            "sha256": "0" * 64,
-        }
-        for index in range(420_000)
+# 500,000 entries at realistic name lengths: more than the 415,000 files of a full source copy, and
+# larger than the former 64 MiB limit. Run in a fresh process, so the peak memory is this work alone.
+MANIFEST_SCALE_CODE = """
+import json, resource, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from scripts import offhost_backup as transport
+from scripts import sanitized_backup as backup
+path = Path(sys.argv[2])
+count = 500_000
+files = {
+    f"data/listings/CETIRI_ZIDA/{index:08d}-synthetic-listing-identifier/{index % 1000:03d}.webp": {
+        "size": 123456,
+        "sha256": "0" * 64,
     }
-    path = tmp_path / "manifest.json"
-    path.write_text(json.dumps({"files": entries}, sort_keys=True))
-    assert 64 * 1024 * 1024 < path.stat().st_size < backup.MAX_MANIFEST_BYTES
-    assert backup.MAX_MANIFEST_BYTES >= 2 * 415_000 * 230  # two times the largest measured entry
-    assert set(backup.read_json(path)["files"]) == set(entries)
+    for index in range(count)
+}
+checked = backup.check_manifest_size({"files": files})
+transport.atomic_json(path, {"files": files})
+assert len(backup.read_json(path)["files"]) == count
+print(json.dumps({
+    "entries": count,
+    "checked_bytes": checked,
+    "file_bytes": path.stat().st_size,
+    "peak_maxrss": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+}))
+"""
+
+
+def test_manifest_with_500000_entries_is_checked_written_and_read_within_the_limit(tmp_path):
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            MANIFEST_SCALE_CODE,
+            str(REPOSITORY),
+            str((tmp_path / "manifest.json").resolve()),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=900,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    measured = json.loads(result.stdout)
+    print("manifest scale measurement:", measured)
+    assert measured["entries"] == 500_000
+    assert 64 * 1024 * 1024 < measured["file_bytes"] <= backup.MAX_MANIFEST_BYTES
+    # The build-time check measures the bytes atomic_json writes, not an estimate.
+    assert measured["checked_bytes"] == measured["file_bytes"]
+
+
+def test_source_build_refuses_a_manifest_over_the_limit_before_the_full_recheck(source, monkeypatch):
+    def recheck_must_not_run(*_args, **_kwargs):
+        raise AssertionError("the full recheck ran although the manifest is over the limit")
+
+    monkeypatch.setattr(backup, "MAX_MANIFEST_BYTES", 1024)
+    monkeypatch.setattr(backup, "verify_snapshot", recheck_must_not_run)
+    with pytest.raises(backup.scan.PreflightError, match=r"^manifest_size_limit$"):
+        backup.create_snapshot(source)
+    assert not source.output_dir.exists()
 
 
 def test_exact_photo_evidence_manifest_is_accepted(source):

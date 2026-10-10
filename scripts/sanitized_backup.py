@@ -437,6 +437,17 @@ def check_manifest(manifest):
     )
 
 
+def check_manifest_size(manifest):
+    """Refuse a manifest the receiver would refuse to read, before the source publishes it.
+
+    Measured on the bytes atomic_json writes: the same json.dumps call, with ASCII-only output.
+    Returns the size in bytes.
+    """
+    size = len(json.dumps(manifest, sort_keys=True).encode())
+    require(size <= MAX_MANIFEST_BYTES, "manifest_size_limit")
+    return size
+
+
 def _photo_index(media):
     photos = {}
     for name, metadata in media.items():
@@ -631,6 +642,7 @@ def _create_snapshot(args):
         }
         manifest["photo_references"] = recovery.check_media_references(db, manifest, files)
         check_manifest(manifest)
+        check_manifest_size(manifest)
         transport.atomic_json(stage / "manifest.json", manifest)
         verify_snapshot(
             stage,
