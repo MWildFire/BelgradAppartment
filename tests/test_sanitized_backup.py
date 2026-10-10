@@ -885,7 +885,8 @@ def test_manifest_with_500000_entries_is_checked_written_and_read_within_the_lim
     measured = json.loads(result.stdout)
     print("manifest scale measurement:", measured)
     assert measured["entries"] == 500_000
-    assert 64 * 1024 * 1024 < measured["file_bytes"] <= backup.MAX_MANIFEST_BYTES
+    assert measured["file_bytes"] > 64 * 1024 * 1024  # the former limit
+    assert measured["file_bytes"] <= backup.MAX_MANIFEST_BYTES
     # The build-time check measures the bytes atomic_json writes, not an estimate.
     assert measured["checked_bytes"] == measured["file_bytes"]
 
@@ -2639,7 +2640,7 @@ def test_every_repository_import_of_the_source_helper_is_pinned_or_declared_rece
         if module not in pin.HELPER_FILES
     }
     assert found <= RECEIVER_ONLY_IMPORTS, sorted(found - RECEIVER_ONLY_IMPORTS)
-    assert RECEIVER_ONLY_IMPORTS <= found, sorted(RECEIVER_ONLY_IMPORTS - found)
+    assert found >= RECEIVER_ONLY_IMPORTS, sorted(RECEIVER_ONLY_IMPORTS - found)
     source_side = functions_reached_from(REPOSITORY / "scripts/sanitized_backup.py", SOURCE_COMMANDS)
     declared = {function for name, function, _ in RECEIVER_ONLY_IMPORTS if name.endswith("sanitized_backup.py")}
     assert declared.isdisjoint(source_side), sorted(declared & source_side)

@@ -1,13 +1,14 @@
 """Bound rsync's files-from exchange; never broaden the manifest allowlist."""
 from pathlib import PurePosixPath
 
-
 # One rsync call moves at most MAX_CONTENT_BYTES of file content. The 7200 s timeout is reached only
 # on a link slower than about 150 kB/s, and a failed call repeats its own batch, not the copy.
 MAX_CONTENT_BYTES = 1024**3
 
 
-def batches(names, max_files=1000, max_bytes=128 * 1024, sizes=None, max_content_bytes=MAX_CONTENT_BYTES):
+def batches(
+    names, max_files=1000, max_bytes=128 * 1024, sizes=None, max_content_bytes=MAX_CONTENT_BYTES
+):
     """Split names into batches of at most max_files names and max_bytes encoded name bytes.
 
     When sizes maps every name to its file size, a batch also holds at most max_content_bytes of
