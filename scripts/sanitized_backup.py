@@ -895,7 +895,8 @@ def _durable_write(path, value):
     """Replace path so that a power loss keeps the old record or the new one, never a torn file.
 
     Order: temporary file flushed, renamed over the record, then the parent directory flushed.
-    Leftover temporaries never became records and are removed by _discard_temporaries.
+    Leftover temporaries never became records. Only resume/ is swept, under the lease, because
+    every resume write happens under the lease; other leftovers are ignored.
     """
     temporary = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.tmp")
     try:
@@ -910,7 +911,13 @@ def _durable_write(path, value):
     _fsync_path(path.parent)
 
 
+def _records(directory):
+    """Entries that are records. A temporary is a write in progress or a leftover, never a record."""
+    return [path for path in directory.iterdir() if path.suffix != ".tmp"]
+
+
 def _discard_temporaries(directory):
+    """Remove leftover temporaries. Only call where no other process can be writing them."""
     for path in directory.glob("*.tmp"):
         path.unlink()
 
@@ -988,14 +995,11 @@ def _bind_namespace(root):
     else:
         require(
             not any(
-                any((root / name).iterdir())
-                for name in ("pending", "generations", "receipts", "resume")
+                _records(root / name) for name in ("pending", "generations", "receipts", "resume")
             ),
             "unbound_generation_namespace",
         )
         _durable_write(root / "scope.json", binding)
-    for directory in (root, root / "resume", root / "receipts"):
-        _discard_temporaries(directory)
 
 
 def _require_resumable(args, resume_record):
@@ -1091,7 +1095,7 @@ def receive(args):
     if not resuming:
         require(not pending.exists(), "generation_exists")
         # An open record names a requested, retained or kept generation; a fresh run adds none.
-        require(not any((root / "resume").iterdir()), "unresolved_resume_record")
+        require(not _records(root / "resume"), "unresolved_resume_record")
     rsync = [
         "/usr/bin/rsync",
         "-rt",
@@ -1106,6 +1110,9 @@ def receive(args):
     try:
         with transport.remote_lease(args):
             _require_pinned_helper(args)
+            # Holding the lease, no other receiver is writing resume/: a temporary there was left
+            # by a receiver that was killed while it wrote a record.
+            _discard_temporaries(root / "resume")
             # The same checks again, now that this process holds the lease: another receiver may
             # have written a record or finished the generation while this one waited for it.
             require(not destination.exists() and not receipt.exists(), "generation_exists")
@@ -1116,7 +1123,7 @@ def receive(args):
                 if pending.exists():
                     shutil.rmtree(pending)
             else:
-                require(not any((root / "resume").iterdir()), "unresolved_resume_record")
+                require(not _records(root / "resume"), "unresolved_resume_record")
                 require(not pending.exists(), "generation_exists")
                 # Written before the call: a lost answer leaves a record that blocks fresh runs.
                 request_id = uuid.uuid4().hex

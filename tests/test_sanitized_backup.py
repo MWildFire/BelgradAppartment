@@ -13,6 +13,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1162,6 +1163,57 @@ def test_receipt_write_failure_retains_only_an_unaccepted_generation(
     assert generation.is_dir()
     with pytest.raises(backup.scan.PreflightError, match="generation_exists"):
         backup.receive(args)
+
+
+def test_pre_lease_checks_leave_another_receivers_temporaries_alone(tmp_path, monkeypatch):
+    """A temporary another receiver is writing is not removed before the lease, and its write works.
+
+    The namespace is bound and checked before the lease, so the refusal below happens with the
+    temporaries in place. The receiver that wrote them can still finish its rename afterwards.
+    """
+    args = receiver_args(tmp_path)
+    root = args.private_root
+    generation = args.source_snapshot.name
+    root.mkdir(parents=True, mode=0o700)
+    (root / "resume").mkdir(mode=0o700)
+    (root / "receipts").mkdir(mode=0o700)
+    (root / "scope.json").write_text(
+        json.dumps({"format": policy.FORMAT, "scope": policy.SCOPE}, sort_keys=True)
+    )
+    writing = [
+        root / f"scope.{uuid.uuid4().hex}.tmp",
+        root / "resume" / f"{generation}.{uuid.uuid4().hex}.tmp",
+        root / "receipts" / f"{generation}.{uuid.uuid4().hex}.tmp",
+    ]
+    for path in writing:
+        path.write_text("{}")
+
+    @contextmanager
+    def busy(_args):
+        raise backup.scan.PreflightError("source_lease_busy")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(backup.transport, "remote_lease", busy)
+    with pytest.raises(backup.scan.PreflightError, match=r"^source_lease_busy$"):
+        backup.receive(args)
+    assert all(path.exists() for path in writing)
+    for path in writing:
+        os.replace(path, path.with_suffix(".renamed"))  # the other writer's rename still works
+
+
+def test_stale_resume_temporary_is_removed_under_the_lease_and_does_not_block_a_fresh_run(
+    snapshot, tmp_path, monkeypatch
+):
+    args = receiver_args(tmp_path)
+    fake_transport(snapshot, args, monkeypatch)
+    resume = args.private_root / "resume"
+    args.private_root.mkdir(parents=True, mode=0o700)
+    resume.mkdir(mode=0o700)
+    stale = resume / f"{args.source_snapshot.name}.{uuid.uuid4().hex}.tmp"
+    stale.write_text("{}")  # left behind by a receiver that was killed while it wrote a record
+    result = backup.receive(args)
+    assert result["offhost_verified"] is True
+    assert not stale.exists()
 
 
 def smoke_child_result():
