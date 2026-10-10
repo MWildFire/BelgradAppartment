@@ -38,6 +38,9 @@ else:
 _LEASE = ContextVar("offhost_source_lease", default=None)
 # Markers of this driver's generations. The sanitized and data-only drivers write other markers.
 PLAIN_BACKUP_FORMAT = "directory_generation"
+# The sanitized receiver's namespace is .../data-only/sanitized-v1. Refused by name as well, because
+# a namespace without its scope.json marker would otherwise be accepted.
+SANITIZED_NAMESPACE_NAME = "sanitized-v1"
 
 
 @contextmanager
@@ -535,6 +538,7 @@ def _backup(args):
     # A scope marker is written by the sanitized or data-only driver. Refuse before creating
     # anything, so this driver's rotation can never delete generations of another driver.
     recovery.require(not (root / "scope.json").exists(), "foreign_namespace_marker")
+    recovery.require(root.name != SANITIZED_NAMESPACE_NAME, "foreign_namespace_name")
     if getattr(args, "application_project_root", None) is not None:
         recovery.ROOT = args.application_project_root.resolve()
     recovery.private_dir(root)

@@ -754,6 +754,17 @@ def test_plain_driver_refuses_a_namespace_another_driver_owns_before_touching_it
     assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*")) == before
 
 
+def test_plain_driver_refuses_an_unmarked_root_named_as_the_sanitized_namespace(tmp_path):
+    # No scope.json, so only the name protects the sanitized namespace from this driver.
+    root = tmp_path / "data-only" / "sanitized-v1"
+    root.mkdir(parents=True, mode=0o700)
+    before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+    args = argparse.Namespace(private_root=root, application_project_root=None)
+    with pytest.raises(recovery.RecoveryError, match="foreign_namespace_name"):
+        job.backup(args)
+    assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == before
+
+
 def test_ssh_offers_only_the_explicit_key(tmp_path):
     key = tmp_path / "fixture-key"
     key.write_text("synthetic only; no SSH executed")
