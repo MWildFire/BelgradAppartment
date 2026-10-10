@@ -1001,6 +1001,40 @@ def test_build_directory_left_by_a_killed_build_is_removed_under_the_build_lock(
     assert (source.output_dir / "manifest.json").exists()
 
 
+def test_a_wrong_revision_removes_only_an_orphaned_build_directory(source):
+    # create_snapshot sweeps under the build lock before _create_snapshot checks the source database
+    # and its revision. A wrong revision therefore removes an orphaned build directory and nothing
+    # else: a ready copy, a source snapshot and every file of the project are left as they were.
+    (source.project_root / "release.json").write_text(json.dumps({"revision": "0" * 40}))
+    parent = source.output_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    parent.chmod(0o700)
+    orphan = parent / ".sanitized-build-0badc0de"  # what a SIGKILLed build leaves behind
+    orphan.mkdir(mode=0o700)
+    (orphan / "partial.db").write_bytes(b"synthetic partial copy")
+    ready, snapshot = parent / "20261005-090000-cafe0001", parent / "20261005-090000-cafe0002"
+    for folder in (ready, snapshot):
+        (folder / "data").mkdir(parents=True, mode=0o700)
+        (folder / "manifest.json").write_bytes(b"synthetic manifest")
+        (folder / "data/otz.db").write_bytes(b"synthetic database")
+
+    def files_below(folder):
+        return {path: path.read_bytes() for path in folder.rglob("*") if path.is_file()}
+
+    kept = {folder: files_below(folder) for folder in (ready, snapshot, source.project_root)}
+    with pytest.raises(backup.scan.PreflightError, match=r"^source_revision_changed$"):
+        backup.create_snapshot(source)
+    assert not orphan.exists()
+    assert {folder: files_below(folder) for folder in kept} == kept
+    assert not source.output_dir.exists()
+    assert {path.name for path in parent.iterdir()} == {
+        ready.name,
+        snapshot.name,
+        backup.BUILD_LOCK,
+        source.project_root.name,  # the fixture keeps the project next to the namespace
+    }
+
+
 @pytest.mark.parametrize("invalid", ["output_exists", "output_inside_project"])
 def test_an_invalid_output_directory_removes_nothing_in_its_parent(source, invalid):
     if invalid == "output_exists":
