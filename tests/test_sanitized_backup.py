@@ -561,12 +561,16 @@ def test_receive_failure_keeps_remote_snapshot_and_records_resume(snapshot, tmp_
         backup.receive(args)
     assert discards == []
     record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
-    assert backup.read_json(record) == {
+    written = backup.read_json(record)
+    assert backup._valid_request_id(written["request_id"])
+    assert written == {
         "format": policy.FORMAT,
         "scope": policy.SCOPE,
         "generation": args.source_snapshot.name,
         "source_snapshot": str(args.source_snapshot),
         "manifest_sha256": recovery.digest(snapshot / "manifest.json"),
+        "request_id": written["request_id"],
+        "helper_set_sha256": pin.HELPER_SET_SHA256,
         "state": "transferring",
     }
     for name in ("pending", "receipts", "generations"):
@@ -1623,8 +1627,11 @@ def test_lost_snapshot_answer_is_resolved_by_keep_and_then_resumed(power):
     assert backup.read_json(record)["state"] == backup.REQUESTED
     with pytest.raises(backup.scan.PreflightError, match=r"^unresolved_resume_record$"):
         backup.receive(args)
-    args.decision = "keep"
+    request_id = backup.read_json(record)["request_id"]
+    args.request_id, args.decision = request_id, "keep"
     kept = backup.resolve_requested(args)
+    kept_record = backup.read_json(record)
+    assert kept_record["state"] == backup.RETAINED and kept_record["request_id"] == request_id
     assert kept == {
         "result": "requested_record_kept",
         "generation": generation,
@@ -1642,6 +1649,7 @@ def test_crash_after_the_request_marker_is_abandoned_and_a_fresh_run_then_succee
     with pytest.raises(PowerLoss):
         backup.receive(args)
     power.state.dead, power.state.point = False, None
+    args.request_id = backup.read_json(record)["request_id"]
     args.decision = "keep"
     with pytest.raises(backup.scan.PreflightError, match=r"^remote_snapshot_absent$"):
         backup.resolve_requested(args)
@@ -1664,9 +1672,15 @@ def write_namespace(args):
     (root / "scope.json").write_text(json.dumps({"format": policy.FORMAT, "scope": policy.SCOPE}))
 
 
+REQUEST_ID = "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+
+
 def requested_record(args):
     record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
-    record.write_text(json.dumps(backup._resume_record(args, None, state=backup.REQUESTED)))
+    record.write_text(
+        json.dumps(backup._resume_record(args, None, REQUEST_ID, state=backup.REQUESTED))
+    )
+    args.request_id = REQUEST_ID  # the operator echoes the id the record carries
     return record
 
 
@@ -1768,12 +1782,121 @@ def test_requested_record_is_removed_only_on_a_proven_absent_abandon(tmp_path, m
     assert not record.exists()
 
 
+def forbidden_remote(*_args, **_kwargs):
+    raise AssertionError("remote contact although the local request check refused")
+
+
+def test_requested_keep_records_a_retained_state_under_the_same_request(tmp_path, monkeypatch):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = requested_record(args)
+    scripted_inspect(monkeypatch, present_answer("c" * 64))
+    args.decision = "keep"
+    assert backup.resolve_requested(args) == {
+        "result": "requested_record_kept",
+        "generation": args.source_snapshot.name,
+        "manifest_sha256": "c" * 64,
+    }
+    assert backup.read_json(record) == backup._resume_record(
+        args, "c" * 64, REQUEST_ID, state=backup.RETAINED
+    )
+
+
+@pytest.mark.parametrize("decision", ["keep", "abandon"])
+@pytest.mark.parametrize("echo", ["0" * 32, "not-a-request-id"])
+def test_resolution_refuses_an_echo_that_is_not_the_records_request(
+    tmp_path, monkeypatch, decision, echo
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = requested_record(args)
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden_remote)
+    args.request_id, args.decision = echo, decision
+    before = record.read_bytes()
+    with pytest.raises(backup.scan.PreflightError, match=r"^(request_id_mismatch|invalid_request_id)$"):
+        backup.resolve_requested(args)
+    assert record.read_bytes() == before
+
+
+@pytest.mark.parametrize("decision", ["keep", "abandon"])
+def test_resolution_refuses_a_record_written_before_request_ids_existed(
+    tmp_path, monkeypatch, decision
+):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
+    legacy = backup._resume_record(args, None, REQUEST_ID, state=backup.REQUESTED)
+    del legacy["request_id"]
+    record.write_text(json.dumps(legacy))
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden_remote)
+    args.request_id, args.decision = REQUEST_ID, decision
+    with pytest.raises(backup.scan.PreflightError, match=r"^request_id_mismatch$"):
+        backup.resolve_requested(args)
+
+
+@pytest.mark.parametrize("decision", ["keep", "abandon"])
+def test_resolution_refuses_a_record_written_by_another_helper_set(tmp_path, monkeypatch, decision):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
+    other = backup._resume_record(args, None, REQUEST_ID, state=backup.REQUESTED)
+    other["helper_set_sha256"] = "e" * 64
+    record.write_text(json.dumps(other))
+    monkeypatch.setattr(backup.transport, "remote_lease", forbidden_remote)
+    args.request_id, args.decision = REQUEST_ID, decision
+    with pytest.raises(backup.scan.PreflightError, match=r"^helper_pin_mismatch$"):
+        backup.resolve_requested(args)
+
+
+@pytest.mark.parametrize("decision", ["keep", "abandon"])
+def test_resolution_refuses_while_a_source_build_holds_the_lock(tmp_path, monkeypatch, decision):
+    args = receiver_args(tmp_path)
+    write_namespace(args)
+    record = requested_record(args)
+    scripted_inspect(monkeypatch, json.dumps({"result": "snapshot_build_running", "scope": policy.SCOPE}))
+    args.decision = decision
+    before = record.read_bytes()
+    with pytest.raises(backup.scan.PreflightError, match=r"^remote_build_running$"):
+        backup.resolve_requested(args)
+    assert record.read_bytes() == before
+
+
+def test_build_lock_is_held_for_the_build_and_the_probe_never_creates_it(tmp_path):
+    assert backup._build_running(tmp_path) is False
+    assert not (tmp_path / backup.BUILD_LOCK).exists()  # the probe creates nothing
+    with backup._build_lock(tmp_path):
+        assert backup._build_running(tmp_path) is True
+    assert backup._build_running(tmp_path) is False  # released with the build
+
+
+def test_a_build_is_refused_while_another_build_holds_the_namespace_lock(source):
+    with (
+        backup._build_lock(source.output_dir.absolute().parent),
+        pytest.raises(backup.scan.PreflightError, match=r"^snapshot_build_running$"),
+    ):
+        backup.create_snapshot(source)
+    assert not source.output_dir.exists()
+
+
+def test_inspect_reports_a_running_build_before_reporting_absence(tmp_path, monkeypatch):
+    folder = tmp_path / "20261006-090000-123abc45"
+    pattern = re.escape(str(tmp_path)) + r"/[0-9]{8}-[0-9]{6}-[a-f0-9]{8}"
+    monkeypatch.setattr(backup, "SOURCE_SNAPSHOT", re.compile(pattern))
+    request = SimpleNamespace(directory=folder)
+    with backup._build_lock(tmp_path):
+        assert backup.inspect_snapshot(request) == {
+            "result": "snapshot_build_running",
+            "scope": policy.SCOPE,
+        }
+    assert backup.inspect_snapshot(request) == {"result": "snapshot_absent", "scope": policy.SCOPE}
+
+
 def test_resolution_refuses_other_states_and_missing_records_before_remote_contact(
     tmp_path, monkeypatch
 ):
     args = receiver_args(tmp_path)
     write_namespace(args)
-    args.decision = "keep"
+    args.request_id, args.decision = REQUEST_ID, "keep"
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("remote contact before the local record check")
@@ -1784,7 +1907,7 @@ def test_resolution_refuses_other_states_and_missing_records_before_remote_conta
     record = args.private_root / "resume" / (args.source_snapshot.name + ".json")
     record.write_text(
         json.dumps(
-            backup._resume_record(args, "d" * 64, state=backup.RETAINED)
+            backup._resume_record(args, "d" * 64, REQUEST_ID, state=backup.RETAINED)
         )
     )
     with pytest.raises(backup.scan.PreflightError, match=r"^requested_record_mismatch$"):
@@ -1821,7 +1944,7 @@ def test_record_written_while_waiting_for_the_lease_blocks_a_fresh_run(
     @contextmanager
     def lease_after_a_rival_requests(_args):
         # Another receiver recorded its request and copy while this one was waiting for the lease.
-        rival.write_text(json.dumps(backup._resume_record(args, None, state=backup.REQUESTED)))
+        rival.write_text(json.dumps(backup._resume_record(args, None, REQUEST_ID, state=backup.REQUESTED)))
         rival_copy.mkdir()
         (rival_copy / "rival.bin").write_bytes(b"rival copy")
         yield
@@ -1847,7 +1970,7 @@ def test_resume_rechecks_its_record_under_the_lease_before_deleting_the_copy(
     generation = args.source_snapshot.name
     digest = recovery.digest(snapshot / "manifest.json")
     record = args.private_root / "resume" / (generation + ".json")
-    record.write_text(json.dumps(backup._resume_record(args, digest, state=backup.RETAINED)))
+    record.write_text(json.dumps(backup._resume_record(args, digest, REQUEST_ID, state=backup.RETAINED)))
     partial = args.private_root / "pending" / generation
     partial.mkdir()
     (partial / "half.bin").write_bytes(b"copied by the earlier receiver")
@@ -1855,7 +1978,7 @@ def test_resume_rechecks_its_record_under_the_lease_before_deleting_the_copy(
     @contextmanager
     def lease_after_a_rival_verifies(_args):
         # Another receiver verified this copy while this one waited for the lease.
-        record.write_text(json.dumps(backup._resume_record(args, digest, state=backup.VERIFIED)))
+        record.write_text(json.dumps(backup._resume_record(args, digest, REQUEST_ID, state=backup.VERIFIED)))
         yield
 
     monkeypatch.setattr(backup.transport, "remote_lease", lease_after_a_rival_verifies)

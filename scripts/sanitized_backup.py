@@ -23,7 +23,7 @@ import sys
 import tempfile
 import uuid
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 from itertools import zip_longest
 from pathlib import Path
@@ -472,7 +472,47 @@ def _snapshot_remote(args, command):
     )
 
 
+BUILD_LOCK = ".sanitized-build.lock"
+
+
+@contextmanager
+def _build_lock(parent):
+    """Hold the build lock for one whole build; the kernel frees it if the build dies."""
+    descriptor = os.open(parent / BUILD_LOCK, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise scan.PreflightError("snapshot_build_running") from None
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _build_running(parent):
+    """Read-only probe for a build that holds the lock. It never creates the lock file."""
+    try:
+        descriptor = os.open(parent / BUILD_LOCK, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return False
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(descriptor)
+    return False
+
+
 def create_snapshot(args):
+    """Build one generation while holding the namespace's build lock; a second build is refused."""
+    parent = args.output_dir.absolute().parent
+    recovery.private_dir(parent)
+    with _build_lock(parent):
+        return _create_snapshot(args)
+
+
+def _create_snapshot(args):
     require(getattr(args, "acknowledge_url_loss", False) is True, "url_loss_not_acknowledged")
     require(math.isfinite(args.min_free_gib) and args.min_free_gib >= 0, "invalid_space_limit")
     project, output = args.project_root.absolute(), args.output_dir.absolute()
@@ -799,13 +839,23 @@ def _discard_remote(args, checksum):
     )
 
 
-def _resume_record(args, manifest_sha256, state=RETAINED):
+def _valid_request_id(value):
+    return isinstance(value, str) and re.fullmatch(r"[a-f0-9]{32}", value) is not None
+
+
+def _resume_record(args, manifest_sha256, request_id, state=RETAINED):
+    # The request id ties every state of one request to the operator's decision; the helper set
+    # digest ties the record to the pinned helper that wrote it.
+    from scripts import sanitized_helper_pin as pin  # receiver only; the source never imports it
+
     return {
         "format": FORMAT,
         "scope": SCOPE,
         "generation": args.source_snapshot.name,
         "source_snapshot": str(args.source_snapshot),
         "manifest_sha256": manifest_sha256,
+        "request_id": request_id,
+        "helper_set_sha256": pin.HELPER_SET_SHA256,
         "state": state,
     }
 
@@ -943,16 +993,22 @@ def _bind_namespace(root):
 
 
 def _require_resumable(args, resume_record):
-    # Only a record whose copy was never verified may resume; every other state needs an operator.
+    """Only a record whose copy was never verified may resume; every other state needs an operator.
+
+    Returns the request id the record carries, so the resumed run keeps the same identity.
+    """
     record = read_json(resume_record) if resume_record.exists() else None
     require(isinstance(record, dict), "resume_record_mismatch")
     state = record.get("state") if isinstance(record.get("state"), str) else None
     require(state not in KNOWN_STATES - RESUMABLE_STATES, "resume_requires_operator")
+    request_id = record.get("request_id")
     require(
         state in RESUMABLE_STATES
-        and record == _resume_record(args, args.resume_manifest_sha256, state=state),
+        and _valid_request_id(request_id)
+        and record == _resume_record(args, args.resume_manifest_sha256, request_id, state=state),
         "resume_record_mismatch",
     )
+    return request_id
 
 
 def _inspect_remote(args):
@@ -970,6 +1026,8 @@ def _inspect_remote(args):
     status = _json_or_none(response.stdout)
     if status == {"result": "snapshot_absent", "scope": SCOPE}:
         return {"result": "snapshot_absent"}
+    if status == {"result": "snapshot_build_running", "scope": SCOPE}:
+        return {"result": "build_running"}
     require(
         isinstance(status, dict)
         and set(status) == {"result", "scope", "manifest_sha256"}
@@ -1046,7 +1104,7 @@ def receive(args):
             # have written a record or finished the generation while this one waited for it.
             require(not destination.exists() and not receipt.exists(), "generation_exists")
             if resuming:
-                _require_resumable(args, resume_record)
+                request_id = _require_resumable(args, resume_record)
                 source_checksum = args.resume_manifest_sha256
                 # Retained or transferring: no verification succeeded; the copy is not evidence.
                 if pending.exists():
@@ -1055,7 +1113,10 @@ def receive(args):
                 require(not any((root / "resume").iterdir()), "unresolved_resume_record")
                 require(not pending.exists(), "generation_exists")
                 # Written before the call: a lost answer leaves a record that blocks fresh runs.
-                _durable_write(resume_record, _resume_record(args, None, state=REQUESTED))
+                request_id = uuid.uuid4().hex
+                _durable_write(
+                    resume_record, _resume_record(args, None, request_id, state=REQUESTED)
+                )
                 source = _snapshot_remote(
                     args,
                     _helper_command(
@@ -1080,10 +1141,14 @@ def receive(args):
                     "source_snapshot_unconfirmed",
                 )
                 source_checksum = status["manifest_sha256"]
-                _durable_write(resume_record, _resume_record(args, source_checksum, state=RETAINED))
+                _durable_write(
+                    resume_record, _resume_record(args, source_checksum, request_id, state=RETAINED)
+                )
             pending.mkdir(mode=0o700)
             created_copy = True
-            _durable_write(resume_record, _resume_record(args, source_checksum, state=TRANSFERRING))
+            _durable_write(
+                resume_record, _resume_record(args, source_checksum, request_id, state=TRANSFERRING)
+            )
             transport.run(
                 [
                     *rsync,
@@ -1126,18 +1191,23 @@ def receive(args):
             # Recorded before verification starts: a result that is never written down still
             # leaves a record that refuses the deletion a resume would otherwise perform.
             verify_may_have_started = True
-            _durable_write(resume_record, _resume_record(args, source_checksum, state=VERIFYING))
+            _durable_write(
+                resume_record, _resume_record(args, source_checksum, request_id, state=VERIFYING)
+            )
             try:
                 result = verify_snapshot(pending, application=True, scratch_parent=pending)
             except BaseException:
                 # The copy is not evidence: write that down, then let the handler remove it. The
                 # source snapshot is still on the server, because the discard has not run yet.
                 _durable_write(
-                    resume_record, _resume_record(args, source_checksum, state=TRANSFERRING)
+                    resume_record,
+                    _resume_record(args, source_checksum, request_id, state=TRANSFERRING),
                 )
                 verify_may_have_started = False
                 raise
-            _durable_write(resume_record, _resume_record(args, source_checksum, state=VERIFIED))
+            _durable_write(
+                resume_record, _resume_record(args, source_checksum, request_id, state=VERIFIED)
+            )
             transport.assert_lease()
             require(
                 recovery.digest(pending / "manifest.json") == source_checksum,
@@ -1150,7 +1220,7 @@ def receive(args):
             # Recorded before the call: a crash or a lost answer during discard keeps the copy.
             _durable_write(
                 resume_record,
-                _resume_record(args, source_checksum, state=KEPT_FOR_OPERATOR),
+                _resume_record(args, source_checksum, request_id, state=KEPT_FOR_OPERATOR),
             )
             _discard_remote(args, source_checksum)
             transport.assert_lease()
@@ -1181,14 +1251,33 @@ def receive(args):
         listing.unlink(missing_ok=True)
 
 
+def _require_requested(args, record_path):
+    """The open request the operator names, written by the pinned helper set and unchanged."""
+    from scripts import sanitized_helper_pin as pin  # receiver only; the source never imports it
+
+    record = read_json(record_path)
+    require(
+        isinstance(record, dict) and record.get("request_id") == args.request_id,
+        "request_id_mismatch",
+    )
+    require(record.get("helper_set_sha256") == pin.HELPER_SET_SHA256, "helper_pin_mismatch")
+    require(
+        record == _resume_record(args, None, args.request_id, state=REQUESTED),
+        "requested_record_mismatch",
+    )
+
+
 def resolve_requested(args):
     """Operator decision for a requested record whose snapshot answer was lost.
 
-    keep adopts a remote snapshot that exists: its manifest digest becomes a retained record, so
-    resume can use it. abandon removes the record only when the remote proves that no snapshot
-    exists. Any ambiguous or unexpected remote answer refuses and leaves every file unchanged.
+    The decision must echo the request id the record carries, and the record must come from the
+    pinned helper set. keep adopts a remote snapshot that exists: its manifest digest becomes a
+    retained record under the same request id, so resume can use it. abandon removes the record
+    only when the remote proves that no snapshot exists and no source build is running. Every
+    mismatch, ambiguous or unexpected answer refuses and leaves every file unchanged.
     """
     require(args.decision in ("keep", "abandon"), "invalid_decision")
+    require(_valid_request_id(args.request_id), "invalid_request_id")
     root = _receiver_root(args)
     require(
         (root / "scope.json").exists()
@@ -1198,20 +1287,22 @@ def resolve_requested(args):
     generation = args.source_snapshot.name
     record_path = root / "resume" / (generation + ".json")
     require(record_path.exists(), "requested_record_missing")
-    require(
-        read_json(record_path) == _resume_record(args, None, state=REQUESTED),
-        "requested_record_mismatch",
-    )
+    _require_requested(args, record_path)
     require(not (root / "pending" / generation).exists(), "pending_copy_present")
     with transport.remote_lease(args):
+        _require_requested(args, record_path)  # read again: the lease is what makes it current
         remote = _inspect_remote(args)
+        require(remote["result"] != "build_running", "remote_build_running")
         if args.decision == "abandon":
             require(remote["result"] == "snapshot_absent", "remote_snapshot_present")
             record_path.unlink()
             _fsync_path(record_path.parent)
             return {"result": "requested_record_abandoned", "generation": generation}
         require(remote["result"] == "snapshot_present", "remote_snapshot_absent")
-        _durable_write(record_path, _resume_record(args, remote["manifest_sha256"], state=RETAINED))
+        _durable_write(
+            record_path,
+            _resume_record(args, remote["manifest_sha256"], args.request_id, state=RETAINED),
+        )
     return {
         "result": "requested_record_kept",
         "generation": generation,
@@ -1226,6 +1317,8 @@ def inspect_snapshot(args):
         SOURCE_SNAPSHOT.fullmatch(str(folder)) and folder.resolve() == folder,
         "invalid_source_snapshot_path",
     )
+    if _build_running(folder.parent):
+        return {"result": "snapshot_build_running", "scope": SCOPE}
     if not os.path.lexists(folder):
         return {"result": "snapshot_absent", "scope": SCOPE}
     manifest = folder / "manifest.json"
@@ -1370,6 +1463,7 @@ def main():
         resolver.add_argument("--" + name, required=True)
     resolver.add_argument("--remote-user", default="otz", choices=["otz"])
     resolver.add_argument("--decision", required=True, choices=["keep", "abandon"])
+    resolver.add_argument("--request-id", required=True)
     for subparser in (snapshot, verify, receiver, smoke, discard, inspect, resolver):
         subparser.add_argument("--application-project-root", type=Path)
     args = parser.parse_args()
