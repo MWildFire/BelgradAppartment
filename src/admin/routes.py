@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
 
 from src.admin.analytics import (
@@ -35,7 +35,7 @@ from src.db import (
     SourceChannel,
     get_session,
 )
-from src.db.models import DailyMetrics, Lead, Platform, SiteListing, utcnow
+from src.db.models import DailyMetrics, Lead, MatchDelivery, Platform, SiteListing, utcnow
 from src.post import render_post
 
 logger = logging.getLogger(__name__)
@@ -308,6 +308,14 @@ async def mark_posted_action(
                 error=f"Match {match_id} отклонён: отметить как опубликованный нельзя",
             )
         await s.refresh(match)
+        # Recipients still queued or failed would get this pair from the nightly retry, which
+        # sends any match that is not REJECTED. Sent and in-flight rows stay as they are.
+        await s.execute(
+            delete(MatchDelivery).where(
+                MatchDelivery.match_id == match_id,
+                MatchDelivery.status.in_(["pending", "failed"]),
+            )
+        )
         # Same idempotent upsert + create-time flag defaulting the delivery hot path uses
         # (X1). is_public stays the DB default (True) — decision #3; an existing overlay keeps
         # Дарья's manual flags/is_public/note.

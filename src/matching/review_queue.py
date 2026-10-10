@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import delete, exists, or_, select, update
 
 from src.db import InboundPost, InboundStatus, Match, MatchStatus, get_session
-from src.db.models import DigestWorkItem, MatchDelivery, ValidationJob
+from src.db.models import DigestWorkItem, MatchDelivery, PublishedPost, SiteListing, ValidationJob
 
 REVIEW_DECISIONS = {"NO_MATCH": InboundStatus.NO_MATCH, "DUPLICATE": InboundStatus.DUPLICATE}
 REASON_MAX_LENGTH = 256
@@ -202,40 +202,44 @@ async def reject_match(match_id: int, reason: str) -> str:
         return "rejected"
 
 
-async def reset_for_rematch(*, keep_published: bool) -> None:
-    """Operator reset before a full rematch; operator decisions and delivery history survive.
+def _decided_match_clause():
+    """Matches that no reset and no test wipe may delete.
 
-    With keep_published, these stay unchanged together with their inbound posts: published
-    matches, rejected matches, matches that already have delivery rows, and every manual review
-    decision. The other matches are removed and their inbound posts return to NEW. Without
-    keep_published the caller has already confirmed an explicit full wipe.
+    Covers operator and recipient decisions: a rejected or published match, any match with a
+    delivery row (queued, in flight or sent), a PublishedPost, and a site overlay. Deleting any
+    of them lets the same pair be matched and delivered again.
+    """
+    return or_(
+        Match.status.in_([MatchStatus.PUBLISHED, MatchStatus.REJECTED]),
+        Match.id.in_(select(MatchDelivery.match_id)),
+        Match.id.in_(select(PublishedPost.match_id)),
+        Match.id.in_(select(SiteListing.match_id)),
+    )
+
+
+async def reset_for_rematch() -> None:
+    """Operator reset before a full rematch: only undecided matches are dropped.
+
+    Decided matches (see _decided_match_clause) and every manual review decision stay unchanged
+    together with their inbound posts. The other matches are removed and their inbound posts
+    return to NEW. There is no full wipe: a wipe would send already-decided pairs again.
     """
     async with get_session() as session:
-        kept: set[int] = set()
-        if keep_published:
-            keep_match = or_(
-                Match.status.in_([MatchStatus.PUBLISHED, MatchStatus.REJECTED]),
-                Match.id.in_(select(MatchDelivery.match_id)),
-            )
-            kept = set(
-                (
-                    await session.execute(
-                        select(Match.inbound_post_id).where(keep_match)
+        kept = set(
+            (
+                await session.execute(select(Match.inbound_post_id).where(_decided_match_clause()))
+            ).scalars()
+        )
+        kept |= set(
+            (
+                await session.execute(
+                    select(ValidationJob.inbound_id).where(
+                        ValidationJob.reason_code.like("manual_%")
                     )
-                ).scalars()
-            )
-            kept |= set(
-                (
-                    await session.execute(
-                        select(ValidationJob.inbound_id).where(
-                            ValidationJob.reason_code.like("manual_%")
-                        )
-                    )
-                ).scalars()
-            )
-            await session.execute(delete(Match).where(~keep_match))
-        else:
-            await session.execute(delete(Match))
+                )
+            ).scalars()
+        )
+        await session.execute(delete(Match).where(~_decided_match_clause()))
         reset = update(InboundPost).values(status=InboundStatus.NEW)
         if kept:
             reset = reset.where(~InboundPost.id.in_(kept))
@@ -251,12 +255,7 @@ async def reset_for_rematch(*, keep_published: bool) -> None:
 
 
 async def decided_inbound_ids(inbound_ids: list[int]) -> set[int]:
-    """Posts an operator tool must not wipe.
-
-    Covered: manual review decisions, rejected or published matches, and matches with a delivery
-    that was sent, is being sent, or is unknown. Wiping such a post would let its recipients be
-    offered the same pair again.
-    """
+    """Posts that an operator tool must not wipe: manual review decisions and decided matches."""
     if not inbound_ids:
         return set()
     async with get_session() as session:
@@ -268,19 +267,37 @@ async def decided_inbound_ids(inbound_ids: list[int]) -> set[int]:
                 )
             )
         ).scalars().all()
-        protected = (
+        decided = (
             await session.execute(
                 select(Match.inbound_post_id).where(
-                    Match.inbound_post_id.in_(inbound_ids),
-                    or_(
-                        Match.status.in_([MatchStatus.PUBLISHED, MatchStatus.REJECTED]),
-                        Match.id.in_(
-                            select(MatchDelivery.match_id).where(
-                                MatchDelivery.status.in_(["sending", "sent", "unknown"])
-                            )
-                        ),
-                    ),
+                    Match.inbound_post_id.in_(inbound_ids), _decided_match_clause()
                 )
             )
         ).scalars().all()
-    return set(manual) | set(protected)
+    return set(manual) | set(decided)
+
+
+async def reset_undecided_for_test(inbound_ids: list[int]) -> int:
+    """Drop the undecided matches of these posts and return the posts to NEW for a test run.
+
+    Each statement re-checks the decided rules, so a decision recorded after the caller's
+    decided_inbound_ids check is kept. Returns the number of matches dropped.
+    """
+    if not inbound_ids:
+        return 0
+    undecided = select(InboundPost.id).where(
+        InboundPost.id.in_(inbound_ids),
+        ~InboundPost.id.in_(select(Match.inbound_post_id).where(_decided_match_clause())),
+        ~InboundPost.id.in_(
+            select(ValidationJob.inbound_id).where(ValidationJob.reason_code.like("manual_%"))
+        ),
+    )
+    async with get_session() as session:
+        dropped = await session.execute(
+            delete(Match).where(Match.inbound_post_id.in_(undecided), ~_decided_match_clause())
+        )
+        await session.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(undecided)))
+        await session.execute(
+            update(InboundPost).where(InboundPost.id.in_(undecided)).values(status=InboundStatus.NEW)
+        )
+    return dropped.rowcount
