@@ -522,7 +522,19 @@ def create_snapshot(args):
     parent = args.output_dir.absolute().parent
     recovery.private_dir(parent)
     with _build_lock(parent):
+        _remove_orphaned_builds(parent)
         return _create_snapshot(args)
+
+
+def _remove_orphaned_builds(parent):
+    """Remove build directories that a killed build left. Only called while holding the lock.
+
+    Holding the lock proves that no other build of this namespace is running, so every
+    .sanitized-build-* directory here is an orphan. Links and files of that name are left alone.
+    """
+    for path in parent.glob(".sanitized-build-*"):
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
 
 
 def _create_snapshot(args):

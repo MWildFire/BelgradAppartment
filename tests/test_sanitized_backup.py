@@ -888,6 +888,18 @@ def test_manifest_with_500000_entries_is_checked_written_and_read_within_the_lim
     assert measured["checked_bytes"] == measured["file_bytes"]
 
 
+def test_build_directory_left_by_a_killed_build_is_removed_under_the_build_lock(source):
+    parent = source.output_dir.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    parent.chmod(0o700)
+    orphan = parent / ".sanitized-build-0badc0de"  # what a SIGKILLed build leaves behind
+    orphan.mkdir(mode=0o700)
+    (orphan / "partial.db").write_bytes(b"synthetic partial copy")
+    backup.create_snapshot(source)
+    assert not orphan.exists()
+    assert (source.output_dir / "manifest.json").exists()
+
+
 def test_source_build_refuses_a_manifest_over_the_limit_before_the_full_recheck(source, monkeypatch):
     def recheck_must_not_run(*_args, **_kwargs):
         raise AssertionError("the full recheck ran although the manifest is over the limit")
