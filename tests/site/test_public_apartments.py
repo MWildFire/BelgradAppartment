@@ -45,6 +45,16 @@ async def test_only_secondary_public_is_visible_on_every_surface(site_db: str) -
 
 
 @pytest.mark.asyncio
+async def test_rejected_match_is_never_public_or_a_subscriber_candidate(site_db: str) -> None:
+    _set(site_db, "UPDATE matches SET status='REJECTED' WHERE id=2")
+    views, _ = await rm.list_public(rm.Filters(), database_url=site_db)
+    assert 2 not in {v.id for v in views}
+    assert await rm.get_public(2, database_url=site_db) is None
+    assert 2 not in await rm.public_ids(database_url=site_db)
+    assert 2 not in {c.view.id for c in await rm.public_candidates(database_url=site_db)}
+
+
+@pytest.mark.asyncio
 async def test_public_representative_stays_stable_when_global_primary_changes(site_db: str) -> None:
     _set(site_db, "UPDATE listings SET dup_group_id=1, is_primary=(id=1) WHERE id IN (1,2,4)")
     before, _ = await rm.list_public(rm.Filters(), database_url=site_db)

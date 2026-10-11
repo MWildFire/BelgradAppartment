@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import load_only
 
 from src.config import get_settings
-from src.db.models import InboundPost, Listing, Match, PublishedPost, SiteListing
+from src.db.models import InboundPost, Listing, Match, MatchStatus, PublishedPost, SiteListing
 from src.site import db as sitedb
 from src.site.availability import (
     ApartmentKey,
@@ -168,7 +168,8 @@ async def _load_rows(
         .join(Listing, Listing.id == Match.listing_id)
         .join(InboundPost, InboundPost.id == Match.inbound_post_id, isouter=True)
         .join(PublishedPost, PublishedPost.match_id == Match.id, isouter=True)
-        .where(SiteListing.is_public.is_(True))
+        # A rejection is terminal: a rejected match is never public, on the site or to subscribers.
+        .where(SiteListing.is_public.is_(True), Match.status != MatchStatus.REJECTED)
     )
     rows: list[_Row] = []
     async with sitedb.read_session(database_url=database_url) as s:

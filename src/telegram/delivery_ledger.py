@@ -5,11 +5,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from aiogram.exceptions import TelegramNetworkError
-from sqlalchemy import select, update
+from sqlalchemy import exists, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from src.db import get_session
-from src.db.models import MatchDelivery
+from src.db.models import Match, MatchDelivery, MatchStatus
 
 CLAIM_TIMEOUT = timedelta(minutes=15)
 
@@ -66,6 +66,10 @@ async def claim_recipient(match_id: int, recipient_id: int) -> str | None:
         claimed = (await session.execute(update(MatchDelivery).where(
             MatchDelivery.match_id == match_id, MatchDelivery.recipient_id == recipient_id,
             MatchDelivery.status.in_(["pending", "failed"]),
+            # A rejected match is never sent, even if its delivery rows already exist.
+            ~exists(select(Match.id).where(
+                Match.id == match_id, Match.status == MatchStatus.REJECTED,
+            )),
         ).values(status="sending", claim_token=token, claimed_at=now,
                  attempts=MatchDelivery.attempts + 1, updated_at=now)
           .returning(MatchDelivery.id))).scalar_one_or_none()

@@ -7,7 +7,7 @@ import base64
 import pytest
 import pytest_asyncio
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from src.admin.app import create_app
 from src.admin.csrf import CSRF_TOKEN
@@ -17,11 +17,13 @@ from src.db.models import (
     InboundStatus,
     Listing,
     Match,
+    MatchDelivery,
     MatchStatus,
     Platform,
     PublishedPost,
     SourceChannel,
 )
+from src.telegram.delivery_ledger import prepare_recipients
 from tests.conftest import fresh_db
 
 CREDS = base64.b64encode(b"darya:test_secret_123").decode()
@@ -234,6 +236,44 @@ async def test_mark_posted_is_idempotent(client, db):
     status, _ = await _match_state(db, match_id)
     assert status == MatchStatus.PUBLISHED
     assert await _published_count(db) == 0
+
+
+@pytest.mark.asyncio
+async def test_mark_posted_refuses_a_rejected_match(client, db):
+    match_id = await _seed_match(db, status=MatchStatus.REJECTED)
+    r = client.post(f"/match/{match_id}/mark-posted", headers={**AUTH, **CSRF})
+    assert r.status_code == 400
+    assert "отклонён" in r.text
+    status, _ = await _match_state(db, match_id)
+    assert status == MatchStatus.REJECTED
+    assert await _published_count(db) == 0
+
+
+@pytest.mark.asyncio
+async def test_mark_posted_cancels_queued_and_failed_deliveries_only(client, db):
+    match_id = await _seed_match(db)
+    await prepare_recipients(match_id, [111, 222, 333])
+    async with db() as s:
+        await s.execute(
+            update(MatchDelivery).where(MatchDelivery.recipient_id == 111).values(status="failed")
+        )
+        await s.execute(
+            update(MatchDelivery).where(MatchDelivery.recipient_id == 222).values(status="sent")
+        )
+        await s.commit()
+    r = client.post(f"/match/{match_id}/mark-posted", headers={**AUTH, **CSRF})
+    assert r.status_code == 200
+    async with db() as s:
+        rows = (
+            await s.execute(
+                select(MatchDelivery.recipient_id, MatchDelivery.status).where(
+                    MatchDelivery.match_id == match_id
+                )
+            )
+        ).all()
+    assert sorted(rows) == [(222, "sent")]
+    status, _ = await _match_state(db, match_id)
+    assert status == MatchStatus.PUBLISHED
 
 
 @pytest.mark.asyncio

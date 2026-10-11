@@ -139,12 +139,16 @@ async def send_match_via_bot(
     """Send a match (caption + album) to every recipient in TG_BOT_RECIPIENTS.
 
     Returns the PublishedPost row created on the FIRST recipient's send (we record once per
-    match; subsequent recipients are fan-out). Returns None on no-op (already-delivered).
+    match; subsequent recipients are fan-out). Returns None on no-op: already delivered, or
+    rejected (a rejected match is never sent).
     """
     async with get_session() as s:
         match = await s.get(Match, match_id)
         if match is None:
             raise BotDeliveryError(f"Match {match_id} not found")
+        if match.status == MatchStatus.REJECTED:
+            # A human rejection is terminal: a rejected match is never sent.
+            return None
         existing = (
             await s.execute(select(PublishedPost).where(PublishedPost.match_id == match_id))
         ).scalar_one_or_none()

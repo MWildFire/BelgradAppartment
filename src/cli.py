@@ -727,59 +727,32 @@ def match_all() -> None:
     "--keep-published/--reset-published",
     default=True,
     show_default=True,
-    help="Keep PUBLISHED matches (and their inbounds) untouched; --reset-published wipes "
-         "ALL matches including published history and re-matches everything.",
+    help="Refused with --reset-published: wiping published history would send the same pairs "
+         "to recipients again. Decided matches always stay.",
 )
 def rematch_all(hamming: int | None, keep_published: bool) -> None:
-    """Reset all PENDING/REJECTED/NO_MATCH state and re-run matcher from scratch.
+    """Reset undecided PENDING state and re-run matcher from scratch.
 
     Useful when threshold is too tight on cold-start or after adding many new listings.
+    Published, rejected and otherwise decided matches, and manual review decisions, stay.
     """
-    run_cooperatively(_rematch_all(hamming, keep_published))
+    if not keep_published:
+        raise click.UsageError(
+            "--reset-published is refused: wiping published history would send decided pairs "
+            "to recipients again. Published, rejected and decided matches stay."
+        )
+    run_cooperatively(_rematch_all(hamming))
 
 
-async def _rematch_all(hamming: int | None, keep_published: bool) -> None:
-    from sqlalchemy import delete, update
-
-    from src.db.models import InboundPost, InboundStatus, Match, MatchStatus
-    from src.db.session import get_session
+async def _rematch_all(hamming: int | None) -> None:
+    from src.matching.review_queue import reset_for_rematch
 
     settings = get_settings()
     if hamming is not None:
         settings.phash_max_hamming = hamming
         click.echo(f"→ Using Hamming threshold = {hamming} for this run only.")
 
-    async with get_session() as s:
-        if keep_published:
-            # Delete only non-published Match rows; preserve history.
-            await s.execute(
-                delete(Match).where(Match.status != MatchStatus.PUBLISHED)
-            )
-            # Reset inbound status — but never touch ones with a PublishedPost.
-            published_ib_ids = set(
-                (await s.execute(
-                    select(InboundPost.id)
-                    .join(Match, Match.inbound_post_id == InboundPost.id)
-                    .where(Match.status == MatchStatus.PUBLISHED)
-                )).scalars().all()
-            )
-            if published_ib_ids:
-                await s.execute(
-                    update(InboundPost)
-                    .where(~InboundPost.id.in_(published_ib_ids))
-                    .values(status=InboundStatus.NEW)
-                )
-            else:
-                await s.execute(update(InboundPost).values(status=InboundStatus.NEW))
-        else:
-            click.echo("⚠️  --reset-published: wiping ALL matches including published history")
-            await s.execute(delete(Match))
-            await s.execute(update(InboundPost).values(status=InboundStatus.NEW))
-        from src.db.models import ValidationJob
-
-        await s.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(
-            select(InboundPost.id).where(InboundPost.status == InboundStatus.NEW),
-        )))
+    await reset_for_rematch()
     click.echo("→ State reset. Running matcher...")
 
     import time as _time
@@ -1282,11 +1255,10 @@ def test_batch(n: int, from_id: int | None) -> None:
 async def _test_batch(n: int, from_id: int | None) -> None:
     import time as _time
 
-    from sqlalchemy import delete, update
-
-    from src.db.models import InboundPost, InboundStatus, Match, PublishedPost
+    from src.db.models import InboundPost
     from src.db.session import get_session
     from src.jobs.pipeline import process_new_inbound
+    from src.matching.review_queue import decided_inbound_ids, reset_undecided_for_test
     from src.telegram.delivery import send_run_summary
 
     async with get_session() as s:
@@ -1300,25 +1272,18 @@ async def _test_batch(n: int, from_id: int | None) -> None:
         click.echo("  (no inbound posts found)")
         return
 
-    # Reset state: drop non-published matches + flip status to NEW.
-    async with get_session() as s:
-        match_ids = list(
-            (
-                await s.execute(select(Match.id).where(Match.inbound_post_id.in_(inbound_ids)))
-            ).scalars().all()
-        )
-        if match_ids:
-            await s.execute(delete(PublishedPost).where(PublishedPost.match_id.in_(match_ids)))
-            await s.execute(delete(Match).where(Match.id.in_(match_ids)))
-        await s.execute(
-            update(InboundPost)
-            .where(InboundPost.id.in_(inbound_ids))
-            .values(status=InboundStatus.NEW)
-        )
-        from src.db.models import ValidationJob
+    # Operator decisions and delivery history are never wiped: such posts are skipped.
+    decided = await decided_inbound_ids(inbound_ids)
+    if decided:
+        click.echo(f"  skipped posts with operator decisions: {sorted(decided)}")
+        inbound_ids = [i for i in inbound_ids if i not in decided]
+        if not inbound_ids:
+            click.echo("  (nothing left to test)")
+            return
 
-        await s.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(inbound_ids)))
-    click.echo(f"  reset: dropped {len(match_ids)} prior matches")
+    # Reset state: drop undecided matches and flip their posts to NEW. Decided state stays.
+    dropped = await reset_undecided_for_test(inbound_ids)
+    click.echo(f"  reset: dropped {dropped} prior matches")
 
     # Open a Telethon client only if we need it (legacy userbot mode).
     # In bot mode we never touch Telethon here — that avoids SQLite session-file lock conflicts
@@ -1635,7 +1600,8 @@ def _nightly_unhealthy(*, dead, low_coverage, degraded, parse_degraded, sweep_re
                        maintenance_failed, results) -> bool:
     """Exit 1 only for real failures: dead platform, incomplete coverage, failed steps (🚨).
 
-    Item errors (⚠️ Ошибки: N) and budget skips stay warnings in the summary and do not fail.
+    Item errors (⚠️ Ошибки: N) stay warnings in the summary. Partial crawls (skipped pages),
+    failed steps and dead or low-coverage platforms still fail the night.
     """
     return bool(dead or low_coverage or degraded or parse_degraded or sweep_reasons
                 or maintenance_failed or any(r.outcome in {"failed", "degraded"} for r in results))

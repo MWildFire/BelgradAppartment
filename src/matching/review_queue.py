@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import exists, or_, select, update
+from sqlalchemy import delete, exists, or_, select, update
 
 from src.db import InboundPost, InboundStatus, Match, MatchStatus, get_session
-from src.db.models import DigestWorkItem, ValidationJob
+from src.db.models import DigestWorkItem, MatchDelivery, PublishedPost, SiteListing, ValidationJob
 
 REVIEW_DECISIONS = {"NO_MATCH": InboundStatus.NO_MATCH, "DUPLICATE": InboundStatus.DUPLICATE}
 REASON_MAX_LENGTH = 256
@@ -65,6 +65,7 @@ async def pending_report(limit: int = 50) -> dict[str, list[dict[str, Any]]]:
 
 
 async def requeue_validation(inbound_id: int) -> bool:
+    """Operator retry for an automatic case; a manual decision stays terminal."""
     now = datetime.now(UTC)
     async with get_session() as session:
         owned = (
@@ -73,6 +74,10 @@ async def requeue_validation(inbound_id: int) -> bool:
                 .where(
                     ValidationJob.inbound_id == inbound_id,
                     or_(ValidationJob.lease_until.is_(None), ValidationJob.lease_until <= now),
+                    or_(
+                        ValidationJob.reason_code.is_(None),
+                        ValidationJob.reason_code.not_like("manual_%"),
+                    ),
                     ~exists(select(Match.id).where(Match.inbound_post_id == inbound_id)),
                 )
                 .values(
@@ -158,7 +163,12 @@ async def close_review(inbound_id: int, decision: str, reason: str) -> None:
 
 
 async def reject_match(match_id: int, reason: str) -> str:
-    """Reject a PENDING match that was never sent; PUBLISHED matches stay with the admin tool."""
+    """Reject a PENDING match that no recipient has started to receive.
+
+    The status change is one conditional statement that applies only while no recipient is in
+    sending, sent or unknown state. Queued rows stay pending and are never claimed for a REJECTED
+    match. PUBLISHED matches stay with the admin tool.
+    """
     reason = _clean_reason(reason)
     async with get_session() as session:
         match = await session.get(Match, match_id)
@@ -170,6 +180,129 @@ async def reject_match(match_id: int, reason: str) -> str:
             raise ReviewError(
                 f"match {match_id}: статус {match.status.value}; отклоняйте через админку"
             )
-        match.status = MatchStatus.REJECTED
-        match.rejection_reason = reason
+        rejected = (
+            await session.execute(
+                update(Match)
+                .where(
+                    Match.id == match_id,
+                    Match.status == MatchStatus.PENDING,
+                    ~exists(
+                        select(MatchDelivery.id).where(
+                            MatchDelivery.match_id == match_id,
+                            MatchDelivery.status.in_(["sending", "sent", "unknown"]),
+                        )
+                    ),
+                )
+                .values(status=MatchStatus.REJECTED, rejection_reason=reason)
+                .returning(Match.id)
+            )
+        ).scalar_one_or_none()
+        if rejected is None:
+            raise ReviewError(f"match {match_id}: есть записи доставки или статус изменился")
         return "rejected"
+
+
+def _decided_match_clause():
+    """Matches that no reset and no test wipe may delete.
+
+    Covers operator and recipient decisions: a rejected or published match, any match with a
+    delivery row (queued, in flight or sent), a PublishedPost, and a site overlay. Deleting any
+    of them lets the same pair be matched and delivered again.
+    """
+    return or_(
+        Match.status.in_([MatchStatus.PUBLISHED, MatchStatus.REJECTED]),
+        Match.id.in_(select(MatchDelivery.match_id)),
+        Match.id.in_(select(PublishedPost.match_id)),
+        Match.id.in_(select(SiteListing.match_id)),
+    )
+
+
+async def reset_for_rematch() -> None:
+    """Operator reset before a full rematch: only undecided matches are dropped.
+
+    Decided matches (see _decided_match_clause) and every manual review decision stay unchanged
+    together with their inbound posts. The other matches are removed and their inbound posts
+    return to NEW. There is no full wipe: a wipe would send already-decided pairs again.
+    """
+    async with get_session() as session:
+        # The write comes first, and nothing commits before the function returns. SQLite then
+        # holds its write lock for the whole transaction, so the reads below see the same decided
+        # state as the writes. Reads taken before any lock could miss a decision committed in
+        # between; that decision would be reset to NEW and lose its manual job. This relies on
+        # SQLite's locking: another database needs an explicit lock here.
+        await session.execute(delete(Match).where(~_decided_match_clause()))
+        kept = set(
+            (
+                await session.execute(select(Match.inbound_post_id).where(_decided_match_clause()))
+            ).scalars()
+        )
+        kept |= set(
+            (
+                await session.execute(
+                    select(ValidationJob.inbound_id).where(
+                        ValidationJob.reason_code.like("manual_%")
+                    )
+                )
+            ).scalars()
+        )
+        reset = update(InboundPost).values(status=InboundStatus.NEW)
+        if kept:
+            reset = reset.where(~InboundPost.id.in_(kept))
+        await session.execute(reset)
+        jobs = delete(ValidationJob).where(
+            ValidationJob.inbound_id.in_(
+                select(InboundPost.id).where(InboundPost.status == InboundStatus.NEW)
+            )
+        )
+        if kept:
+            jobs = jobs.where(~ValidationJob.inbound_id.in_(kept))
+        await session.execute(jobs)
+
+
+async def decided_inbound_ids(inbound_ids: list[int]) -> set[int]:
+    """Posts that an operator tool must not wipe: manual review decisions and decided matches."""
+    if not inbound_ids:
+        return set()
+    async with get_session() as session:
+        manual = (
+            await session.execute(
+                select(ValidationJob.inbound_id).where(
+                    ValidationJob.inbound_id.in_(inbound_ids),
+                    ValidationJob.reason_code.like("manual_%"),
+                )
+            )
+        ).scalars().all()
+        decided = (
+            await session.execute(
+                select(Match.inbound_post_id).where(
+                    Match.inbound_post_id.in_(inbound_ids), _decided_match_clause()
+                )
+            )
+        ).scalars().all()
+    return set(manual) | set(decided)
+
+
+async def reset_undecided_for_test(inbound_ids: list[int]) -> int:
+    """Drop the undecided matches of these posts and return the posts to NEW for a test run.
+
+    Each statement re-checks the decided rules, so a decision recorded after the caller's
+    decided_inbound_ids check is kept. Returns the number of matches dropped.
+    """
+    if not inbound_ids:
+        return 0
+    undecided = select(InboundPost.id).where(
+        InboundPost.id.in_(inbound_ids),
+        ~InboundPost.id.in_(select(Match.inbound_post_id).where(_decided_match_clause())),
+        ~InboundPost.id.in_(
+            select(ValidationJob.inbound_id).where(ValidationJob.reason_code.like("manual_%"))
+        ),
+    )
+    async with get_session() as session:
+        dropped = await session.execute(
+            delete(Match).where(Match.inbound_post_id.in_(undecided), ~_decided_match_clause())
+        )
+        await session.execute(delete(ValidationJob).where(ValidationJob.inbound_id.in_(undecided)))
+        await session.execute(
+            update(InboundPost).where(InboundPost.id.in_(undecided)).values(status=InboundStatus.NEW)
+        )
+    return dropped.rowcount
