@@ -12,6 +12,7 @@ from src.db.models import (
     InboundPost,
     Listing,
     Match,
+    MatchStatus,
     Platform,
     SiteListing,
     Subscription,
@@ -34,7 +35,8 @@ async def _many(url, count=100):
             session.add(InboundPost(id=lid, source_channel_id=1, tg_message_id=1000 + lid, raw_text="", photo_paths=[]))
         await session.flush()
         for lid in range(10, 10 + count):
-            session.add(Match(id=lid, listing_id=lid, inbound_post_id=lid))
+            session.add(Match(id=lid, listing_id=lid, inbound_post_id=lid,
+                              status=MatchStatus.PUBLISHED))
         await session.flush()
         for lid in range(10, 10 + count):
             session.add(SiteListing(id=lid, match_id=lid, is_public=True, created_at=now))
