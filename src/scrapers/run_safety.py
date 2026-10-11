@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -173,40 +171,3 @@ def source_removal_alarm(*, deactivated: int, attempted: int) -> bool:
         and deactivated / attempted > REMOVAL_ALARM_SHARE
     )
 
-
-# Q3.21: the public detail run keeps its mass-removal alarm for the night's hide decisions.
-PUBLIC_RUN_ALARM_HOURS = 26
-
-
-def record_public_run_alarm(
-    path: Path, *, deactivated: int, attempted: int, now: datetime,
-) -> None:
-    """Write the alarm of one public detail run, atomically. Only an alarm is recorded.
-
-    A clean run leaves an earlier alarm in place, so any alarm within the window counts.
-    The DEAD marks of an alarmed run are not trusted by the liveness sweep: it probes them again.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps({"at": now.isoformat(), "deactivated": deactivated, "attempted": attempted}),
-        encoding="utf-8",
-    )
-    temporary.replace(path)
-
-
-def public_run_alarm_recent(path: Path, *, now: datetime) -> bool:
-    """True when an alarm was recorded within PUBLIC_RUN_ALARM_HOURS. Fails closed.
-
-    A missing record means no alarm. An unreadable record, or one dated in the future, counts as
-    an alarm: the night hides nothing until someone looks at it.
-    """
-    try:
-        at = datetime.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["at"])
-    except FileNotFoundError:
-        return False
-    except (OSError, ValueError, KeyError, TypeError):
-        return True
-    if at.tzinfo is None:
-        at = at.replace(tzinfo=UTC)
-    return now - at < timedelta(hours=PUBLIC_RUN_ALARM_HOURS)

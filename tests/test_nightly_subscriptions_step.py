@@ -62,3 +62,10 @@ async def test_subscriptions_step_failure_is_isolated(monkeypatch):
     # Must not raise — a failed step adds a 🚨 line, never crashes the nightly.
     lines, _pc, _alerts, _hidden, _alarm = await _run_nightly_steps()
     assert any("🚨" in ln and "подписк" in ln for ln in lines), lines
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state(monkeypatch, tmp_path):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)

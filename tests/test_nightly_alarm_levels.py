@@ -14,7 +14,7 @@ import pytest
 import src.cli as cli_mod
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers import orchestrator
+from src.scrapers import orchestrator, removal_guard
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def heal_rolling_links(monkeypatch):
         async def fake_rolling(*, limit, deadline=None):
             return rolling
 
-        async def fake_links(*, limit, deadline=None, hides_allowed=True):
+        async def fake_links(*, limit, deadline=None, hides_allowed=True, guard_dir=None):
             return links
 
         monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
@@ -221,11 +221,12 @@ def _public_refresh(monkeypatch, **fields):
     async def fake_rolling(*, limit, public_only, scrapers, deadline):
         return SimpleNamespace(**values)
 
+    def capture(_state_dir, step, **kwargs):
+        recorded.append({"step": step, **kwargs})
+
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
-    # The alarm record goes to the state dir: keep it in memory and hand the calls back.
-    monkeypatch.setattr(
-        cli_mod, "record_public_run_alarm", lambda _path, **kwargs: recorded.append(kwargs),
-    )
+    # The guard writes go to the state dir: keep them in memory and hand the calls back.
+    monkeypatch.setattr(removal_guard, "write_step", capture)
     return recorded
 
 
@@ -309,20 +310,23 @@ async def test_nightly_mass_removal_is_alarm_with_count(db, heal_rolling_links):
     assert not any("🚨" in line for line in lines)
 
 
-async def test_public_refresh_mass_removal_is_recorded_for_the_night(monkeypatch, capsys):
+
+async def test_public_refresh_mass_removal_is_recorded_as_an_alarm(monkeypatch, capsys):
     recorded = _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={}, deactivated=9)
     await cli_mod._refetch_details(None, False, None, False, public_only=True)
-    assert len(recorded) == 1
-    assert recorded[0]["deactivated"] == 9 and recorded[0]["attempted"] == 17
+    outcome = [c for c in recorded if c["step"] == "public" and c["status"] != "running"]
+    assert len(outcome) == 1 and outcome[0]["status"] == "alarm"
+    assert outcome[0]["deactivated"] == 9 and outcome[0]["attempted"] == 17
 
 
-async def test_public_refresh_clean_run_records_nothing(monkeypatch, capsys):
+async def test_public_refresh_clean_run_is_recorded_as_clean(monkeypatch, capsys):
     recorded = _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={}, deactivated=1)
     await cli_mod._refetch_details(None, False, None, False, public_only=True)
-    assert recorded == []
+    outcome = [c for c in recorded if c["step"] == "public" and c["status"] != "running"]
+    assert [c["status"] for c in outcome] == ["clean"]
 
 
-async def test_public_refresh_crash_is_recorded_as_an_alarm(monkeypatch, capsys):
+async def test_public_refresh_crash_is_recorded_as_failed(monkeypatch, capsys):
     recorded = _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={})
 
     async def crashing_rolling(**_kwargs):
@@ -331,4 +335,11 @@ async def test_public_refresh_crash_is_recorded_as_an_alarm(monkeypatch, capsys)
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", crashing_rolling)
     with pytest.raises(RuntimeError):
         await cli_mod._refetch_details(None, False, None, False, public_only=True)
-    assert len(recorded) == 1 and recorded[0]["deactivated"] == 0
+    assert [c["status"] for c in recorded if c["step"] == "public"] == ["running", "failed"]
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state(monkeypatch, tmp_path):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)

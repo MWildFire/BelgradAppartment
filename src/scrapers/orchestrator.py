@@ -51,6 +51,7 @@ from src.scrapers.freshness import (
 )
 from src.scrapers.link_probe import SourceProbeSession
 from src.scrapers.refresh_diagnostics import add_reason, reason_code, source_error_code
+from src.scrapers import removal_guard
 from src.scrapers.run_safety import evaluate_absence, evaluate_source, source_removal_alarm
 from src.scrapers.snapshot_parity import mismatch_fields
 
@@ -936,6 +937,7 @@ async def verify_active_links(
     client: httpx.AsyncClient | None = None,
     dry_run: bool = False,
     hides_allowed: bool = True,  # False: an earlier step of the night raised the removal alarm
+    guard_dir: Path | None = None,  # the nightly run passes its state dir; manual runs leave it
 ) -> LinkVerifyStats:
     """Verify ACTIVE matched sources through bounded payload-aware GET/browser probes.
 
@@ -954,6 +956,10 @@ async def verify_active_links(
     `client` is injectable for tests (pass a MockTransport-backed AsyncClient). Production does
     not use the legacy side-client HEAD route.
     """
+    if guard_dir is not None and not dry_run:
+        removal_guard.write_step(
+            guard_dir, "verify", status=removal_guard.RUNNING, now=datetime.now(UTC),
+        )
     checked_at = datetime.now(UTC)
     async with get_session() as s:
         stmt = (
@@ -1076,6 +1082,12 @@ async def verify_active_links(
     stats.removal_alarm = source_removal_alarm(
         deactivated=stats.deactivated, attempted=stats.checked,
     )
+    if guard_dir is not None and not dry_run:
+        removal_guard.write_step(
+            guard_dir, "verify",
+            status=removal_guard.ALARM if stats.removal_alarm else removal_guard.CLEAN,
+            now=datetime.now(UTC), deactivated=stats.deactivated, attempted=stats.checked,
+        )
     hide_pass = bool(dead_ids) and not dry_run and get_settings().nightly_auto_hide_site_listings
     if hide_pass and (stats.removal_alarm or not hides_allowed):
         stats.hides_withheld = len(dead_ids)

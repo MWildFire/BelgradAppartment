@@ -423,7 +423,7 @@ async def test_hide_helper_hides_public_card(factory, monkeypatch):
         ))
         n = await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert n == 1
-    assert await _site_state(factory, lid) == (False, False)
+    assert await _site_state(factory, lid) == (False, True)
 
 
 @pytest.mark.asyncio
@@ -568,10 +568,10 @@ async def test_404_already_hidden_card_hidden_count_zero(factory):
 
 
 @pytest.mark.asyncio
-async def test_404_clears_featured_flag(factory, monkeypatch):
+async def test_404_hides_the_card_but_keeps_its_featured_flag(factory, monkeypatch):
+    """The automatic hide changes visibility only: a card that returns is the hero again."""
     from src.config import get_settings
     monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
-    """A hidden card must never remain the hero — is_featured is cleared too."""
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True,
         site_public=True, site_featured=True,
@@ -582,7 +582,7 @@ async def test_404_clears_featured_flag(factory, monkeypatch):
 
     await verify_active_links(client=_client(handler))
 
-    assert await _site_state(factory, lid) == (False, False)
+    assert await _site_state(factory, lid) == (False, True)
 
 
 # --------------------------------------------------------------- T1-5: proxy plumbing into HEADs
@@ -864,3 +864,20 @@ async def test_night_gate_withholds_hides_after_an_alarm_in_an_earlier_step(fact
     assert stats.deactivated == 1
     assert stats.site_listings_hidden == 0 and stats.hides_withheld == 1
     assert await _site_state(factory, lid) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_verify_records_its_outcome_for_the_removal_guard(factory, tmp_path):
+    import json
+
+    await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
+    )
+
+    stats = await verify_active_links(
+        client=_client(lambda request: httpx.Response(404)), guard_dir=tmp_path,
+    )
+
+    record = json.loads((tmp_path / "removal_guard" / "verify.json").read_text(encoding="utf-8"))
+    assert stats.deactivated == 1
+    assert record["status"] == "clean" and record["deactivated"] == 1

@@ -21,12 +21,8 @@ from src.jobs.lifecycle import remaining_budget, run_budget, run_cooperatively
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
-from src.scrapers.run_safety import (
-    probe_sweep_broken,
-    public_run_alarm_recent,
-    record_public_run_alarm,
-    source_removal_alarm,
-)
+from src.scrapers import removal_guard
+from src.scrapers.run_safety import probe_sweep_broken, source_removal_alarm
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
@@ -1881,6 +1877,16 @@ class NightlyStepsResult(NamedTuple):
     removal_alarm: bool = False  # Q3.21: a removal alarm this night gates every hide pass
 
 
+def _guard_steps(settings, *, include_verify: bool) -> tuple[str, ...]:
+    """The removal steps this configuration runs; the guard waits for each one (Q3.21)."""
+    steps = ["public"]
+    if settings.nightly_detail_refresh_all or settings.nightly_detail_refresh > 0:
+        steps.append("rolling")
+    if include_verify and settings.nightly_verify_links:
+        steps.append("verify")
+    return tuple(steps)
+
+
 async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     """Run the post-sweep nightly maintenance steps (W2-C1/C2/C5/C3).
 
@@ -1907,11 +1913,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     alerts: list[str] = []
     price_changes: list[PriceChange] = []
     site_listings_hidden = 0
-    # A mass-removal alarm of a public detail run within 26 h withholds this night's hides too.
-    public_alarm = public_run_alarm_recent(
-        settings.data_dir / "state" / "public_run_alarm.json", now=datetime.now(UTC),
-    )
-    removal_alarm = public_alarm
+    state_dir = settings.data_dir / "state"
 
     # Reserve time for later queues and final publication/analytics work. Unused time
     # flows forward; a hanging heal cannot consume the rolling refresh or link slice.
@@ -1963,6 +1965,9 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                  else str(settings.nightly_detail_refresh))
         click.echo(f"→ Rolling detail refresh (limit={scope})…")
         try:
+            removal_guard.write_step(
+                state_dir, "rolling", status=removal_guard.RUNNING, now=datetime.now(UTC),
+            )
             selection = {"all_listings": True} if settings.nightly_detail_refresh_all else {}
             rolling = await rolling_detail_refresh(
                 limit=settings.nightly_detail_refresh, deadline=deadlines["rolling"], **selection,
@@ -1987,7 +1992,11 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             mass_removal = source_removal_alarm(
                 deactivated=rolling.deactivated, attempted=attempted,
             )
-            removal_alarm = removal_alarm or mass_removal
+            removal_guard.write_step(
+                state_dir, "rolling",
+                status=removal_guard.ALARM if mass_removal else removal_guard.CLEAN,
+                now=datetime.now(UTC), deactivated=rolling.deactivated, attempted=attempted,
+            )
             if mass_removal:
                 line += f", массовое снятие: {rolling.deactivated} из {attempted} попыток"
             if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
@@ -2000,9 +2009,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
         except Exception:
             log.exception("nightly step failed: detail-refresh")
             lines.append("🚨 detail-refresh шаг упал — см. логи")
-            # The removal state is unknown after a crash: this night hides nothing.
-            mass_removal = True
-            removal_alarm = True
+            removal_guard.record_failure(state_dir, "rolling", now=datetime.now(UTC))
     else:
         click.echo("→ Rolling detail refresh disabled (NIGHTLY_DETAIL_REFRESH=0)")
 
@@ -2014,7 +2021,11 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             # The final reserved slice includes unused time from earlier queues.
             vl = await verify_active_links(
                 limit=settings.nightly_verify_links_limit, deadline=deadlines["links"],
-                hides_allowed=not (mass_removal or public_alarm),
+                hides_allowed=not removal_guard.withholds_hides(
+                    state_dir, now=datetime.now(UTC),
+                    steps=_guard_steps(settings, include_verify=False),
+                ),
+                guard_dir=state_dir,
             )
             line = (
                 f"ссылки: проверено {vl.checked}, "
@@ -2023,7 +2034,6 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             site_listings_hidden = vl.site_listings_hidden
             if vl.site_listings_hidden:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
-            removal_alarm = removal_alarm or vl.removal_alarm
             if vl.hides_withheld:
                 line += (f", 🚨 автоскрытие пропущено: {vl.hides_withheld} объявлений — "
                          "тревога или сбой этой ночью")
@@ -2039,8 +2049,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
         except Exception:
             log.exception("nightly step failed: verify-links")
             lines.append("🚨 verify-links шаг упал — см. логи")
-            # The verify state is unknown after a crash: this night hides nothing.
-            removal_alarm = True
+            removal_guard.record_failure(state_dir, "verify", now=datetime.now(UTC))
     else:
         click.echo("→ Verify links disabled (NIGHTLY_VERIFY_LINKS=0)")
 
@@ -2124,6 +2133,9 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     else:
         click.echo("→ Embeddings prune disabled (NIGHTLY_PRUNE_EMBEDDINGS=0)")
 
+    removal_alarm = removal_guard.withholds_hides(
+        state_dir, now=datetime.now(UTC), steps=_guard_steps(settings, include_verify=True),
+    )
     return NightlyStepsResult(summary_lines=lines, price_changes=price_changes, alerts=alerts,
                              site_listings_hidden=site_listings_hidden, removal_alarm=removal_alarm)
 
@@ -2744,6 +2756,10 @@ async def _refetch_details(
         click.echo(f"→ public detail refresh: limit={cap}, budget={budget:g}s")
         # This path only updates source details/media. It never invokes publication,
         # subscription, price-change notices, delivery retry or summary transports.
+        public_state_dir = settings.data_dir / "state"
+        removal_guard.write_step(
+            public_state_dir, "public", status=removal_guard.RUNNING, now=datetime.now(UTC),
+        )
         try:
             async with asyncio.timeout(budget):
                 result = await rolling_detail_refresh(
@@ -2751,12 +2767,9 @@ async def _refetch_details(
                     deadline=time.monotonic() + budget,
                 )
         except Exception:
-            # A crashed or timed-out public run leaves DEAD marks it did not finish judging:
-            # the night hides nothing (Q3.21).
-            record_public_run_alarm(
-                settings.data_dir / "state" / "public_run_alarm.json",
-                deactivated=0, attempted=0, now=datetime.now(UTC),
-            )
+            # A crashed or timed-out run leaves DEAD marks it did not finish judging: the guard
+            # holds the nights until a clean public run (Q3.21).
+            removal_guard.record_failure(public_state_dir, "public", now=datetime.now(UTC))
             raise
         click.echo(
             f"=== PUBLIC: selected={result.selected} verified={result.refreshed} "
@@ -2776,13 +2789,11 @@ async def _refetch_details(
         if result.skipped:
             click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
         mass_removal = source_removal_alarm(deactivated=removed, attempted=attempted)
-        if mass_removal:
-            # Read by the night's hide decisions (Q3.21): this run's DEAD marks are probed again
-            # there, and no auto-hide follows an alarmed public run within 26 hours.
-            record_public_run_alarm(
-                settings.data_dir / "state" / "public_run_alarm.json",
-                deactivated=removed, attempted=attempted, now=datetime.now(UTC),
-            )
+        removal_guard.write_step(
+            public_state_dir, "public",
+            status=removal_guard.ALARM if mass_removal else removal_guard.CLEAN,
+            now=datetime.now(UTC), deactivated=removed, attempted=attempted,
+        )
         if mass_removal:
             click.echo(
                 f"🚨 Массовое снятие: {removed} из {attempted} попыток за прогон — "
