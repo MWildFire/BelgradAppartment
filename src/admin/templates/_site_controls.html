@@ -1,4 +1,5 @@
 <div class="site-controls" id="site-controls-{{ match_id }}">
+  {% if error %}<div class="error-box">⚠️ {{ error }}</div>{% endif %}
   <div class="site-controls-row">
     <span class="site-controls-label">Каталог:</span>
     <button
