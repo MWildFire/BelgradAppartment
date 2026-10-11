@@ -31,7 +31,7 @@ from tests.conftest import fresh_db
 
 
 def synthetic_rows():
-    sizes = (20, 20, 36, 35, 36)
+    sizes = (20, 20, 36, 35, 37)
     rows = []
     for row, size in enumerate(sizes):
         flagged = set(range(size)) if row < 2 else {size - 20}
@@ -79,7 +79,7 @@ def test_exact_sql_diff_preserves_other_fields_and_source(tmp_path):
     updates, receipt = transform(rows)
     assert rows == untouched and len(updates) == 5
     assert receipt["replaced_url_values"] == 43
-    assert sum(len(urls) for _, urls in updates) == 147
+    assert sum(len(urls) for _, urls in updates) == 148
     with sqlite3.connect(source) as original, sqlite3.connect(copy_db) as target:
         original.backup(target)
         target.executemany(
@@ -114,7 +114,7 @@ def test_exact_sql_diff_preserves_other_fields_and_source(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_current_admin_and_legacy_evidence_keep_all_147_photos(tmp_path, monkeypatch):
+async def test_current_admin_and_legacy_evidence_keep_all_148_photos(tmp_path, monkeypatch):
     rows = synthetic_rows()
     updates, _ = transform(rows)
     monkeypatch.setattr(
@@ -234,15 +234,22 @@ def scope_record():
     }
 
 
-def test_exact_43_markers_and_104_untouched_values_with_extra_unaffected_row():
+def test_exact_43_markers_and_105_untouched_values_with_extra_unaffected_row():
     before = [*synthetic_rows(), (99, ["https://example.invalid/unchanged.jpg"])]
     after, summary = transform(before)
     assert summary == EXPECTED
     assert validate_exact_diff(before, after) == EXPECTED
     assert after[-1] == before[-1]
     assert sum(u.startswith("restore-local:") for _, urls in after for u in urls) == 43
-    assert sum(not u.startswith("restore-local:") for _, urls in after for u in urls) == 105
-    assert sum(len(urls) for _, urls in after) == 148
+    assert sum(not u.startswith("restore-local:") for _, urls in after for u in urls) == 106
+    assert sum(len(urls) for _, urls in after) == 149
+
+
+def test_one_photo_fewer_than_the_pinned_scope_is_refused():
+    rows = synthetic_rows()
+    identity, urls = rows[-1]
+    with pytest.raises(preflight.PreflightError, match="redaction_scope_changed"):
+        transform([*rows[:-1], (identity, urls[:-1])])
 
 
 @pytest.mark.parametrize(

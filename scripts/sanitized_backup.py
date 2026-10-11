@@ -62,7 +62,7 @@ MANIFEST_KEYS = {
     "personal_data_present",
     "affected_albums",
 }
-ALBUM_RESULT = {"listings": 5, "photos": 147, "markers": 43}
+ALBUM_RESULT = {"listings": 5, "photos": 148, "markers": 43}
 SOURCE_SNAPSHOT = re.compile(r"/var/tmp/otz-data-only-sanitized/[0-9]{8}-[0-9]{6}-[a-f0-9]{8}")
 
 # Durable record states; receive() documents what each one allows.
