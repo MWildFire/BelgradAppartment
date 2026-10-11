@@ -339,7 +339,7 @@ def test_source_removal_alarm_needs_a_real_sample():
     assert not source_removal_alarm(deactivated=0, attempted=50)
     assert not source_removal_alarm(deactivated=1, attempted=2)  # one 404 in a tiny run
     assert not source_removal_alarm(deactivated=3, attempted=9)  # below the sample floor
-    assert not source_removal_alarm(deactivated=9, attempted=9)  # a tiny public set: silent by design
+    assert not source_removal_alarm(deactivated=9, attempted=9)  # tiny set: silent by design
     assert not source_removal_alarm(deactivated=3, attempted=10)  # exactly 0.3 is not above
     assert source_removal_alarm(deactivated=4, attempted=10)
 

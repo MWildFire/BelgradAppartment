@@ -165,9 +165,9 @@ async def test_liveness_source_failures_are_not_probe_failures(monkeypatch):
         liveness, "site_liveness_sweep", sweep(checked=10, errors=2, source_errors=2),
     )
     assert (await cli_mod._liveness_nightly_line(notify=False)).startswith("⚠️ liveness")
-    # Two probes ran and three sources failed: source failures must not inflate the probe share.
+    # Ten probes, four failed, two sources timed out: source failures stay out of the share.
     monkeypatch.setattr(
-        liveness, "site_liveness_sweep", sweep(checked=2, errors=3, source_errors=3),
+        liveness, "site_liveness_sweep", sweep(checked=10, errors=6, source_errors=2),
     )
     assert (await cli_mod._liveness_nightly_line(notify=False)).startswith("⚠️ liveness")
 
@@ -256,22 +256,23 @@ async def test_public_refresh_few_removals_are_counted_without_alarm(monkeypatch
     assert "🚨" not in out
 
 
-async def test_public_refresh_removal_share_counts_every_attempt(monkeypatch, capsys):
-    """3 removals of 10 attempts is exactly 0.3, not above it. Attempts include errors and repeat
-    checks of already removed listings."""
+async def test_public_refresh_removal_share_counts_live_attempts_only(monkeypatch, capsys):
+    """Errors are live attempts: 4 removals of 14 is not above 0.3. Re-checks of listings already
+    removed are not attempts at all: 4 removals of 10 live listings alarm, however many repeats the
+    run carried."""
     _public_refresh(
-        monkeypatch, refreshed=5, errors=2, skipped=0, source_errors={}, deactivated=3,
+        monkeypatch, refreshed=6, errors=4, skipped=0, source_errors={}, deactivated=4,
     )
     await cli_mod._refetch_details(None, False, None, False, public_only=True)
     assert "🚨" not in capsys.readouterr().out
     _public_refresh(
-        monkeypatch, refreshed=5, errors=0, skipped=0, source_errors={}, deactivated=3,
-        already_removed=2,
+        monkeypatch, refreshed=6, errors=0, skipped=0, source_errors={}, deactivated=4,
+        already_removed=20,
     )
     await cli_mod._refetch_details(None, False, None, False, public_only=True)
     out = capsys.readouterr().out
-    assert "повторно подтверждено снятых: 2" in out
-    assert "🚨" not in out
+    assert "🚨 Массовое снятие: 4 из 10 попыток" in out
+    assert "повторно подтверждено снятых: 20" in out
 
 
 async def test_nightly_mass_removal_is_alarm_with_count(db, heal_rolling_links):

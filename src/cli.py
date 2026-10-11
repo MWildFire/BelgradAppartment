@@ -1960,8 +1960,8 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             already_removed = getattr(rolling, "already_removed", 0)
             if already_removed:
                 line += f", повторно подтверждено снятых: {already_removed}"
-            attempted = (rolling.refreshed + rolling.errors + rolling.deactivated
-                         + already_removed)
+            # Live attempts only: re-checks of listings already removed would dilute the share.
+            attempted = rolling.refreshed + rolling.errors + rolling.deactivated
             mass_removal = source_removal_alarm(
                 deactivated=rolling.deactivated, attempted=attempted,
             )
@@ -2723,7 +2723,8 @@ async def _refetch_details(
         )
         removed = result.deactivated
         already_removed = getattr(result, "already_removed", 0)
-        attempted = result.refreshed + result.errors + removed + already_removed
+        # Live attempts only: re-checks of listings already removed would dilute the share.
+        attempted = result.refreshed + result.errors + removed
         removed_line = f"деактивировано (404/410): {removed}"
         if already_removed:
             removed_line += f", повторно подтверждено снятых: {already_removed}"

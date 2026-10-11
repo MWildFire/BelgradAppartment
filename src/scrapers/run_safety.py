@@ -163,7 +163,7 @@ def source_removal_alarm(*, deactivated: int, attempted: int) -> bool:
     """True when the removal share of one run is above REMOVAL_ALARM_SHARE, over at least
     ALARM_MIN_SAMPLE attempts.
 
-    `attempted` counts every listing the run tried, including already removed ones.
+    `attempted` counts the live listings the run tried: refreshed, errored and newly removed.
     `deactivated` counts only new takedowns, never a re-check of a listing that was inactive.
     """
     return (
