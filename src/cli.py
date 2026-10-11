@@ -21,6 +21,7 @@ from src.jobs.lifecycle import remaining_budget, run_budget, run_cooperatively
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
+from src.scrapers.run_safety import probe_sweep_broken, source_removal_alarm
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
@@ -1039,8 +1040,16 @@ async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None =
         sent = await send_liveness_notice(report) if notify else False
         note = " — нотис отправлен" if sent else ""
         errors = getattr(report, "errors", 0)
-        prefix = "⚠️ " if errors else ""
-        note += (f", проверок {getattr(report, 'checked', 0)}, "
+        checked = getattr(report, "checked", 0)
+        source_errors = getattr(report, "source_errors", 0)
+        # Errored probes are the liveness analogue of INCONCLUSIVE links (see probe_sweep_broken).
+        # A source that failed before its first probe is a sweep that never ran: broken on its own.
+        if checked:
+            broken = probe_sweep_broken(checked=checked, failed=errors - source_errors)
+        else:
+            broken = source_errors > 0
+        prefix = "🚨 " if broken else ("⚠️ " if errors else "")
+        note += (f", проверок {checked}, "
                  f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
             f"{prefix}liveness: снято {len(report.hidden)}, "
@@ -1946,9 +1955,22 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             if settings.nightly_detail_refresh_all:
                 line += (f", выбрано: {rolling.selected} / база: {rolling.inventory_count}, "
                          f"ожидают повторной попытки: {rolling.retry_deferred}")
+            if rolling.deactivated:
+                line += f", деактивировано (404/410): {rolling.deactivated}"
+            already_removed = getattr(rolling, "already_removed", 0)
+            if already_removed:
+                line += f", повторно подтверждено снятых: {already_removed}"
+            # Live attempts only: re-checks of listings already removed would dilute the share.
+            attempted = rolling.refreshed + rolling.errors + rolling.deactivated
+            mass_removal = source_removal_alarm(
+                deactivated=rolling.deactivated, attempted=attempted,
+            )
+            if mass_removal:
+                line += f", массовое снятие: {rolling.deactivated} из {attempted} попыток"
             if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
+                    or mass_removal
                     or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
-                alarm = "🚨 " if getattr(rolling, "source_errors", {}) else "⚠️ "
+                alarm = "🚨 " if getattr(rolling, "source_errors", {}) or mass_removal else "⚠️ "
                 line = (f"{alarm}{line}, ошибок: {rolling.errors}; "
                         f"ошибок источников: {len(getattr(rolling, 'source_errors', {}))}")
             lines.append(line)
@@ -1976,9 +1998,12 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
-            if vl.errors or vl.skipped:
+            # Most probes failing (network down, blocked) is an outage: the sweep cannot confirm
+            # the listings it did not reach, so it alarms instead of warning.
+            broken = probe_sweep_broken(checked=vl.checked, failed=vl.inconclusive)
+            if vl.errors or vl.skipped or broken:
                 # Skipped link checks stay an alarm: unverified links can leave dead listings up.
-                line = ("🚨 " if vl.skipped else "⚠️ ") + line
+                line = ("🚨 " if vl.skipped or broken else "⚠️ ") + line
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: verify-links")
@@ -2696,11 +2721,26 @@ async def _refetch_details(
             f"errors={result.errors} skipped={result.skipped} "
             f"source_errors={len(result.source_errors)} ==="
         )
+        removed = result.deactivated
+        already_removed = getattr(result, "already_removed", 0)
+        # Live attempts only: re-checks of listings already removed would dilute the share.
+        attempted = result.refreshed + result.errors + removed
+        removed_line = f"деактивировано (404/410): {removed}"
+        if already_removed:
+            removed_line += f", повторно подтверждено снятых: {already_removed}"
+        click.echo(removed_line)
         if result.errors:
             click.echo(f"⚠️ Ошибки: {result.errors}")
         if result.skipped:
             click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
-        # Only source-level failures fail the run; item errors and budget skips are warnings.
+        mass_removal = source_removal_alarm(deactivated=removed, attempted=attempted)
+        if mass_removal:
+            click.echo(
+                f"🚨 Массовое снятие: {removed} из {attempted} попыток за прогон — "
+                "проверь схему URL и парсер площадки"
+            )
+        # Source failures fail the public run; item errors and budget skips only warn. A mass
+        # removal only alarms here: owner decision, exit 1 for it applies at night only.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())

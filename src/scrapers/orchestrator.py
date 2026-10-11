@@ -873,12 +873,15 @@ class LinkVerifyStats:
 
     `checked` rows we issued a HEAD for; `deactivated` flipped is_active=False on a definitive
     gone-status (404/410); `errors` inconclusive responses (timeouts, 5xx, anti-bot 403/405,
-    network) that did NOT deactivate; `skipped` rows left unchecked when the deadline ran out.
+    network) that did NOT deactivate; `inconclusive` every INCONCLUSIVE verdict, the input of the
+    outage alarm (run_safety.probe_sweep_broken); `skipped` rows left unchecked when the deadline
+    ran out.
     """
 
     checked: int = 0
     deactivated: int = 0
     errors: int = 0
+    inconclusive: int = 0
     skipped: int = 0
     # X2: public cards auto-hidden because their listing 404/410'd (is_public was True).
     site_listings_hidden: int = 0
@@ -981,6 +984,8 @@ async def verify_active_links(
 
     async def _record_check(row: Any, status: str, *, definitive_alive: bool = False) -> None:
         observed_status[row.id] = status
+        if status == "INCONCLUSIVE":
+            stats.inconclusive += 1
         if dry_run:
             return
         values = dict(
@@ -1152,6 +1157,8 @@ class DetailRefetchStats:
     photos: int = 0
     errors: int = 0
     deactivated: int = 0
+    # Re-checks of listings that were already inactive: attempts, not new takedowns.
+    already_removed: int = 0
     skipped: int = 0
     source_errors: dict[str, str] = field(default_factory=dict)
     reason_counts: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
@@ -1299,15 +1306,25 @@ async def refetch_listing_details(
             # A source takedown is recorded as deactivated below, not as a run error (timer exit).
             stats.errors += int(not removed)
             card_reason(row, "item", reason_code(error))
+            new_takedown = False
             try:
                 async with get_session() as session:
                     if removed:
                         now = datetime.now(UTC)
-                        await session.execute(update(Listing).where(Listing.id == row.id).values(
-                            is_active=False, deactivated_at=now, link_status="DEAD",
-                            link_checked_at=now, link_next_retry_at=None,
-                        ))
-                        stats.deactivated += 1
+                        link_fields = dict(deactivated_at=now, link_status="DEAD",
+                                           link_checked_at=now, link_next_retry_at=None)
+                        # Only an active row flips. Re-checking a listing that is already removed is
+                        # not a new takedown and must not feed the removal alarm.
+                        new_takedown = (await session.execute(
+                            update(Listing)
+                            .where(Listing.id == row.id, Listing.is_active.is_(True))
+                            .values(is_active=False, **link_fields)
+                            .returning(Listing.id)
+                        )).scalar_one_or_none() is not None
+                        if not new_takedown:
+                            await session.execute(
+                                update(Listing).where(Listing.id == row.id).values(**link_fields)
+                            )
                     await record_attempt(session, row.id, evidence, attempted_at=attempted_at)
             except BaseException as persistence_error:
                 add_reason(stats.reason_counts, row.platform, "persistence",
@@ -1315,6 +1332,12 @@ async def refetch_listing_details(
                 if isinstance(error, asyncio.CancelledError):
                     raise error from persistence_error
                 raise
+            if removed:
+                # Counted once the attempt is saved: a rolled-back session counts nothing.
+                if new_takedown:
+                    stats.deactivated += 1
+                else:
+                    stats.already_removed += 1
             if isinstance(error, Exception) and progress is not None:
                 with suppress(Exception):
                     progress(stats, row, error)
@@ -1588,6 +1611,10 @@ class RollingRefreshResult:
     source_errors: dict[str, str] = field(default_factory=dict)
     inventory_count: int = 0
     retry_deferred: int = 0
+    # Listings the source removed (404/410) and this run deactivated; never counted in `errors`.
+    deactivated: int = 0
+    # Re-checks of listings that were already removed: attempts, never counted as takedowns.
+    already_removed: int = 0
 
 
 async def rolling_detail_refresh(
@@ -1629,7 +1656,8 @@ async def rolling_detail_refresh(
     return RollingRefreshResult(
         len(plan.rows), stats.verified, stats.errors, stats.price_changes, stats.skipped,
         stats.source_errors,
-        plan.inventory_count, plan.retry_deferred,
+        plan.inventory_count, plan.retry_deferred, deactivated=stats.deactivated,
+        already_removed=stats.already_removed,
     )
 
 

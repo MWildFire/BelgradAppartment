@@ -21,7 +21,7 @@ from src.db import (
     SourceChannel,
     get_session,
 )
-from src.db.models import ValidationJob
+from src.db.models import PublishedPost, ValidationJob
 from src.matching import review_queue
 from src.matching.clip_embed import pack_embeddings
 
@@ -189,6 +189,24 @@ async def test_reject_refuses_published_and_keeps_existing_rejection(db):
         assert (await s.get(Match, rejected_id)).rejection_reason is None
     with pytest.raises(review_queue.ReviewError):
         await review_queue.reject_match(10**9, "нет такого матча")
+
+
+async def test_reject_refuses_pending_match_that_has_a_published_post(db):
+    _, match_id = await seed_case(match_status=MatchStatus.PENDING)
+    async with get_session() as s:
+        s.add(PublishedPost(match_id=match_id, tg_message_id=1, post_text="пост"))
+    with pytest.raises(review_queue.ReviewError):
+        await review_queue.reject_match(match_id, "проверка")
+    async with get_session() as s:
+        assert (await s.get(Match, match_id)).status == MatchStatus.PENDING
+
+
+async def test_reject_allows_pending_match_while_another_match_is_published(db):
+    _, match_id = await seed_case(match_status=MatchStatus.PENDING)
+    _, other_id = await seed_case(match_status=MatchStatus.PENDING)
+    async with get_session() as s:
+        s.add(PublishedPost(match_id=other_id, tg_message_id=2, post_text="другой пост"))
+    assert await review_queue.reject_match(match_id, "объявление снято") == "rejected"
 
 
 def test_cli_review_close_passes_decision_and_reason(monkeypatch):

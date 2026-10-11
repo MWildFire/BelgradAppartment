@@ -156,6 +156,40 @@ async def test_refetch_404_marks_inactive(factory):
 
 
 @pytest.mark.asyncio
+async def test_refetch_404_on_already_inactive_listing_is_not_a_new_takedown(factory):
+    """A public original the source removed earlier is re-checked by the queue. It stays inactive
+    and counts as already removed, so the re-check never feeds the removal alarm."""
+    async with factory() as s:
+        s.add(
+            Listing(
+                platform=Platform.NEKRETNINE, external_id="468188",
+                url="https://www.nekretnine.rs/oglasi/468188/",
+                photo_urls=[], photo_phashes=[], is_active=False,
+            )
+        )
+        await s.commit()
+        async with factory() as s2:
+            row_id = (await s2.execute(select(Listing))).scalar_one().id
+
+    class _Row:
+        id = row_id
+        platform = Platform.NEKRETNINE
+        url = "https://www.nekretnine.rs/oglasi/468188/"
+
+    stats = await refetch_listing_details(
+        [_Row()],
+        download_photos=False,
+        sleep_between=0.0,
+        scrapers={Platform.NEKRETNINE: _Raising404Scraper},
+    )
+
+    assert (stats.deactivated, stats.already_removed, stats.errors) == (0, 1, 0)
+    async with factory() as s:
+        row = (await s.execute(select(Listing).where(Listing.id == row_id))).scalar_one()
+        assert row.is_active is False
+
+
+@pytest.mark.asyncio
 async def test_heal_urls_dry_run_changes_nothing(factory):
     """Dry-run must report the rewrite count but leave the DB untouched."""
     from src.cli import _heal_urls

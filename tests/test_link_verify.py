@@ -224,6 +224,30 @@ async def test_timeout_does_not_deactivate(factory):
 
 
 @pytest.mark.asyncio
+async def test_network_outage_leaves_every_link_inconclusive(factory):
+    """An outage is not a clean run: every check is INCONCLUSIVE, nothing is deactivated."""
+    from src.scrapers.run_safety import probe_sweep_broken
+
+    lids = [
+        await _seed_listing(
+            factory, url=f"https://nekretnine.rs/outage-{n}/", external_id=f"outage{n}"
+        )
+        for n in range(10)
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network unreachable", request=request)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert (stats.checked, stats.inconclusive, stats.errors) == (10, 10, 10)
+    assert stats.deactivated == 0
+    assert probe_sweep_broken(checked=stats.checked, failed=stats.inconclusive)
+    for lid in lids:
+        assert await _is_active(factory, lid) is True
+
+
+@pytest.mark.asyncio
 async def test_500_does_not_deactivate(factory):
     """A 5xx is a server hiccup, not a definitive gone-status — keep the listing active."""
     lid = await _seed_listing(factory, url="https://nekretnine.rs/oops/")

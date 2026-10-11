@@ -123,3 +123,50 @@ def evaluate_absence(
         next_streak >= max(2, confirmations),
         "confirmed_weekly_absence",
     )
+
+
+# Share of one bounded probe sweep (link or liveness checks) that may fail before the sweep counts
+# as broken rather than noisy: failed probes confirm nothing about the listings they did not reach.
+# Owner decision: 0.5 is a proposal, not a measured baseline.
+PROBE_FAILURE_ALARM_SHARE = 0.5
+
+# Fewer attempts cannot tell a broken sweep from one transient failure, and a 🚨 fails the night.
+# 10 is a Claude default, not a measured value.
+ALARM_MIN_SAMPLE = 10
+
+
+def probe_sweep_broken(*, checked: int, failed: int) -> bool:
+    """True when probes failed wholesale (network down, blocked), not one by one.
+
+    Alarm when every probe failed or the failed share is above PROBE_FAILURE_ALARM_SHARE, and the
+    sweep ran at least ALARM_MIN_SAMPLE probes. Nothing checked with a failure, for example a source
+    that errored before its first probe, counts as broken too.
+    """
+    if failed <= 0:
+        return False
+    if checked <= 0:
+        return True
+    if checked < ALARM_MIN_SAMPLE:
+        return False
+    if failed >= checked:
+        return True
+    return failed / checked > PROBE_FAILURE_ALARM_SHARE
+
+
+# Share of the listings one run attempted that it deactivated as source-removed (404/410). Real
+# churn is a few percent; a changed URL scheme or a broken route turns most attempts into 404s,
+# and that must not pass as a normal run. Owner decision: 0.3 is a proposal, not a measured value.
+REMOVAL_ALARM_SHARE = 0.3
+
+
+def source_removal_alarm(*, deactivated: int, attempted: int) -> bool:
+    """True when the removal share of one run is above REMOVAL_ALARM_SHARE, over at least
+    ALARM_MIN_SAMPLE attempts.
+
+    `attempted` counts the live listings the run tried: refreshed, errored and newly removed.
+    `deactivated` counts only new takedowns, never a re-check of a listing that was inactive.
+    """
+    return (
+        deactivated > 0 and attempted >= ALARM_MIN_SAMPLE
+        and deactivated / attempted > REMOVAL_ALARM_SHARE
+    )
