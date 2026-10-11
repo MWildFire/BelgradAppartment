@@ -114,7 +114,7 @@ async def test_dry_run_skips_every_mutating_maintenance_step(monkeypatch):
         "_dupes_report_nightly_line",
     ):
         monkeypatch.setattr(commands, name, forbidden)
-    evaluated = AsyncMock(return_value=SimpleNamespace(candidates_confirmed=[]))
+    evaluated = AsyncMock(return_value=SimpleNamespace(candidates_confirmed=[], hidden=[]))
     monkeypatch.setattr(liveness, "site_liveness_sweep", evaluated)
     await commands._nightly_refresh(1, 3, False, True, dry_run=True)
     evaluated.assert_awaited_once_with(dry_run=True)
@@ -143,3 +143,26 @@ async def test_context_teardown_failure_keeps_actual_partial_counts(monkeypatch)
     assert results[0].updated == 3
     assert results[0].outcome == 'degraded'
     assert not results[0].sweep_allowed
+
+
+@pytest.mark.parametrize("removal_alarm", [False, True])
+async def test_removal_alarm_of_the_night_reaches_the_liveness_step(
+    monkeypatch, tmp_path, removal_alarm
+):
+    """Q3.21: the liveness step runs warn-only in a night whose steps raised the removal alarm."""
+    import src.jobs.run_history as history
+
+    results = [ScrapeResult(platform=p, previewed=5, fetched=5) for p in commands.SCRAPERS]
+    monkeypatch.setattr(commands, "_run_all", AsyncMock(return_value=results))
+    steps = commands.NightlyStepsResult([], [], [], 0, removal_alarm)
+    monkeypatch.setattr(commands, "_run_nightly_steps", AsyncMock(return_value=steps))
+    monkeypatch.setattr(commands, "_build_price_drop_alerts", AsyncMock(return_value=([], None)))
+    for name in ("_analytics_nightly_line", "_dupes_report_nightly_line"):
+        monkeypatch.setattr(commands, name, AsyncMock(return_value="ok"))
+    liveness_line = AsyncMock(return_value="ok")
+    monkeypatch.setattr(commands, "_liveness_nightly_line", liveness_line)
+    monkeypatch.setattr(history.get_settings(), "data_dir", tmp_path)
+
+    await commands._nightly_refresh(1, 3, True, False, no_notify=True)
+
+    assert liveness_line.await_args.kwargs["auto_hide"] is (not removal_alarm)

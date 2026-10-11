@@ -490,7 +490,9 @@ def _canned_step_stubs(monkeypatch, *, heal_raises: bool = False, deadlines: lis
         calls.append("prune")
         return 7
 
-    async def fake_verify_links(*, limit=None, deadline=None, platform=None, client=None):
+    async def fake_verify_links(
+        *, limit=None, deadline=None, platform=None, client=None, hides_allowed=True,
+    ):
         # Intentionally records nothing: the call-order (`calls`) and shared-deadline
         # (`deadlines`) assertions track only the two refetch-budget steps. This stub exists so
         # A3's liveness sweep never hits the network/DB in these unit tests.
@@ -557,7 +559,7 @@ async def test_run_nightly_steps_assembles_summary_lines(monkeypatch):
     monkeypatch.setattr(settings, "nightly_metrics", True)
     calls = _canned_step_stubs(monkeypatch)
 
-    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden, _alarm = await _run_nightly_steps()
 
     assert calls == ["heal:500", "rolling:200", "metrics", "prune"]
     assert "heal: исправлено 5 / осталось 2" in lines
@@ -589,7 +591,9 @@ async def test_run_nightly_steps_surfaces_site_sync_lines(monkeypatch):
     monkeypatch.setattr(settings, "nightly_auto_publish", True)
     _canned_step_stubs(monkeypatch)
 
-    async def verify_with_hidden(*, limit=None, deadline=None, platform=None, client=None):
+    async def verify_with_hidden(
+        *, limit=None, deadline=None, platform=None, client=None, hides_allowed=True,
+    ):
         return orchestrator.LinkVerifyStats(
             checked=10, deactivated=2, errors=0, site_listings_hidden=2
         )
@@ -600,7 +604,7 @@ async def test_run_nightly_steps_surfaces_site_sync_lines(monkeypatch):
     monkeypatch.setattr(orchestrator, "verify_active_links", verify_with_hidden)
     monkeypatch.setattr(orchestrator, "auto_publish_new_listings", backfill_exposes_three)
 
-    lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
+    lines, _price_changes, _alerts, _hidden, _alarm = await _run_nightly_steps()
 
     assert any("скрыто карточек с сайта: 2" in ln for ln in lines), lines
     assert any("авто-публикация на сайт: 3" in ln for ln in lines), lines
@@ -617,7 +621,7 @@ async def test_run_nightly_steps_failure_adds_alarm_line_not_crash(monkeypatch):
     monkeypatch.setattr(settings, "nightly_metrics", True)
     calls = _canned_step_stubs(monkeypatch, heal_raises=True)
 
-    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden, _alarm = await _run_nightly_steps()
 
     assert "🚨 heal-шаг упал — см. логи" in lines
     # The remaining steps still ran after the failure.
@@ -670,7 +674,7 @@ async def test_run_nightly_steps_reports_budget_skipped(monkeypatch):
     monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
 
-    lines, _price_changes, _alerts, _hidden = await _run_nightly_steps()
+    lines, _price_changes, _alerts, _hidden, _alarm = await _run_nightly_steps()
 
     assert any(line.startswith("⚠️ heal: исправлено 2 / осталось 3, пропущено по бюджету: 3")
                for line in lines)
@@ -692,7 +696,7 @@ async def test_run_nightly_steps_env_zero_skips_everything(monkeypatch):
     monkeypatch.setattr(settings, "nightly_notify_subscriptions", False)  # C2
     calls = _canned_step_stubs(monkeypatch)
 
-    lines, price_changes, alerts, _hidden = await _run_nightly_steps()
+    lines, price_changes, alerts, _hidden, _alarm = await _run_nightly_steps()
 
     assert calls == []
     assert lines == []
@@ -789,3 +793,169 @@ async def test_completed_refresh_with_source_timeout_is_reported_degraded(monkey
     monkeypatch.setattr(orchestrator, 'rolling_detail_refresh', deadline_after_commit)
     result = await _run_nightly_steps(notify=False)
     assert any(line.startswith('🚨') and 'обновлено: 2' in line for line in result.summary_lines)
+
+
+@pytest.mark.asyncio
+async def test_run_nightly_steps_reports_withheld_hides_as_alarm(monkeypatch):
+    """Q3.21: a verify run whose removal alarm withheld hides says so in the night's lines."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", True)
+    monkeypatch.setattr(settings, "nightly_auto_publish", False)
+    _canned_step_stubs(monkeypatch)
+
+    async def verify_alarmed(
+        *, limit=None, deadline=None, platform=None, client=None, hides_allowed=True,
+    ):
+        return orchestrator.LinkVerifyStats(
+            checked=10, deactivated=6, hides_withheld=6, removal_alarm=True,
+        )
+
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_alarmed)
+
+    lines, _price_changes, _alerts, hidden, alarm = await _run_nightly_steps()
+
+    assert hidden == 0 and alarm is True
+    assert any("автоскрытие пропущено: 6" in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_public_run_alarm_withholds_the_nights_hides(monkeypatch, tmp_path):
+    """Q3.21: an alarmed public detail run within 26 h withholds the night's verify hides."""
+    from datetime import UTC, datetime
+
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import orchestrator
+    from src.scrapers.run_safety import record_public_run_alarm
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    record_public_run_alarm(
+        tmp_path / "state" / "public_run_alarm.json",
+        deactivated=6, attempted=10, now=datetime.now(UTC),
+    )
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", True)
+    monkeypatch.setattr(settings, "nightly_auto_publish", False)
+    _canned_step_stubs(monkeypatch)
+    seen = {}
+
+    async def verify_spy(*, limit=None, deadline=None, platform=None, client=None, hides_allowed=True):
+        seen["hides_allowed"] = hides_allowed
+        return orchestrator.LinkVerifyStats(checked=10, deactivated=0)
+
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_spy)
+    result = await _run_nightly_steps()
+
+    assert seen["hides_allowed"] is False
+    assert result.removal_alarm is True
+
+
+@pytest.mark.asyncio
+async def test_rolling_removal_alarm_withholds_the_verify_hides(monkeypatch, tmp_path):
+    """Q3.21: the rolling refresh's mass-removal alarm reaches the verify-links hide pass."""
+    from types import SimpleNamespace
+
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import orchestrator
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 200)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", True)
+    monkeypatch.setattr(settings, "nightly_auto_publish", False)
+    _canned_step_stubs(monkeypatch)
+
+    async def rolling_alarmed(**_kwargs):
+        return SimpleNamespace(
+            price_changes=[], refreshed=4, errors=0, skipped=0, selected=10,
+            inventory_count=10, deactivated=6, retry_deferred=0, source_errors={},
+            already_removed=0,
+        )
+
+    seen = {}
+
+    async def verify_spy(*, limit=None, deadline=None, platform=None, client=None, hides_allowed=True):
+        seen["hides_allowed"] = hides_allowed
+        return orchestrator.LinkVerifyStats(checked=10, deactivated=0)
+
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", rolling_alarmed)
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_spy)
+    result = await _run_nightly_steps()
+
+    assert seen["hides_allowed"] is False
+    assert result.removal_alarm is True
+
+
+@pytest.mark.asyncio
+async def test_verify_crash_withholds_the_nights_hides(monkeypatch, tmp_path):
+    """A verify-links crash leaves its removals unjudged: the night hides nothing (Q3.21)."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import orchestrator
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", True)
+    monkeypatch.setattr(settings, "nightly_auto_publish", False)
+    _canned_step_stubs(monkeypatch)
+
+    async def verify_crashes(**_kwargs):
+        raise RuntimeError("verify exploded")
+
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_crashes)
+    result = await _run_nightly_steps()
+
+    assert result.removal_alarm is True
+    assert any("verify-links шаг упал" in line for line in result.summary_lines)
+
+
+@pytest.mark.asyncio
+async def test_rolling_crash_withholds_the_verify_hides(monkeypatch, tmp_path):
+    """A detail-refresh crash leaves the night's removal state unknown: verify hides nothing."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import orchestrator
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 200)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", True)
+    monkeypatch.setattr(settings, "nightly_auto_publish", False)
+    _canned_step_stubs(monkeypatch)
+    seen = {}
+
+    async def rolling_crashes(**_kwargs):
+        raise RuntimeError("rolling exploded")
+
+    async def verify_spy(*, limit=None, deadline=None, platform=None, client=None, hides_allowed=True):
+        seen["hides_allowed"] = hides_allowed
+        return orchestrator.LinkVerifyStats(checked=10, deactivated=0)
+
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", rolling_crashes)
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_spy)
+    result = await _run_nightly_steps()
+
+    assert seen["hides_allowed"] is False
+    assert result.removal_alarm is True
