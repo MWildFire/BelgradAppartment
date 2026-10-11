@@ -168,8 +168,9 @@ async def _load_rows(
         .join(Listing, Listing.id == Match.listing_id)
         .join(InboundPost, InboundPost.id == Match.inbound_post_id, isouter=True)
         .join(PublishedPost, PublishedPost.match_id == Match.id, isouter=True)
-        # A rejection is terminal: a rejected match is never public, on the site or to subscribers.
-        .where(SiteListing.is_public.is_(True), Match.status != MatchStatus.REJECTED)
+        # Only a PUBLISHED match is public, on the site or to subscribers. An overlay row on
+        # a PENDING match (created before this rule) or on a rejected one stays hidden.
+        .where(SiteListing.is_public.is_(True), Match.status == MatchStatus.PUBLISHED)
     )
     rows: list[_Row] = []
     async with sitedb.read_session(database_url=database_url) as s:

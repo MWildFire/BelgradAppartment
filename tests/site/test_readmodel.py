@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import create_async_engine
 
+from src.db.models import Match, MatchStatus
 from src.site import readmodel as rm
 from src.site.readmodel import Facets, Filters, SiteListingView
 
@@ -272,3 +275,21 @@ async def test_catalog_selects_one_public_representative(tmp_path) -> None:
     # The public secondary keeps its direct URL, with its own overlay fields.
     secondary = await rm.get_public(2, database_url=url)
     assert secondary is not None and secondary.id == 2
+
+
+@pytest.mark.asyncio
+async def test_overlay_on_unpublished_match_is_never_public(site_db: str) -> None:
+    # Site listing 1 is public and sits on match 1. Once that match is not PUBLISHED, its overlay
+    # must leave the catalog, the apartment page, the sitemap and the subscriber candidates.
+    engine = create_async_engine(site_db, future=True)
+    async with engine.begin() as conn:
+        await conn.execute(update(Match).where(Match.id == 1).values(status=MatchStatus.PENDING))
+    await engine.dispose()
+
+    items, _total = await _list(site_db, show_rented=True)
+    assert 1 not in {v.id for v in items}
+    assert await rm.get_public(1, database_url=site_db) is None
+    assert await rm.apartment_summary(1, database_url=site_db) is None
+    assert 1 not in await rm.public_ids(database_url=site_db)
+    assert 1 not in {c.view.id for c in await rm.public_candidates(database_url=site_db)}
+    assert 2 in await rm.public_ids(database_url=site_db)  # control: a PUBLISHED match stays public

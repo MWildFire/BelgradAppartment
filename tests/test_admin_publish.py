@@ -561,12 +561,40 @@ async def test_gone_view_shows_liveness_badges(client, db):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [MatchStatus.PENDING, MatchStatus.REJECTED])
-async def test_public_overlay_is_refused_before_publication(client, db, status):
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        (MatchStatus.PENDING, "только для опубликованного матча"),
+        (MatchStatus.REJECTED, "матч отклонён"),
+    ],
+)
+async def test_public_overlay_is_refused_before_publication(client, db, status, message):
     match_id = await _seed_match(db, status=status)
     r = client.post(f"/match/{match_id}/site/toggle-public", headers={**AUTH, **CSRF})
     assert r.status_code == 200
-    assert "только для опубликованного матча" in r.text
+    assert message in r.text
+    assert await _site_listing_count(db) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "status", "message"),
+    [
+        (path, status, message)
+        for path in ["toggle-vnj", "toggle-white-card", "toggle-featured", "toggle-keep", "meta"]
+        for status, message in [
+            (MatchStatus.PENDING, "только для опубликованного матча"),
+            (MatchStatus.REJECTED, "матч отклонён"),
+        ]
+    ],
+)
+async def test_site_flags_are_refused_without_overlay_unless_published(
+    client, db, path, status, message,
+):
+    match_id = await _seed_match(db, status=status)
+    r = client.post(f"/match/{match_id}/site/{path}", headers={**AUTH, **CSRF})
+    assert r.status_code == 200
+    assert message in r.text
     assert await _site_listing_count(db) == 0
 
 
