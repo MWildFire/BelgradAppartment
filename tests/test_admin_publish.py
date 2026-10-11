@@ -226,7 +226,7 @@ def test_site_routes_without_csrf_are_403(client, db, route):
 
 @pytest.mark.asyncio
 async def test_toggle_public_creates_then_flips(client, db):
-    match_id = await _seed_match(db)
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)
     # absent → create with is_public True
     r = client.post(f"/match/{match_id}/site/toggle-public", headers={**AUTH, **CSRF})
     assert r.status_code == 200
@@ -241,7 +241,7 @@ async def test_toggle_public_creates_then_flips(client, db):
 
 @pytest.mark.asyncio
 async def test_toggle_vnj_creates_and_flips(client, db):
-    match_id = await _seed_match(db)
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)
     client.post(f"/match/{match_id}/site/toggle-vnj", headers={**AUTH, **CSRF})
     sl = await _site_listing(db, match_id)
     assert sl is not None and sl.is_for_vnj is True
@@ -251,7 +251,7 @@ async def test_toggle_vnj_creates_and_flips(client, db):
 
 @pytest.mark.asyncio
 async def test_toggle_white_card_creates_and_flips(client, db):
-    match_id = await _seed_match(db)
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)
     client.post(f"/match/{match_id}/site/toggle-white-card", headers={**AUTH, **CSRF})
     sl = await _site_listing(db, match_id)
     assert sl is not None and sl.is_for_white_card is True
@@ -261,7 +261,7 @@ async def test_toggle_white_card_creates_and_flips(client, db):
 
 @pytest.mark.asyncio
 async def test_toggle_featured_creates_then_flips(client, db):
-    match_id = await _seed_match(db)
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)
     # absent → create with is_featured True (idempotent upsert)
     r = client.post(f"/match/{match_id}/site/toggle-featured", headers={**AUTH, **CSRF})
     assert r.status_code == 200
@@ -277,7 +277,7 @@ async def test_toggle_featured_creates_then_flips(client, db):
 @pytest.mark.asyncio
 async def test_toggle_featured_creating_row_keeps_other_defaults(client, db):
     """Toggling featured on a fresh match sets only is_featured; is_public default True, flags False."""
-    match_id = await _seed_match(db, raw_text="под ВНЖ и бели картон")
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED, raw_text="под ВНЖ и бели картон")
     client.post(f"/match/{match_id}/site/toggle-featured", headers={**AUTH, **CSRF})
     sl = await _site_listing(db, match_id)
     assert sl.is_featured is True
@@ -305,7 +305,7 @@ async def test_toggle_featured_preserves_existing_flags(client, db):
 @pytest.mark.asyncio
 async def test_toggle_creating_row_does_not_default_other_flags(client, db):
     """Toggling vnj on a fresh match creates a row with only that flag set; is_public default True."""
-    match_id = await _seed_match(db, raw_text="под ВНЖ и бели картон")
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED, raw_text="под ВНЖ и бели картон")
     client.post(f"/match/{match_id}/site/toggle-vnj", headers={**AUTH, **CSRF})
     sl = await _site_listing(db, match_id)
     assert sl.is_for_vnj is True
@@ -316,7 +316,7 @@ async def test_toggle_creating_row_does_not_default_other_flags(client, db):
 
 @pytest.mark.asyncio
 async def test_meta_sets_channel_url_and_note(client, db):
-    match_id = await _seed_match(db)
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)
     r = client.post(
         f"/match/{match_id}/site/meta",
         headers={**AUTH, **CSRF},
@@ -473,7 +473,7 @@ async def _seed_public_card(
 @pytest.mark.asyncio
 async def test_toggle_keep_creates_then_flips(client, db):
     """T3-5: the pin toggle upserts + flips keep_on_site."""
-    match_id = await _seed_match(db)
+    match_id = await _seed_match(db, status=MatchStatus.PUBLISHED)
     r = client.post(f"/match/{match_id}/site/toggle-keep", headers={**AUTH, **CSRF})
     assert r.status_code == 200
     assert (await _site_listing(db, match_id)).keep_on_site is True
@@ -555,3 +555,45 @@ async def test_gone_view_shows_liveness_badges(client, db):
     html = client.get("/published?window=gone", headers=AUTH).text
     assert "жива на NEKRETNINE" in html
     assert "мёртво везде" in html
+
+
+# --------------------------------------------------------------------------- site overlay: PUBLISHED only
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [MatchStatus.PENDING, MatchStatus.REJECTED])
+async def test_public_overlay_is_refused_before_publication(client, db, status):
+    match_id = await _seed_match(db, status=status)
+    r = client.post(f"/match/{match_id}/site/toggle-public", headers={**AUTH, **CSRF})
+    assert r.status_code == 200
+    assert "только для опубликованного матча" in r.text
+    assert await _site_listing_count(db) == 0
+
+
+@pytest.mark.asyncio
+async def test_hidden_overlay_cannot_be_turned_public_before_publication(client, db):
+    match_id = await _seed_match(db)
+    async with db() as s:
+        s.add(SiteListing(match_id=match_id, is_public=False))
+        await s.commit()
+    r = client.post(f"/match/{match_id}/site/toggle-public", headers={**AUTH, **CSRF})
+    assert "только для опубликованного матча" in r.text
+    assert (await _site_listing(db, match_id)).is_public is False
+
+
+@pytest.mark.asyncio
+async def test_public_overlay_can_be_hidden_before_publication(client, db):
+    match_id = await _seed_match(db)
+    async with db() as s:
+        s.add(SiteListing(match_id=match_id, is_public=True))
+        await s.commit()
+    client.post(f"/match/{match_id}/site/toggle-public", headers={**AUTH, **CSRF})
+    assert (await _site_listing(db, match_id)).is_public is False
+
+
+@pytest.mark.asyncio
+async def test_flag_toggle_does_not_create_a_public_overlay_before_publication(client, db):
+    match_id = await _seed_match(db)
+    r = client.post(f"/match/{match_id}/site/toggle-vnj", headers={**AUTH, **CSRF})
+    assert "только для опубликованного матча" in r.text
+    assert await _site_listing_count(db) == 0

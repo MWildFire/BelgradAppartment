@@ -25,7 +25,11 @@ from src.admin.analytics import (
 from src.admin.auth import require_admin
 from src.admin.csrf import CSRF_TOKEN, require_csrf
 from src.admin.leads_report import build_leads_report
-from src.admin.publish import auto_publish_site_listing, get_or_create_site_listing
+from src.admin.publish import (
+    auto_publish_site_listing,
+    get_or_create_site_listing,
+    get_site_listing,
+)
 from src.db import (
     InboundPost,
     Listing,
@@ -331,9 +335,19 @@ async def mark_posted_action(
 # that default only applies at mark-posted; a manual toggle is an explicit choice).
 
 
-def _site_controls(request: Request, match_id: int, site: SiteListing) -> HTMLResponse:
+SITE_PUBLISHED_ONLY = "На сайт — только для опубликованного матча. Сначала опубликуйте его."  # noqa: RUF001
+
+
+def _may_expose(match: Match, site: SiteListing | None) -> bool:
+    """A new overlay row defaults to public, so only a PUBLISHED match may get one."""
+    return site is not None or match.status == MatchStatus.PUBLISHED
+
+
+def _site_controls(
+    request: Request, match_id: int, site: SiteListing | None, *, error: str | None = None
+) -> HTMLResponse:
     return templates.TemplateResponse(
-        request, "_site_controls.html", {"match_id": match_id, "site": site}
+        request, "_site_controls.html", {"match_id": match_id, "site": site, "error": error}
     )
 
 
@@ -352,9 +366,13 @@ async def site_toggle_public(
     __: None = Depends(require_csrf),
 ) -> HTMLResponse:
     async with get_session() as s:
-        await _require_match(s, match_id)
+        match = await _require_match(s, match_id)
+        existing = await get_site_listing(s, match_id)
+        # Only a PUBLISHED match may become public: an absent row is created exposed
+        # (is_public default True, decision #3), and a hidden row is flipped on.
+        if (existing is None or not existing.is_public) and match.status != MatchStatus.PUBLISHED:
+            return _site_controls(request, match_id, existing, error=SITE_PUBLISHED_ONLY)
         site, created = await get_or_create_site_listing(s, match_id)
-        # Absent → create exposed (is_public default True, decision #3); present → flip.
         if not created:
             site.is_public = not site.is_public
     # session commits on block exit; expire_on_commit=False keeps `site` readable here.
@@ -375,7 +393,9 @@ async def site_toggle_vnj(
     __: None = Depends(require_csrf),
 ) -> HTMLResponse:
     async with get_session() as s:
-        await _require_match(s, match_id)
+        match = await _require_match(s, match_id)
+        if not _may_expose(match, await get_site_listing(s, match_id)):
+            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
         site, _created = await get_or_create_site_listing(s, match_id)
         site.is_for_vnj = not site.is_for_vnj
     return _site_controls(request, match_id, site)
@@ -389,7 +409,9 @@ async def site_toggle_white_card(
     __: None = Depends(require_csrf),
 ) -> HTMLResponse:
     async with get_session() as s:
-        await _require_match(s, match_id)
+        match = await _require_match(s, match_id)
+        if not _may_expose(match, await get_site_listing(s, match_id)):
+            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
         site, _created = await get_or_create_site_listing(s, match_id)
         site.is_for_white_card = not site.is_for_white_card
     return _site_controls(request, match_id, site)
@@ -408,7 +430,9 @@ async def site_toggle_featured(
     deterministic), then sets this one. Turning off just clears this one. Upsert; creating via
     this toggle never runs the text-parse and leaves other fields at their DB defaults."""
     async with get_session() as s:
-        await _require_match(s, match_id)
+        match = await _require_match(s, match_id)
+        if not _may_expose(match, await get_site_listing(s, match_id)):
+            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
         site, _created = await get_or_create_site_listing(s, match_id)
         if site.is_featured:
             site.is_featured = False
@@ -433,7 +457,9 @@ async def site_toggle_keep(
     """D4 pin: keep_on_site — the liveness sweep never auto-hides a pinned card, even when the
     apartment is confirmed gone from every platform. A deliberate «keep this one up» override."""
     async with get_session() as s:
-        await _require_match(s, match_id)
+        match = await _require_match(s, match_id)
+        if not _may_expose(match, await get_site_listing(s, match_id)):
+            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
         site, _created = await get_or_create_site_listing(s, match_id)
         site.keep_on_site = not site.keep_on_site
     return _site_controls(request, match_id, site)
@@ -479,7 +505,9 @@ async def site_meta(
     __: None = Depends(require_csrf),
 ) -> HTMLResponse:
     async with get_session() as s:
-        await _require_match(s, match_id)
+        match = await _require_match(s, match_id)
+        if not _may_expose(match, await get_site_listing(s, match_id)):
+            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
         site, _created = await get_or_create_site_listing(s, match_id)
         # Empty string clears the override; flags/is_public are left untouched.
         site.channel_post_url = channel_post_url.strip() or None
