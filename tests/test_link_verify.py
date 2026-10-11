@@ -881,3 +881,16 @@ async def test_verify_records_its_outcome_for_the_removal_guard(factory, tmp_pat
     record = json.loads((tmp_path / "removal_guard" / "verify.json").read_text(encoding="utf-8"))
     assert stats.deactivated == 1
     assert record["status"] == "clean" and record["deactivated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_verify_run_records_clean_not_running(factory, tmp_path):
+    import json
+
+    stats = await verify_active_links(
+        client=_client(lambda request: httpx.Response(404)), guard_dir=tmp_path,
+    )
+
+    record = json.loads((tmp_path / "removal_guard" / "verify.json").read_text(encoding="utf-8"))
+    assert stats.checked == 0
+    assert record["status"] == "clean"

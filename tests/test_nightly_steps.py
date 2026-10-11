@@ -886,14 +886,16 @@ async def test_rolling_alarm_reaches_the_verify_hides(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_clean_nights_release_the_hides(monkeypatch, tmp_path):
     """Every enabled step clean: the verify pass may hide and the night is not withheld."""
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
     from types import SimpleNamespace
 
     from src.cli import _run_nightly_steps
     from src.scrapers import orchestrator, removal_guard
 
     _nightly_settings(monkeypatch, detail_refresh=200)
-    removal_guard.write_step(tmp_path / "state", "public", status="clean", now=datetime.now(UTC))
+    yesterday = datetime.now(UTC) - timedelta(hours=20)
+    removal_guard.write_step(tmp_path / "state", "public", status="clean", now=yesterday)
+    removal_guard.write_step(tmp_path / "state", "verify", status="clean", now=yesterday)
     _canned_step_stubs(monkeypatch)
 
     async def rolling_quiet(**_kwargs):
@@ -987,3 +989,33 @@ def _isolated_state(monkeypatch, tmp_path):
     from src.config import get_settings
 
     monkeypatch.setattr(get_settings(), "data_dir", tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_previous_night_verify_alarm_closes_the_next_verify_pass(monkeypatch, tmp_path):
+    """Q3.21: a verify alarm from last night still holds tonight's verify hide pass."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.cli import _run_nightly_steps
+    from src.scrapers import orchestrator, removal_guard
+
+    _nightly_settings(monkeypatch, detail_refresh=0)
+    state = tmp_path / "state"
+    now = datetime.now(UTC)
+    removal_guard.write_step(state, "public", status="clean", now=now)
+    removal_guard.write_step(
+        state, "verify", status="alarm", now=now - timedelta(hours=12),
+        deactivated=6, attempted=10,
+    )
+    _canned_step_stubs(monkeypatch)
+    seen = {}
+
+    async def verify_spy(*, limit=None, deadline=None, platform=None, client=None,
+                         hides_allowed=True, guard_dir=None):
+        seen["hides_allowed"] = hides_allowed
+        return orchestrator.LinkVerifyStats(checked=10, deactivated=0)
+
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_spy)
+    await _run_nightly_steps()
+
+    assert seen["hides_allowed"] is False

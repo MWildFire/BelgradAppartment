@@ -75,3 +75,24 @@ def test_a_failed_failure_record_is_logged_not_raised(tmp_path, monkeypatch):
 
     monkeypatch.setattr(guard, "write_step", broken)
     guard.record_failure(tmp_path, "public", now=NOW)
+
+
+def test_a_future_alarm_still_holds_against_a_clean_write(tmp_path):
+    _write(tmp_path, "public", guard.ALARM, at=NOW + timedelta(hours=1))
+    guard.write_step(tmp_path, "public", status=guard.CLEAN, now=NOW)
+    assert guard.withholds_hides(tmp_path, now=NOW, steps=("public",)) is True
+
+
+def test_an_unreadable_record_holds_for_the_window_then_releases(tmp_path):
+    import os
+
+    path = tmp_path / "removal_guard" / "public.json"
+    path.parent.mkdir(parents=True)
+    path.write_text("{not json", encoding="utf-8")
+    recent = (NOW - timedelta(hours=1)).timestamp()
+    os.utime(path, (recent, recent))
+    guard.write_step(tmp_path, "public", status=guard.CLEAN, now=NOW)
+    assert path.read_text(encoding="utf-8") == "{not json"
+    later = NOW + timedelta(hours=guard.GUARD_HOURS)
+    guard.write_step(tmp_path, "public", status=guard.CLEAN, now=later)
+    assert guard.withholds_hides(tmp_path, now=later, steps=("public",)) is False

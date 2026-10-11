@@ -20,7 +20,8 @@ RUNNING = "running"
 CLEAN = "clean"
 ALARM = "alarm"
 FAILED = "failed"
-_HOLDING = (ALARM, FAILED)
+UNREADABLE = "unreadable"
+_HOLDING = (ALARM, FAILED, UNREADABLE)
 
 log = logging.getLogger(__name__)
 
@@ -30,12 +31,18 @@ def _path(state_dir: Path, step: str) -> Path:
 
 
 def _load(path: Path) -> tuple[str, datetime] | None:
-    """The status and time of a record, or None when it is missing or unreadable."""
+    """The status and time of a record. Missing gives None; unreadable gives UNREADABLE with the
+    file's modification time, so it holds like an alarm inside the window."""
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
         at = datetime.fromisoformat(record["at"])
-    except (OSError, ValueError, KeyError, TypeError):
+    except FileNotFoundError:
         return None
+    except (OSError, ValueError, KeyError, TypeError):
+        try:
+            return UNREADABLE, datetime.fromtimestamp(path.stat().st_mtime, UTC)
+        except OSError:
+            return None
     if at.tzinfo is None:
         at = at.replace(tzinfo=UTC)
     return str(record["status"]), at
@@ -46,6 +53,11 @@ def _within(at: datetime, now: datetime) -> bool:
     return timedelta(0) <= now - at < timedelta(hours=GUARD_HOURS)
 
 
+def _holds(at: datetime, now: datetime) -> bool:
+    """True when an outcome written at `at` still holds. No lower bound: a future time holds too."""
+    return now - at < timedelta(hours=GUARD_HOURS)
+
+
 def write_step(
     state_dir: Path, step: str, *, status: str, now: datetime,
     deactivated: int = 0, attempted: int = 0,
@@ -54,7 +66,7 @@ def write_step(
     path = _path(state_dir, step)
     if status in (RUNNING, CLEAN):
         held = _load(path)
-        if held and held[0] in _HOLDING and _within(held[1], now):
+        if held and held[0] in _HOLDING and _holds(held[1], now):
             return
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

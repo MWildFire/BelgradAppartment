@@ -19,9 +19,8 @@ from src.jobs.lifecycle import remaining_budget, run_budget, run_cooperatively
 
 # Shared with the decisions-log writer (`_record_decision`) — one ts format, defined at the source.
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
-from src.scrapers import SCRAPERS
+from src.scrapers import SCRAPERS, removal_guard
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
-from src.scrapers import removal_guard
 from src.scrapers.run_safety import probe_sweep_broken, source_removal_alarm
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
 
@@ -2023,7 +2022,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                 limit=settings.nightly_verify_links_limit, deadline=deadlines["links"],
                 hides_allowed=not removal_guard.withholds_hides(
                     state_dir, now=datetime.now(UTC),
-                    steps=_guard_steps(settings, include_verify=False),
+                    steps=_guard_steps(settings, include_verify=True),
                 ),
                 guard_dir=state_dir,
             )

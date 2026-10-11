@@ -986,6 +986,11 @@ async def verify_active_links(
 
     stats = LinkVerifyStats()
     if not rows:
+        if guard_dir is not None and not dry_run:
+            # Nothing to judge is still a clean outcome: a RUNNING record would close the guard.
+            removal_guard.write_step(
+                guard_dir, "verify", status=removal_guard.CLEAN, now=datetime.now(UTC),
+            )
         logger.info("[verify-links] no active matched listings to check (platform=%s)",
                     platform.value if platform else "all")
         return stats
