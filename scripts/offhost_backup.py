@@ -36,6 +36,11 @@ else:
 
 
 _LEASE = ContextVar("offhost_source_lease", default=None)
+# Markers of this driver's generations. The sanitized and data-only drivers write other markers.
+PLAIN_BACKUP_FORMAT = "directory_generation"
+# The sanitized receiver's namespace is .../data-only/sanitized-v1. Refused by name as well, because
+# a namespace without its scope.json marker would otherwise be accepted.
+SANITIZED_NAMESPACE_NAME = "sanitized-v1"
 
 
 @contextmanager
@@ -149,6 +154,9 @@ def ssh(args):
         "/usr/bin/ssh",
         "-i",
         str(args.ssh_key),
+        # Only the explicit key: no identity offered by an agent or by the user's configuration.
+        "-o",
+        "IdentitiesOnly=yes",
         "-o",
         "BatchMode=yes",
         "-o",
@@ -161,10 +169,24 @@ def ssh(args):
     ]
 
 
+# The interpreter the source may run under sudo: the path documented for the source host.
+REMOTE_PYTHON_ALLOWLIST = frozenset({"/opt/otz/.venv/bin/python"})
+
+
+def check_remote_python(args):
+    """Under sudo, only the documented source interpreter runs; any other path is refused."""
+    if getattr(args, "remote_user", None):
+        recovery.require(
+            getattr(args, "remote_python", None) in REMOTE_PYTHON_ALLOWLIST,
+            "unsupported_remote_python",
+        )
+
+
 def prefix(args):
     user = getattr(args, "remote_user", None)
     if user:
         recovery.require(re.fullmatch(r"[a-z_][a-z0-9_-]*", user), "invalid service user")
+        check_remote_python(args)
         return ["sudo", "-n", "-u", user, "--"]
     return []
 
@@ -213,10 +235,27 @@ def remote_lease(args):
 
 
 def atomic_json(path, value):
+    """Replace path with JSON: flush the temporary file, rename it, then flush the directory.
+
+    A power loss keeps the old file or the new one, never a torn one. This is a plain fsync: the
+    source host has no F_FULLFSYNC, and receiver copies are checked by digest before use.
+    """
     temporary = path.with_suffix(f".{uuid4().hex}.tmp")
-    temporary.write_text(json.dumps(value, sort_keys=True))
-    temporary.chmod(0o600)
-    temporary.replace(path)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(json.dumps(value, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    os.replace(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def completed(root):
@@ -233,6 +272,11 @@ def completed(root):
             if (
                 path.is_dir()
                 and not path.is_symlink()
+                # Only this driver's generations. Sanitized and data-only generations also carry
+                # data_restore_verified; without these markers rotation would delete them.
+                and receipt.get("backup_format") == PLAIN_BACKUP_FORMAT
+                and manifest.get("format") == recovery.FORMAT
+                and "scope" not in manifest
                 and receipt.get("result") == "data_restore_verified"
                 and receipt.get("generation_manifest_sha256") == recovery.digest(manifest_path)
                 and stamp.tzinfo is not None
@@ -491,6 +535,10 @@ def backup(args):
 def _backup(args):
     prepared_stage, prepared_checksum = prepared_snapshot_options(args)
     root = args.private_root.resolve()
+    # A scope marker is written by the sanitized or data-only driver. Refuse before creating
+    # anything, so this driver's rotation can never delete generations of another driver.
+    recovery.require(not (root / "scope.json").exists(), "foreign_namespace_marker")
+    recovery.require(root.name != SANITIZED_NAMESPACE_NAME, "foreign_namespace_name")
     if getattr(args, "application_project_root", None) is not None:
         recovery.ROOT = args.application_project_root.resolve()
     recovery.private_dir(root)

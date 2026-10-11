@@ -95,6 +95,8 @@ def environment(source, tmp_path, monkeypatch):
     seed_dir, _receipt = seed(source, tmp_path)
     key = tmp_path / "fake-key"
     key.write_text("fixture only; SSH never invoked")
+    # The fake rsync runs commands through this interpreter locally; the allowlist covers it here.
+    monkeypatch.setattr(job, "REMOTE_PYTHON_ALLOWLIST", frozenset({sys.executable}))
     args = argparse.Namespace(
         private_root=tmp_path / "offhost",
         seed_dir=seed_dir,
@@ -539,10 +541,11 @@ def test_completed_ignores_future_and_mismatched_receipt_dates_without_deleting(
         generation = root / "generations" / name
         generation.mkdir()
         manifest = generation / "manifest.json"
-        manifest.write_text(json.dumps({"created_at": recorded.isoformat()}))
+        manifest.write_text(json.dumps({"created_at": recorded.isoformat(), "format": recovery.FORMAT}))
         (root / "receipts" / f"{name}.json").write_text(
             json.dumps(
                 {
+                    "backup_format": "directory_generation",
                     "result": "data_restore_verified",
                     "created_at": claimed.isoformat(),
                     "generation_manifest_sha256": recovery.digest(manifest),
@@ -636,3 +639,145 @@ def test_cleanup_failure_cannot_publish_receipt_after_failed_acceptance(
     assert not job.completed(args.private_root)
     if failed_step == "receipt":
         assert len(attempts) == 1
+
+
+def test_atomic_json_flushes_the_file_before_the_rename_and_the_directory_after(
+    tmp_path, monkeypatch
+):
+    import os
+    import stat
+
+    events = []
+    real_fsync, real_replace = os.fsync, os.replace
+
+    def fsync(descriptor):
+        kind = "directory" if stat.S_ISDIR(os.fstat(descriptor).st_mode) else "file"
+        events.append(("fsync", kind))
+        real_fsync(descriptor)
+
+    def replace(source, target):
+        events.append(("rename", Path(target).name))
+        real_replace(source, target)
+
+    monkeypatch.setattr(os, "fsync", fsync)
+    monkeypatch.setattr(os, "replace", replace)
+    target = tmp_path / "progress.json"
+    job.atomic_json(target, {"phase": "copy"})
+    assert events == [("fsync", "file"), ("rename", "progress.json"), ("fsync", "directory")]
+    assert json.loads(target.read_text()) == {"phase": "copy"}
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def write_generation(root, name, *, backup_format, manifest, result="data_restore_verified"):
+    generation = root / "generations" / name
+    generation.mkdir(parents=True, exist_ok=True)
+    (generation / "manifest.json").write_text(json.dumps(manifest))
+    receipts = root / "receipts"
+    receipts.mkdir(parents=True, exist_ok=True)
+    receipt = {
+        "backup_format": backup_format,
+        "created_at": manifest["created_at"],
+        "generation_manifest_sha256": recovery.digest(generation / "manifest.json"),
+        "result": result,
+    }
+    (receipts / f"{name}.json").write_text(json.dumps(receipt))
+
+
+def test_completed_counts_only_this_drivers_generations_so_rotation_cannot_reach_others(tmp_path):
+    root = tmp_path / "root"
+    created = "2026-10-05T09:00:00+00:00"
+    write_generation(
+        root,
+        "20261005-090000-aaaaaaaa",
+        backup_format="directory_generation",
+        manifest={"format": recovery.FORMAT, "created_at": created},
+    )
+    write_generation(
+        root,
+        "20261005-100000-bbbbbbbb",
+        backup_format="sanitized_directory_generation",
+        manifest={
+            "format": "renfinder-db-media-sanitized-v1",
+            "scope": "db_media_sanitized",
+            "created_at": created,
+        },
+    )
+    write_generation(
+        root,
+        "20261005-110000-cccccccc",
+        backup_format="data_only_directory_generation",
+        manifest={"format": "renfinder-db-media-v1", "scope": "db_media", "created_at": created},
+    )
+    # Each marker alone is enough to exclude a generation.
+    write_generation(
+        root,
+        "20261005-120000-dddddddd",
+        backup_format="sanitized_directory_generation",
+        manifest={"format": recovery.FORMAT, "created_at": created},
+    )
+    write_generation(
+        root,
+        "20261005-130000-eeeeeeee",
+        backup_format="directory_generation",
+        manifest={"format": "renfinder-db-media-v1", "created_at": created},
+    )
+    write_generation(
+        root,
+        "20261005-140000-ffffffff",
+        backup_format="directory_generation",
+        manifest={"format": recovery.FORMAT, "scope": "db_media", "created_at": created},
+    )
+    assert [entry[1].name for entry in job.completed(root)] == ["20261005-090000-aaaaaaaa"]
+
+
+def test_plain_driver_refuses_a_namespace_another_driver_owns_before_touching_it(tmp_path):
+    root = tmp_path / "sanitized-v1"
+    root.mkdir(mode=0o700)
+    (root / "scope.json").write_text(
+        json.dumps({"format": "renfinder-db-media-sanitized-v1", "scope": "db_media_sanitized"})
+    )
+    write_generation(
+        root,
+        "20261005-090000-aaaaaaaa",
+        backup_format="sanitized_directory_generation",
+        manifest={
+            "format": "renfinder-db-media-sanitized-v1",
+            "scope": "db_media_sanitized",
+            "created_at": "2026-10-05T09:00:00+00:00",
+        },
+    )
+    before = sorted(path.relative_to(root).as_posix() for path in root.rglob("*"))
+    args = argparse.Namespace(private_root=root, application_project_root=None)
+    with pytest.raises(recovery.RecoveryError, match="foreign_namespace_marker"):
+        job.backup(args)
+    assert sorted(path.relative_to(root).as_posix() for path in root.rglob("*")) == before
+
+
+def test_plain_driver_refuses_an_unmarked_root_named_as_the_sanitized_namespace(tmp_path):
+    # No scope.json, so only the name protects the sanitized namespace from this driver.
+    root = tmp_path / "data-only" / "sanitized-v1"
+    root.mkdir(parents=True, mode=0o700)
+    before = sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*"))
+    args = argparse.Namespace(private_root=root, application_project_root=None)
+    with pytest.raises(recovery.RecoveryError, match="foreign_namespace_name"):
+        job.backup(args)
+    assert sorted(path.relative_to(tmp_path).as_posix() for path in tmp_path.rglob("*")) == before
+
+
+def test_ssh_offers_only_the_explicit_key(tmp_path):
+    key = tmp_path / "fixture-key"
+    key.write_text("synthetic only; no SSH executed")
+    command = job.ssh(argparse.Namespace(ssh_target="fixture", ssh_key=key))
+    assert command[command.index("-i") + 1] == str(key)
+    assert command[command.index("IdentitiesOnly=yes") - 1] == "-o"
+
+
+def test_sudo_runs_only_the_documented_source_interpreter():
+    documented = argparse.Namespace(remote_user="otz", remote_python="/opt/otz/.venv/bin/python")
+    assert job.prefix(documented) == ["sudo", "-n", "-u", "otz", "--"]
+    for unlisted in ("python", "/usr/bin/python3", "/opt/otz/.venv/bin/python3"):
+        args = argparse.Namespace(remote_user="otz", remote_python=unlisted)
+        with pytest.raises(recovery.RecoveryError, match=r"^unsupported_remote_python$"):
+            job.prefix(args)
+    assert job.prefix(argparse.Namespace(remote_user=None, remote_python="python")) == []

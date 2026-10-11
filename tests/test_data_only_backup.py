@@ -110,7 +110,7 @@ def test_receiver_uses_separate_namespace_and_only_transfers_manifest_allowlist(
         private_root=tmp_path / "data-only", remote_root=Path("/opt/otz"),
         source_snapshot=Path("/var/tmp/otz-data-only/20261006-090000-123abc45"),
         remote_helper=Path("/tmp/otz-dbmedia-tools-123abc45/scripts/data_only_backup.py"),
-        ssh_target="fixture", ssh_key=key, remote_user="otz", remote_python="python",
+        ssh_target="fixture", ssh_key=key, remote_user="otz", remote_python="/opt/otz/.venv/bin/python",
         seed_dir=seed, min_free_gib=0,
     )
     calls = []
@@ -155,7 +155,7 @@ def test_source_failure_prevents_even_manifest_egress(tmp_path, monkeypatch):
         private_root=tmp_path / "data-only", remote_root=Path("/opt/otz"),
         source_snapshot=Path("/var/tmp/otz-data-only/20261006-090000-123abc45"),
         remote_helper=Path("/tmp/otz-dbmedia-tools-123abc45/scripts/data_only_backup.py"),
-        ssh_target="fixture", ssh_key=key, remote_user="otz", remote_python="python",
+        ssh_target="fixture", ssh_key=key, remote_user="otz", remote_python="/opt/otz/.venv/bin/python",
         seed_dir=None, min_free_gib=0,
     )
 
