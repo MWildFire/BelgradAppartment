@@ -166,8 +166,8 @@ async def reject_match(match_id: int, reason: str) -> str:
     """Reject a PENDING match that no recipient has started to receive.
 
     The status change is one conditional statement that applies only while no recipient is in
-    sending, sent or unknown state. Queued rows stay pending and are never claimed for a REJECTED
-    match. PUBLISHED matches stay with the admin tool.
+    sending, sent or unknown state and no PublishedPost row exists. Queued rows stay pending and
+    are never claimed for a REJECTED match. PUBLISHED matches stay with the admin tool.
     """
     reason = _clean_reason(reason)
     async with get_session() as session:
@@ -192,13 +192,16 @@ async def reject_match(match_id: int, reason: str) -> str:
                             MatchDelivery.status.in_(["sending", "sent", "unknown"]),
                         )
                     ),
+                    ~exists(select(PublishedPost.id).where(PublishedPost.match_id == match_id)),
                 )
                 .values(status=MatchStatus.REJECTED, rejection_reason=reason)
                 .returning(Match.id)
             )
         ).scalar_one_or_none()
         if rejected is None:
-            raise ReviewError(f"match {match_id}: есть записи доставки или статус изменился")
+            raise ReviewError(
+                f"match {match_id}: есть записи доставки или публикация, либо статус изменился"
+            )
         return "rejected"
 
 
