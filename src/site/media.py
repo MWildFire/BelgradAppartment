@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 
-from src.db.models import InboundPost, Match, SiteListing
+from src.db.models import InboundPost, Match, MatchStatus, SiteListing
 from src.site import db as sitedb
 from src.site.photos import VARIANT_WIDTHS, _resolve_stored, photos_root
 
@@ -48,7 +48,8 @@ async def public_photo(path: str) -> FileResponse:
             select(InboundPost.photo_paths)
             .join(Match, Match.inbound_post_id == InboundPost.id)
             .join(SiteListing, SiteListing.match_id == Match.id)
-            .where(SiteListing.is_public.is_(True))
+            # The same rule as the catalog: photos of a match are public only once it is PUBLISHED.
+            .where(SiteListing.is_public.is_(True), Match.status == MatchStatus.PUBLISHED)
         )).scalars().all()
     stored = [p for paths in records for p in paths if p]
     target = await asyncio.to_thread(_permitted_file, path, stored)

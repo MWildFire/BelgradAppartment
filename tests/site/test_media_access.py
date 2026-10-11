@@ -63,3 +63,12 @@ def test_caddy_cannot_bypass_publication_authorization():
     assert "reverse_proxy 127.0.0.1:8001" in stanza
     assert "file_server" not in stanza and "root *" not in stanza
     assert 'Cache-Control "no-store"' in stanza
+
+
+def test_photo_of_match_not_published_is_refused_even_with_public_overlay(media_client):
+    # Overlay 1 stays is_public=1, but its match is back to PENDING: the photo must not be served.
+    client, site_db = media_client
+    assert client.get("/photos/public.jpg").status_code == 200  # control: PUBLISHED match
+    with sqlite3.connect(site_db.split(":///", 1)[1]) as db:
+        db.execute("UPDATE matches SET status='PENDING' WHERE id=1")
+    assert client.get("/photos/public.jpg").status_code == 404

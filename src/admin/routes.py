@@ -335,12 +335,20 @@ async def mark_posted_action(
 # that default only applies at mark-posted; a manual toggle is an explicit choice).
 
 
-SITE_PUBLISHED_ONLY = "На сайт — только для опубликованного матча. Сначала опубликуйте его."  # noqa: RUF001
+SITE_PUBLISHED_ONLY = (
+    "На сайт — только для опубликованного матча. Сначала опубликуйте его."  # noqa: RUF001
+)
+SITE_REJECTED = "На сайт нельзя — матч отклонён, отклонение окончательное."  # noqa: RUF001
 
 
 def _may_expose(match: Match, site: SiteListing | None) -> bool:
     """A new overlay row defaults to public, so only a PUBLISHED match may get one."""
     return site is not None or match.status == MatchStatus.PUBLISHED
+
+
+def _exposure_error(match: Match) -> str:
+    """A rejection is terminal; any other status first needs publication."""
+    return SITE_REJECTED if match.status == MatchStatus.REJECTED else SITE_PUBLISHED_ONLY
 
 
 def _site_controls(
@@ -371,7 +379,7 @@ async def site_toggle_public(
         # Only a PUBLISHED match may become public: an absent row is created exposed
         # (is_public default True, decision #3), and a hidden row is flipped on.
         if (existing is None or not existing.is_public) and match.status != MatchStatus.PUBLISHED:
-            return _site_controls(request, match_id, existing, error=SITE_PUBLISHED_ONLY)
+            return _site_controls(request, match_id, existing, error=_exposure_error(match))
         site, created = await get_or_create_site_listing(s, match_id)
         if not created:
             site.is_public = not site.is_public
@@ -395,7 +403,7 @@ async def site_toggle_vnj(
     async with get_session() as s:
         match = await _require_match(s, match_id)
         if not _may_expose(match, await get_site_listing(s, match_id)):
-            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
+            return _site_controls(request, match_id, None, error=_exposure_error(match))
         site, _created = await get_or_create_site_listing(s, match_id)
         site.is_for_vnj = not site.is_for_vnj
     return _site_controls(request, match_id, site)
@@ -411,7 +419,7 @@ async def site_toggle_white_card(
     async with get_session() as s:
         match = await _require_match(s, match_id)
         if not _may_expose(match, await get_site_listing(s, match_id)):
-            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
+            return _site_controls(request, match_id, None, error=_exposure_error(match))
         site, _created = await get_or_create_site_listing(s, match_id)
         site.is_for_white_card = not site.is_for_white_card
     return _site_controls(request, match_id, site)
@@ -432,7 +440,7 @@ async def site_toggle_featured(
     async with get_session() as s:
         match = await _require_match(s, match_id)
         if not _may_expose(match, await get_site_listing(s, match_id)):
-            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
+            return _site_controls(request, match_id, None, error=_exposure_error(match))
         site, _created = await get_or_create_site_listing(s, match_id)
         if site.is_featured:
             site.is_featured = False
@@ -459,7 +467,7 @@ async def site_toggle_keep(
     async with get_session() as s:
         match = await _require_match(s, match_id)
         if not _may_expose(match, await get_site_listing(s, match_id)):
-            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
+            return _site_controls(request, match_id, None, error=_exposure_error(match))
         site, _created = await get_or_create_site_listing(s, match_id)
         site.keep_on_site = not site.keep_on_site
     return _site_controls(request, match_id, site)
@@ -507,7 +515,7 @@ async def site_meta(
     async with get_session() as s:
         match = await _require_match(s, match_id)
         if not _may_expose(match, await get_site_listing(s, match_id)):
-            return _site_controls(request, match_id, None, error=SITE_PUBLISHED_ONLY)
+            return _site_controls(request, match_id, None, error=_exposure_error(match))
         site, _created = await get_or_create_site_listing(s, match_id)
         # Empty string clears the override; flags/is_public are left untouched.
         site.channel_post_url = channel_post_url.strip() or None
