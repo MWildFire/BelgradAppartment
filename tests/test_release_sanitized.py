@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from scripts import release
+from scripts import release, sanitized_backup, sanitized_contract
 from tests import test_release_data_only as ordinary
 
 
@@ -18,13 +18,13 @@ def receipt():
     proof = ordinary.receipt()
     proof.update(
         backup_format="sanitized_directory_generation", backup_scope="db_media_sanitized",
-        files=149, files_transferred=149, media_files_verified=147,
+        files=150, files_transferred=150, media_files_verified=148,
         media_reused_from_verified_seed=0, source_temporary_snapshot_removed=True,
         health_receipt_published=False, personal_data_present=True,
         credential_inspection={"result": "heuristic_scan_passed", "cells_scanned": 7,
                                "bytes_scanned": 700, "arbitrary_secrets_absence_proven": False},
-        affected_albums={"listings": 5, "photos": 147, "markers": 43},
-        listing_albums={"listings": 5, "photos": 147, "markers": 43, "network": "disabled"},
+        affected_albums={"listings": 5, "photos": 148, "markers": 43},
+        listing_albums={"listings": 5, "photos": 148, "markers": 43, "network": "disabled"},
         sanitization={
             "format": "renfinder-db-media-sanitized-v1", "scope": "db_media_sanitized",
             "source_revision": proof["source_revision"], "revisions": ["0016_identity_edges"],
@@ -34,9 +34,9 @@ def receipt():
             "sqlite_journal_mode": "delete", "sqlite_freelist_count": 0,
             "database_sidecars": [],
             "credential_inspection": {"result": "heuristic_scan_passed", "scanner_exemptions": []},
-            "redaction": {"affected_cells": 5, "affected_photo_slots": 147,
+            "redaction": {"affected_cells": 5, "affected_photo_slots": 148,
                           "halo_cells": 2, "halo_urls": 40, "resizer_cells": 3,
-                          "resizer_urls": 3, "remaining_original_urls": 104,
+                          "resizer_urls": 3, "remaining_original_urls": 105,
                           "replaced_url_values": 43},
         },
     )
@@ -71,7 +71,7 @@ def test_album_restore_proof_requires_enough_verified_media():
     (("offhost_verified",), False), (("source_snapshot_immutable",), False),
     (("source_temporary_snapshot_removed",), False), (("media_decode_verified",), False),
     (("media_files_verified",), True), (("files_transferred",), 148),
-    (("files",), 150), (("media_reused_from_verified_seed",), 1),
+    (("files",), 149), (("media_reused_from_verified_seed",), 1),
     (("health_receipt_published",), True), (("personal_data_present",), False),
     (("generation_manifest_sha256",), "b" * 64), (("generation_id",), "not-a-generation"),
     (("application", "network"), "enabled"), (("application", "photo_decoded"), False),
@@ -210,3 +210,21 @@ def test_transport_rejects_missing_consent_before_ssh_and_forwards_opt_in(
         assert calls[0][0] == "ssh" and calls[-1][0] == "ssh"
         assert "--acknowledge-sanitized-url-loss" in shlex.split(calls[-1][-1])
         assert "--code-only-data-backup" in shlex.split(calls[-1][-1])
+
+
+def test_gate_and_contract_pin_the_same_counts():
+    """A stale pin on either side (release gate or contract) makes this test fail."""
+    proof = receipt()
+    proof["sanitization"]["redaction"] = dict(sanitized_contract.EXPECTED)
+    proof["affected_albums"] = dict(sanitized_backup.ALBUM_RESULT)
+    proof["listing_albums"] = sanitized_backup.ALBUM_RESULT | {"network": "disabled"}
+    release.validate_backup(proof, allow_data_only=True, allow_sanitized=True)
+    proof["sanitization"]["redaction"] = dict(
+        sanitized_contract.EXPECTED, affected_photo_slots=147, remaining_original_urls=104
+    )
+    with pytest.raises(release.ReleaseError, match="differs from reviewed 43-URL loss"):
+        release.validate_backup(proof, allow_data_only=True, allow_sanitized=True)
+    proof["sanitization"]["redaction"] = dict(sanitized_contract.EXPECTED)
+    proof["affected_albums"] = {"listings": 5, "photos": 147, "markers": 43}
+    with pytest.raises(release.ReleaseError, match="album restore proof"):
+        release.validate_backup(proof, allow_data_only=True, allow_sanitized=True)

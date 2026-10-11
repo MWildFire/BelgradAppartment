@@ -235,9 +235,9 @@ def validate_sanitized_backup(receipt):
         "sqlite_freelist_count": 0, "database_sidecars": [],
         "credential_inspection": {"result": "heuristic_scan_passed", "scanner_exemptions": []},
         "redaction": {
-            "affected_cells": 5, "affected_photo_slots": 147, "halo_cells": 2,
+            "affected_cells": 5, "affected_photo_slots": 148, "halo_cells": 2,
             "halo_urls": 40, "resizer_cells": 3, "resizer_urls": 3,
-            "remaining_original_urls": 104, "replaced_url_values": 43,
+            "remaining_original_urls": 105, "replaced_url_values": 43,
         },
     }
     # Canonical JSON comparison also distinguishes booleans from numeric counters.
@@ -246,7 +246,7 @@ def validate_sanitized_backup(receipt):
 
     require(exact(receipt.get("sanitization"), expected),
             "sanitized recovery contract differs from reviewed 43-URL loss")
-    albums = {"listings": 5, "photos": 147, "markers": 43}
+    albums = {"listings": 5, "photos": 148, "markers": 43}
     require(exact(receipt.get("affected_albums"), albums)
             and exact(receipt.get("listing_albums"), albums | {"network": "disabled"}),
             "sanitized album restore proof missing or different")
@@ -256,7 +256,7 @@ def validate_sanitized_backup(receipt):
                     for name in ("bytes_scanned", "cells_scanned")),
             "sanitized credential inspection proof incomplete")
     require(receipt.get("database", {}).get("revisions") == ["0016_identity_edges"]
-            and receipt["media_files_verified"] >= 147
+            and receipt["media_files_verified"] >= 148
             and receipt.get("source_temporary_snapshot_removed") is True
             and receipt.get("personal_data_present") is True
             and receipt.get("health_receipt_published") is False

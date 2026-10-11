@@ -123,8 +123,8 @@ def test_complete_snapshot_and_real_offline_restore_preserve_every_slot_and_sour
     assert receipt["protected_recovery_verified"] is False
     assert receipt["offhost_verified"] is False
     assert result["redaction"] == counts == policy.EXPECTED
-    assert len(manifest["files"]) == 150  # DB + generated index + inbound + 147 listing photos.
-    assert receipt["media_files_verified"] == 148
+    assert len(manifest["files"]) == 151  # DB + generated index + inbound + 148 listing photos.
+    assert receipt["media_files_verified"] == 149
     assert recovery.digest(source.db) == original
     assert {
         p.relative_to(stage): recovery.digest(p) for p in recovery.files_below(stage)
@@ -442,7 +442,7 @@ def test_separate_receiver_and_real_offline_restore_leave_ordinary_generations_u
     assert result["backup_scope"] == policy.SCOPE
     assert result["backup_format"] == "sanitized_directory_generation"
     assert result["media_reused_from_verified_seed"] == 0
-    assert result["files_transferred"] == 150
+    assert result["files_transferred"] == 151
     assert result["source_temporary_snapshot_removed"] is True
     assert sentinel.read_text() == "never read or change ordinary generation"
     assert (parent / "scope.json").read_text() == '{"scope":"db_media"}'
@@ -517,8 +517,8 @@ def test_receive_transfers_in_bounded_batches(snapshot, tmp_path, monkeypatch):
     )
     result = backup.receive(args)
     listings = [call for call in calls if "--files-from" in call]
-    assert len(listings) == 4  # 150 synthetic files at 40 names per rsync call
-    assert result["files_transferred"] == 150
+    assert len(listings) == 4  # 151 synthetic files at 40 names per rsync call
+    assert result["files_transferred"] == 151
     assert result["offhost_verified"] is True
 
 
@@ -696,7 +696,7 @@ def test_receive_resume_reuses_retained_snapshot_without_a_second_snapshot(
     monkeypatch.setattr(backup, "_snapshot_remote", no_second_snapshot)
     result = backup.receive(args)
     assert result["offhost_verified"] is True
-    assert result["files_transferred"] == 150
+    assert result["files_transferred"] == 151
     receipt = args.private_root / "receipts" / (args.source_snapshot.name + ".json")
     assert backup.read_json(receipt) == result
     assert not (args.private_root / "resume" / (args.source_snapshot.name + ".json")).exists()
@@ -1793,7 +1793,7 @@ def test_a_refused_second_receiver_leaves_the_holders_pending_copy_in_place(
     result, seen = receive_while_a_resume_is_refused_the_lease(snapshot, tmp_path, monkeypatch)
     assert seen["pending_survived"] is True
     assert result["offhost_verified"] is True
-    assert result["files_transferred"] == 150
+    assert result["files_transferred"] == 151
 
 
 def test_a_failed_copy_is_removed_while_the_lease_is_still_held(snapshot, tmp_path, monkeypatch):

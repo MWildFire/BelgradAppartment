@@ -17,8 +17,8 @@ EXPECTED = {
     "halo_urls": 40,
     "resizer_cells": 3,
     "resizer_urls": 3,
-    "affected_photo_slots": 147,
-    "remaining_original_urls": 104,
+    "affected_photo_slots": 148,
+    "remaining_original_urls": 105,
 }
 MARKER = re.compile(r"restore-local:///([0-9]{3})\.(jpg|webp)")
 
