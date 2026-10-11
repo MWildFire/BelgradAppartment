@@ -326,10 +326,22 @@ def test_probe_sweep_broken_only_when_probes_failed_wholesale():
 
     assert not probe_sweep_broken(checked=0, failed=0)
     assert probe_sweep_broken(checked=0, failed=1)  # errored before any probe ran
-    assert probe_sweep_broken(checked=5, failed=5)  # every probe failed
+    assert not probe_sweep_broken(checked=5, failed=5)  # a tiny sweep: one failure is noise
+    assert probe_sweep_broken(checked=10, failed=10)  # every probe failed
     assert not probe_sweep_broken(checked=10, failed=5)  # exactly at the threshold
     assert probe_sweep_broken(checked=10, failed=6)
     assert not probe_sweep_broken(checked=100, failed=1)  # ordinary noise
+
+
+def test_source_removal_alarm_needs_a_real_sample():
+    from src.scrapers.run_safety import source_removal_alarm
+
+    assert not source_removal_alarm(deactivated=0, attempted=50)
+    assert not source_removal_alarm(deactivated=1, attempted=2)  # one 404 in a tiny run
+    assert not source_removal_alarm(deactivated=3, attempted=9)  # below the sample floor
+    assert not source_removal_alarm(deactivated=9, attempted=9)  # a tiny public set: silent by design
+    assert not source_removal_alarm(deactivated=3, attempted=10)  # exactly 0.3 is not above
+    assert source_removal_alarm(deactivated=4, attempted=10)
 
 
 def test_source_removal_alarm_only_above_the_removal_share():
@@ -338,4 +350,4 @@ def test_source_removal_alarm_only_above_the_removal_share():
     assert not source_removal_alarm(deactivated=0, attempted=10)
     assert not source_removal_alarm(deactivated=3, attempted=10)  # exactly at the threshold
     assert source_removal_alarm(deactivated=4, attempted=10)
-    assert source_removal_alarm(deactivated=9, attempted=9)  # what a changed URL scheme looks like
+    assert source_removal_alarm(deactivated=9, attempted=10)  # what a changed URL scheme looks like

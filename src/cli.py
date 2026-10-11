@@ -1040,10 +1040,16 @@ async def _liveness_nightly_line(*, notify: bool = True, max_hides: int | None =
         sent = await send_liveness_notice(report) if notify else False
         note = " — нотис отправлен" if sent else ""
         errors = getattr(report, "errors", 0)
+        checked = getattr(report, "checked", 0)
+        source_errors = getattr(report, "source_errors", 0)
         # Errored probes are the liveness analogue of INCONCLUSIVE links (see probe_sweep_broken).
-        broken = probe_sweep_broken(checked=getattr(report, "checked", 0), failed=errors)
+        # A source that failed before its first probe is a sweep that never ran: broken on its own.
+        if checked:
+            broken = probe_sweep_broken(checked=checked, failed=errors - source_errors)
+        else:
+            broken = source_errors > 0
         prefix = "🚨 " if broken else ("⚠️ " if errors else "")
-        note += (f", проверок {getattr(report, 'checked', 0)}, "
+        note += (f", проверок {checked}, "
                  f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
             f"{prefix}liveness: снято {len(report.hidden)}, "
@@ -1951,10 +1957,16 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
                          f"ожидают повторной попытки: {rolling.retry_deferred}")
             if rolling.deactivated:
                 line += f", деактивировано (404/410): {rolling.deactivated}"
+            already_removed = getattr(rolling, "already_removed", 0)
+            if already_removed:
+                line += f", повторно подтверждено снятых: {already_removed}"
+            attempted = (rolling.refreshed + rolling.errors + rolling.deactivated
+                         + already_removed)
             mass_removal = source_removal_alarm(
-                deactivated=rolling.deactivated,
-                attempted=rolling.refreshed + rolling.errors + rolling.deactivated,
+                deactivated=rolling.deactivated, attempted=attempted,
             )
+            if mass_removal:
+                line += f", массовое снятие: {rolling.deactivated} из {attempted} попыток"
             if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
                     or mass_removal
                     or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
@@ -2710,8 +2722,12 @@ async def _refetch_details(
             f"source_errors={len(result.source_errors)} ==="
         )
         removed = result.deactivated
-        attempted = result.refreshed + result.errors + removed
-        click.echo(f"деактивировано (404/410): {removed}")
+        already_removed = getattr(result, "already_removed", 0)
+        attempted = result.refreshed + result.errors + removed + already_removed
+        removed_line = f"деактивировано (404/410): {removed}"
+        if already_removed:
+            removed_line += f", повторно подтверждено снятых: {already_removed}"
+        click.echo(removed_line)
         if result.errors:
             click.echo(f"⚠️ Ошибки: {result.errors}")
         if result.skipped:
@@ -2722,12 +2738,12 @@ async def _refetch_details(
                 f"🚨 Массовое снятие: {removed} из {attempted} попыток за прогон — "
                 "проверь схему URL и парсер площадки"
             )
-        # Source failures and mass removals fail the run; item errors and budget skips only warn.
+        # Source failures fail the public run; item errors and budget skips only warn. A mass
+        # removal only alarms here: owner decision, exit 1 for it applies at night only.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())
             ))
-        if result.source_errors or mass_removal:
             raise SystemExit(1)
         return
 

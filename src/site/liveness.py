@@ -77,6 +77,9 @@ class LivenessReport:
     candidates_confirmed: list[LivenessCandidate] = field(default_factory=list)
     hidden: list[LivenessCandidate] = field(default_factory=list)
     errors: int = 0
+    # Source-level failures (a source's probe session timed out or raised), already in `errors`.
+    # They never probed a listing, so the caller must not count them as probe failures.
+    source_errors: int = 0
     checked: int = 0
     skipped: int = 0
 
@@ -276,9 +279,11 @@ async def site_liveness_sweep(
                             await record_probe(row, observation)
             except TimeoutError:
                 report.errors += 1
+                report.source_errors += 1
             except Exception:
                 logger.exception("[liveness] bounded source check failed: %s", platform.value)
                 report.errors += 1
+                report.source_errors += 1
     report.skipped = len(queue) - report.checked
 
     for r in card_rows:

@@ -1157,6 +1157,8 @@ class DetailRefetchStats:
     photos: int = 0
     errors: int = 0
     deactivated: int = 0
+    # Re-checks of listings that were already inactive: attempts, not new takedowns.
+    already_removed: int = 0
     skipped: int = 0
     source_errors: dict[str, str] = field(default_factory=dict)
     reason_counts: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
@@ -1304,15 +1306,25 @@ async def refetch_listing_details(
             # A source takedown is recorded as deactivated below, not as a run error (timer exit).
             stats.errors += int(not removed)
             card_reason(row, "item", reason_code(error))
+            new_takedown = False
             try:
                 async with get_session() as session:
                     if removed:
                         now = datetime.now(UTC)
-                        await session.execute(update(Listing).where(Listing.id == row.id).values(
-                            is_active=False, deactivated_at=now, link_status="DEAD",
-                            link_checked_at=now, link_next_retry_at=None,
-                        ))
-                        stats.deactivated += 1
+                        link_fields = dict(deactivated_at=now, link_status="DEAD",
+                                           link_checked_at=now, link_next_retry_at=None)
+                        # Only an active row flips. Re-checking a listing that is already removed is
+                        # not a new takedown and must not feed the removal alarm.
+                        new_takedown = (await session.execute(
+                            update(Listing)
+                            .where(Listing.id == row.id, Listing.is_active.is_(True))
+                            .values(is_active=False, **link_fields)
+                            .returning(Listing.id)
+                        )).scalar_one_or_none() is not None
+                        if not new_takedown:
+                            await session.execute(
+                                update(Listing).where(Listing.id == row.id).values(**link_fields)
+                            )
                     await record_attempt(session, row.id, evidence, attempted_at=attempted_at)
             except BaseException as persistence_error:
                 add_reason(stats.reason_counts, row.platform, "persistence",
@@ -1320,6 +1332,12 @@ async def refetch_listing_details(
                 if isinstance(error, asyncio.CancelledError):
                     raise error from persistence_error
                 raise
+            if removed:
+                # Counted once the attempt is saved: a rolled-back session counts nothing.
+                if new_takedown:
+                    stats.deactivated += 1
+                else:
+                    stats.already_removed += 1
             if isinstance(error, Exception) and progress is not None:
                 with suppress(Exception):
                     progress(stats, row, error)
@@ -1595,6 +1613,8 @@ class RollingRefreshResult:
     retry_deferred: int = 0
     # Listings the source removed (404/410) and this run deactivated; never counted in `errors`.
     deactivated: int = 0
+    # Re-checks of listings that were already removed: attempts, never counted as takedowns.
+    already_removed: int = 0
 
 
 async def rolling_detail_refresh(
@@ -1637,6 +1657,7 @@ async def rolling_detail_refresh(
         len(plan.rows), stats.verified, stats.errors, stats.price_changes, stats.skipped,
         stats.source_errors,
         plan.inventory_count, plan.retry_deferred, deactivated=stats.deactivated,
+        already_removed=stats.already_removed,
     )
 
 

@@ -1,11 +1,8 @@
 """Nightly summary alarm levels.
 
-Item errors and budget skips are warnings (⚠️) and do not fail the night. Source-level failures,
-skipped link checks and failed steps stay alarms (🚨): they mark the run degraded.
-
-Open conflict (owner decision): run_safety.evaluate_source marks a source with item errors as
-"degraded", and _nightly_unhealthy fails the night on "degraded". The test
-test_real_item_errors_degrade_the_source_and_fail_the_night pins the code, not the policy above.
+Item errors below half of the items a source processed, and budget skips, are warnings (⚠️).
+At least half of them make the source degraded, and a degraded source fails the night (PR #6,
+owner decision Q3.16). Source-level failures, skipped link checks and failed steps stay alarms (🚨).
 """
 
 from __future__ import annotations
@@ -99,7 +96,7 @@ async def test_link_check_outage_is_alarm_not_warning(db, heal_rolling_links):
 
     lines = await _nightly_lines(
         heal_rolling_links, idle_heal, idle_rolling,
-        orchestrator.LinkVerifyStats(checked=5, errors=5, inconclusive=5),
+        orchestrator.LinkVerifyStats(checked=10, errors=10, inconclusive=10),
     )
     link_line = next(line for line in lines if "ссылки: проверено" in line)
     assert link_line.startswith("🚨 ")
@@ -132,12 +129,47 @@ async def test_liveness_probe_outage_is_alarm(monkeypatch):
         return fake_sweep
 
     monkeypatch.setattr(liveness, "send_liveness_notice", no_notice)
-    monkeypatch.setattr(liveness, "site_liveness_sweep", sweep(errors=5, checked=5))
+    monkeypatch.setattr(liveness, "site_liveness_sweep", sweep(errors=10, checked=10))
     assert (await cli_mod._liveness_nightly_line(notify=False)).startswith("🚨 liveness")
 
     monkeypatch.setattr(liveness, "site_liveness_sweep", sweep(errors=1, checked=100))
     line = await cli_mod._liveness_nightly_line(notify=False)
     assert line.startswith("⚠️ liveness") and "ошибок 1" in line
+
+
+async def test_liveness_source_failures_are_not_probe_failures(monkeypatch):
+    from src.site import liveness
+
+    monkeypatch.setattr(get_settings(), "site_liveness_enabled", True)
+
+    async def no_notice(report):
+        return False
+
+    def sweep(**counts):
+        async def fake_sweep(*, max_hides=None):
+            return SimpleNamespace(
+                hidden=[], candidates_confirmed=[], candidates_unconfirmed=[],
+                kept_active=0, kept_pinned=0, skipped=0, **counts,
+            )
+
+        return fake_sweep
+
+    monkeypatch.setattr(liveness, "send_liveness_notice", no_notice)
+    # Every source failed before its first probe: the sweep never ran.
+    monkeypatch.setattr(
+        liveness, "site_liveness_sweep", sweep(checked=0, errors=3, source_errors=3),
+    )
+    assert (await cli_mod._liveness_nightly_line(notify=False)).startswith("🚨 liveness")
+    # Probes ran and two sources timed out: a source timeout is not a network outage.
+    monkeypatch.setattr(
+        liveness, "site_liveness_sweep", sweep(checked=10, errors=2, source_errors=2),
+    )
+    assert (await cli_mod._liveness_nightly_line(notify=False)).startswith("⚠️ liveness")
+    # Two probes ran and three sources failed: source failures must not inflate the probe share.
+    monkeypatch.setattr(
+        liveness, "site_liveness_sweep", sweep(checked=2, errors=3, source_errors=3),
+    )
+    assert (await cli_mod._liveness_nightly_line(notify=False)).startswith("⚠️ liveness")
 
 
 async def test_edge_budget_stop_is_warning_and_other_dupes_failure_stays_alarm(monkeypatch):
@@ -157,11 +189,10 @@ async def test_edge_budget_stop_is_warning_and_other_dupes_failure_stays_alarm(m
 
 
 def test_real_item_errors_degrade_the_source_and_fail_the_night():
-    """Pins current behaviour with real ScrapeResult objects, not SimpleNamespace fakes.
+    """Pins the item-error policy with real ScrapeResult objects, not SimpleNamespace fakes.
 
-    Item errors make the source "degraded" (run_safety.evaluate_source, reason item_errors), and
-    _nightly_unhealthy fails the night on "degraded". This contradicts the module docstring; the
-    owner decides which rule stands.
+    Item errors at least half of the processed items make the source "degraded" (run_safety
+    evaluate_source, reason item_error_rate), and _nightly_unhealthy fails the night on "degraded".
     """
     healthy = dict(
         dead=[], low_coverage=[], degraded=[], parse_degraded=[], sweep_reasons=[],
@@ -207,12 +238,11 @@ async def test_public_refresh_source_failure_exits_one(monkeypatch, capsys):
     assert "🚨 Ошибки площадок: NEKRETNINE: TimeoutError" in capsys.readouterr().out
 
 
-async def test_public_refresh_mass_removal_is_alarm_and_exits_one(monkeypatch, capsys):
-    """A changed URL scheme deactivates most attempted listings: print the count, alarm, exit 1."""
+async def test_public_refresh_mass_removal_alarms_but_exits_zero(monkeypatch, capsys):
+    """A changed URL scheme deactivates most attempted listings: print the count and alarm. The
+    public run exits 0, because exit 1 for a mass removal applies at night only."""
     _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={}, deactivated=9)
-    with pytest.raises(SystemExit) as exit_info:
-        await cli_mod._refetch_details(None, False, None, False, public_only=True)
-    assert exit_info.value.code == 1
+    await cli_mod._refetch_details(None, False, None, False, public_only=True)
     out = capsys.readouterr().out
     assert "деактивировано (404/410): 9" in out
     assert "🚨 Массовое снятие: 9 из 17" in out
@@ -223,6 +253,24 @@ async def test_public_refresh_few_removals_are_counted_without_alarm(monkeypatch
     await cli_mod._refetch_details(None, False, None, False, public_only=True)
     out = capsys.readouterr().out
     assert "деактивировано (404/410): 1" in out
+    assert "🚨" not in out
+
+
+async def test_public_refresh_removal_share_counts_every_attempt(monkeypatch, capsys):
+    """3 removals of 10 attempts is exactly 0.3, not above it. Attempts include errors and repeat
+    checks of already removed listings."""
+    _public_refresh(
+        monkeypatch, refreshed=5, errors=2, skipped=0, source_errors={}, deactivated=3,
+    )
+    await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    assert "🚨" not in capsys.readouterr().out
+    _public_refresh(
+        monkeypatch, refreshed=5, errors=0, skipped=0, source_errors={}, deactivated=3,
+        already_removed=2,
+    )
+    await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    out = capsys.readouterr().out
+    assert "повторно подтверждено снятых: 2" in out
     assert "🚨" not in out
 
 

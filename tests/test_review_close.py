@@ -201,6 +201,14 @@ async def test_reject_refuses_pending_match_that_has_a_published_post(db):
         assert (await s.get(Match, match_id)).status == MatchStatus.PENDING
 
 
+async def test_reject_allows_pending_match_while_another_match_is_published(db):
+    _, match_id = await seed_case(match_status=MatchStatus.PENDING)
+    _, other_id = await seed_case(match_status=MatchStatus.PENDING)
+    async with get_session() as s:
+        s.add(PublishedPost(match_id=other_id, tg_message_id=2, post_text="другой пост"))
+    assert await review_queue.reject_match(match_id, "объявление снято") == "rejected"
+
+
 def test_cli_review_close_passes_decision_and_reason(monkeypatch):
     calls = []
 

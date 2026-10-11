@@ -232,7 +232,7 @@ async def test_network_outage_leaves_every_link_inconclusive(factory):
         await _seed_listing(
             factory, url=f"https://nekretnine.rs/outage-{n}/", external_id=f"outage{n}"
         )
-        for n in range(3)
+        for n in range(10)
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -240,7 +240,7 @@ async def test_network_outage_leaves_every_link_inconclusive(factory):
 
     stats = await verify_active_links(client=_client(handler))
 
-    assert (stats.checked, stats.inconclusive, stats.errors) == (3, 3, 3)
+    assert (stats.checked, stats.inconclusive, stats.errors) == (10, 10, 10)
     assert stats.deactivated == 0
     assert probe_sweep_broken(checked=stats.checked, failed=stats.inconclusive)
     for lid in lids:

@@ -200,7 +200,7 @@ async def reject_match(match_id: int, reason: str) -> str:
         ).scalar_one_or_none()
         if rejected is None:
             raise ReviewError(
-                f"match {match_id}: есть записи доставки или публикация, либо статус изменился"
+                f"match {match_id}: есть запись доставки или публикации, либо статус изменился"
             )
         return "rejected"
 
