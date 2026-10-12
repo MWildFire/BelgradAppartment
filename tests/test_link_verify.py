@@ -423,7 +423,7 @@ async def test_hide_helper_hides_public_card(factory, monkeypatch):
         ))
         n = await hide_site_listings_for_listing(s, lid, member_status_by_id={lid: "DEAD"})
     assert n == 1
-    assert await _site_state(factory, lid) == (False, False)
+    assert await _site_state(factory, lid) == (False, True)
 
 
 @pytest.mark.asyncio
@@ -568,10 +568,10 @@ async def test_404_already_hidden_card_hidden_count_zero(factory):
 
 
 @pytest.mark.asyncio
-async def test_404_clears_featured_flag(factory, monkeypatch):
+async def test_404_hides_the_card_but_keeps_its_featured_flag(factory, monkeypatch):
+    """The automatic hide changes visibility only: a card that returns is the hero again."""
     from src.config import get_settings
     monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
-    """A hidden card must never remain the hero — is_featured is cleared too."""
     lid = await _seed_listing(
         factory, url="https://nekretnine.rs/gone/", site_listing=True,
         site_public=True, site_featured=True,
@@ -582,7 +582,7 @@ async def test_404_clears_featured_flag(factory, monkeypatch):
 
     await verify_active_links(client=_client(handler))
 
-    assert await _site_state(factory, lid) == (False, False)
+    assert await _site_state(factory, lid) == (False, True)
 
 
 # --------------------------------------------------------------- T1-5: proxy plumbing into HEADs
@@ -774,3 +774,123 @@ async def test_verify_dry_run_leaves_links_and_publications_unchanged(factory, m
     async with factory() as session:
         row = (await session.execute(select(Listing))).scalar_one()
         assert row.link_checked_at is None and row.link_status is None
+
+
+# --------------------------------------------------------------- Q3.21: removal-alarm guard
+
+
+@pytest.mark.asyncio
+async def test_mass_removal_run_hides_nothing_and_keeps_every_card_public(factory, monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    gone = []
+    for i in range(6):
+        gone.append(await _seed_listing(
+            factory,
+            url=f"https://nekretnine.rs/gone-{i}/",
+            external_id=f"gone{i}",
+            site_listing=True,
+            site_public=True,
+        ))
+    for i in range(4):
+        await _seed_listing(
+            factory,
+            url=f"https://nekretnine.rs/alive-{i}/",
+            external_id=f"alive{i}",
+            site_listing=True,
+            site_public=True,
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404 if "/gone-" in str(request.url) else 200)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.checked == 10 and stats.deactivated == 6
+    assert stats.removal_alarm is True  # 6 of 10 attempts, above REMOVAL_ALARM_SHARE
+    assert stats.site_listings_hidden == 0
+    assert stats.hides_withheld == 6
+    for lid in gone:
+        assert await _is_active(factory, lid) is False
+        assert await _site_state(factory, lid) == (True, False)  # deactivated, card still public
+
+
+@pytest.mark.asyncio
+async def test_single_removal_in_a_normal_run_still_hides(factory, monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    gone = await _seed_listing(
+        factory,
+        url="https://nekretnine.rs/gone-0/",
+        external_id="gone0",
+        site_listing=True,
+        site_public=True,
+    )
+    for i in range(9):
+        await _seed_listing(
+            factory,
+            url=f"https://nekretnine.rs/alive-{i}/",
+            external_id=f"alive{i}",
+            site_listing=True,
+            site_public=True,
+        )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404 if "/gone-" in str(request.url) else 200)
+
+    stats = await verify_active_links(client=_client(handler))
+
+    assert stats.removal_alarm is False  # 1 of 10 is far below the share
+    assert stats.site_listings_hidden == 1 and stats.hides_withheld == 0
+    assert await _site_state(factory, gone) == (False, False)
+
+
+@pytest.mark.asyncio
+async def test_night_gate_withholds_hides_after_an_alarm_in_an_earlier_step(factory, monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    stats = await verify_active_links(client=_client(handler), hides_allowed=False)
+
+    assert stats.deactivated == 1
+    assert stats.site_listings_hidden == 0 and stats.hides_withheld == 1
+    assert await _site_state(factory, lid) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_verify_records_its_outcome_for_the_removal_guard(factory, tmp_path):
+    import json
+
+    await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
+    )
+
+    stats = await verify_active_links(
+        client=_client(lambda request: httpx.Response(404)), guard_dir=tmp_path,
+    )
+
+    record = json.loads((tmp_path / "removal_guard" / "verify.json").read_text(encoding="utf-8"))
+    assert stats.deactivated == 1
+    assert record["status"] == "clean" and record["deactivated"] == 1
+
+
+@pytest.mark.asyncio
+async def test_empty_verify_run_records_clean_not_running(factory, tmp_path):
+    import json
+
+    stats = await verify_active_links(
+        client=_client(lambda request: httpx.Response(404)), guard_dir=tmp_path,
+    )
+
+    record = json.loads((tmp_path / "removal_guard" / "verify.json").read_text(encoding="utf-8"))
+    assert stats.checked == 0
+    assert record["status"] == "clean"

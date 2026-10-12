@@ -115,6 +115,7 @@ async def site_liveness_sweep(
     client: httpx.AsyncClient | None = None,
     dry_run: bool = False,
     max_hides: int | None = None,
+    auto_hide: bool | None = None,  # None → SITE_LIVENESS_AUTO_HIDE; False → warn-only this sweep
 ) -> LivenessReport:
     """Sweep every public card and decide KEEP / candidate / HIDE per the C0 matrix.
 
@@ -128,6 +129,8 @@ async def site_liveness_sweep(
     settings = get_settings()
     report = LivenessReport()
     hide_limit = settings.site_liveness_max_hides if max_hides is None else max(0, max_hides)
+    # False always means warn-only for this sweep; True cannot override SITE_LIVENESS_AUTO_HIDE=0.
+    hide_on = settings.site_liveness_auto_hide and auto_hide is not False
 
     async with get_session() as s:
         card_rows = (
@@ -211,7 +214,9 @@ async def site_liveness_sweep(
             checked = checked.replace(tzinfo=UTC) if checked and checked.tzinfo is None else checked
             retry = retry.replace(tzinfo=UTC) if retry and retry.tzinfo is None else retry
             recent = checked and timedelta(0) <= now - checked < timedelta(hours=24)
-            if recent and record.link_status in {_ACTIVE, _DEAD}:
+            # Only ACTIVE evidence is reused. A DEAD mark written by another run (the public detail
+            # refresh) is probed again here, so it cannot hide a card without a probe this sweep.
+            if recent and record.link_status == _ACTIVE:
                 url_status[url] = record.link_status
             elif retry and retry > now:
                 url_status[url] = _INCONCLUSIVE
@@ -317,7 +322,7 @@ async def site_liveness_sweep(
         decision = evaluate_publication(
             member_status.values(),
             pinned=r.keep_on_site,
-            auto_hide=settings.site_liveness_auto_hide,
+            auto_hide=hide_on,
             remaining_hides=hide_limit - len(report.hidden),
         )
         if decision.reason == "pinned":

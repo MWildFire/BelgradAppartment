@@ -118,7 +118,8 @@ async def apply_publication_policy(
                 Listing.link_checked_at > now,
             )).exists(),
         )
-        .values(is_public=False, is_featured=False)
+        # Visibility only: the featured flag survives, so a card that returns is the hero again.
+        .values(is_public=False)
     )
     hidden = result.rowcount or 0
     if hidden:

@@ -51,7 +51,8 @@ from src.scrapers.freshness import (
 )
 from src.scrapers.link_probe import SourceProbeSession
 from src.scrapers.refresh_diagnostics import add_reason, reason_code, source_error_code
-from src.scrapers.run_safety import evaluate_absence, evaluate_source
+from src.scrapers import removal_guard
+from src.scrapers.run_safety import evaluate_absence, evaluate_source, source_removal_alarm
 from src.scrapers.snapshot_parity import mismatch_fields
 
 logger = logging.getLogger(__name__)
@@ -885,6 +886,10 @@ class LinkVerifyStats:
     skipped: int = 0
     # X2: public cards auto-hidden because their listing 404/410'd (is_public was True).
     site_listings_hidden: int = 0
+    # Q3.21 guard: this run's removal share tripped the alarm (run_safety.REMOVAL_ALARM_SHARE),
+    # or an earlier step of the night did; `hides_withheld` counts listings (not cards) left public.
+    removal_alarm: bool = False
+    hides_withheld: int = 0
 
 
 # A HEAD that comes back 404/410 means the listing is definitively gone — deactivate it. Every
@@ -931,6 +936,8 @@ async def verify_active_links(
     platform: Platform | None = None,
     client: httpx.AsyncClient | None = None,
     dry_run: bool = False,
+    hides_allowed: bool = True,  # False: an earlier step of the night raised the removal alarm
+    guard_dir: Path | None = None,  # the nightly run passes its state dir; manual runs leave it
 ) -> LinkVerifyStats:
     """Verify ACTIVE matched sources through bounded payload-aware GET/browser probes.
 
@@ -949,6 +956,10 @@ async def verify_active_links(
     `client` is injectable for tests (pass a MockTransport-backed AsyncClient). Production does
     not use the legacy side-client HEAD route.
     """
+    if guard_dir is not None and not dry_run:
+        removal_guard.write_step(
+            guard_dir, "verify", status=removal_guard.RUNNING, now=datetime.now(UTC),
+        )
     checked_at = datetime.now(UTC)
     async with get_session() as s:
         stmt = (
@@ -975,6 +986,11 @@ async def verify_active_links(
 
     stats = LinkVerifyStats()
     if not rows:
+        if guard_dir is not None and not dry_run:
+            # Nothing to judge is still a clean outcome: a RUNNING record would close the guard.
+            removal_guard.write_step(
+                guard_dir, "verify", status=removal_guard.CLEAN, now=datetime.now(UTC),
+            )
         logger.info("[verify-links] no active matched listings to check (platform=%s)",
                     platform.value if platform else "all")
         return stats
@@ -1066,7 +1082,21 @@ async def verify_active_links(
                     await _check_one(row, probe)
     stats.skipped = len(rows) - stats.checked
 
-    if dead_ids and not dry_run:
+    # Q3.21 guard: a run that trips the removal alarm, or a night that did, hides nothing.
+    # NIGHTLY_AUTO_HIDE_SITE_LISTINGS=0 (the X2 kill switch) skips the pass without counting it.
+    stats.removal_alarm = source_removal_alarm(
+        deactivated=stats.deactivated, attempted=stats.checked,
+    )
+    if guard_dir is not None and not dry_run:
+        removal_guard.write_step(
+            guard_dir, "verify",
+            status=removal_guard.ALARM if stats.removal_alarm else removal_guard.CLEAN,
+            now=datetime.now(UTC), deactivated=stats.deactivated, attempted=stats.checked,
+        )
+    hide_pass = bool(dead_ids) and not dry_run and get_settings().nightly_auto_hide_site_listings
+    if hide_pass and (stats.removal_alarm or not hides_allowed):
+        stats.hides_withheld = len(dead_ids)
+    elif hide_pass:
         # All source observations are complete before one serialized cap-controlled policy pass.
         async with get_session() as s:
             for listing_id in sorted(dead_ids):

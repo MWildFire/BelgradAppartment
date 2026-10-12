@@ -14,7 +14,7 @@ import pytest
 import src.cli as cli_mod
 from src.config import get_settings
 from src.db.models import Platform
-from src.scrapers import orchestrator
+from src.scrapers import orchestrator, removal_guard
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def heal_rolling_links(monkeypatch):
         async def fake_rolling(*, limit, deadline=None):
             return rolling
 
-        async def fake_links(*, limit, deadline=None):
+        async def fake_links(*, limit, deadline=None, hides_allowed=True, guard_dir=None):
             return links
 
         monkeypatch.setattr(orchestrator, "heal_broken_listings", fake_heal)
@@ -120,7 +120,7 @@ async def test_liveness_probe_outage_is_alarm(monkeypatch):
         return False
 
     def sweep(*, errors, checked):
-        async def fake_sweep(*, max_hides=None):
+        async def fake_sweep(*, max_hides=None, auto_hide=None):
             return SimpleNamespace(
                 hidden=[], candidates_confirmed=[], candidates_unconfirmed=[],
                 kept_active=0, kept_pinned=0, checked=checked, errors=errors, skipped=0,
@@ -146,7 +146,7 @@ async def test_liveness_source_failures_are_not_probe_failures(monkeypatch):
         return False
 
     def sweep(**counts):
-        async def fake_sweep(*, max_hides=None):
+        async def fake_sweep(*, max_hides=None, auto_hide=None):
             return SimpleNamespace(
                 hidden=[], candidates_confirmed=[], candidates_unconfirmed=[],
                 kept_active=0, kept_pinned=0, skipped=0, **counts,
@@ -216,11 +216,18 @@ def test_real_item_errors_degrade_the_source_and_fail_the_night():
 
 def _public_refresh(monkeypatch, **fields):
     values = {"selected": 10, "refreshed": 8, "price_changes": [], "deactivated": 0, **fields}
+    recorded = []
 
     async def fake_rolling(*, limit, public_only, scrapers, deadline):
         return SimpleNamespace(**values)
 
+    def capture(_state_dir, step, **kwargs):
+        recorded.append({"step": step, **kwargs})
+
     monkeypatch.setattr(orchestrator, "rolling_detail_refresh", fake_rolling)
+    # The guard writes go to the state dir: keep them in memory and hand the calls back.
+    monkeypatch.setattr(removal_guard, "write_step", capture)
+    return recorded
 
 
 async def test_public_refresh_item_errors_and_budget_skips_exit_zero(monkeypatch, capsys):
@@ -301,3 +308,38 @@ async def test_nightly_mass_removal_is_alarm_with_count(db, heal_rolling_links):
     assert not detail_line.startswith("🚨 ")
     assert "деактивировано (404/410): 1" in detail_line
     assert not any("🚨" in line for line in lines)
+
+
+
+async def test_public_refresh_mass_removal_is_recorded_as_an_alarm(monkeypatch, capsys):
+    recorded = _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={}, deactivated=9)
+    await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    outcome = [c for c in recorded if c["step"] == "public" and c["status"] != "running"]
+    assert len(outcome) == 1 and outcome[0]["status"] == "alarm"
+    assert outcome[0]["deactivated"] == 9 and outcome[0]["attempted"] == 17
+
+
+async def test_public_refresh_clean_run_is_recorded_as_clean(monkeypatch, capsys):
+    recorded = _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={}, deactivated=1)
+    await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    outcome = [c for c in recorded if c["step"] == "public" and c["status"] != "running"]
+    assert [c["status"] for c in outcome] == ["clean"]
+
+
+async def test_public_refresh_crash_is_recorded_as_failed(monkeypatch, capsys):
+    recorded = _public_refresh(monkeypatch, errors=0, skipped=0, source_errors={})
+
+    async def crashing_rolling(**_kwargs):
+        raise RuntimeError("detail refresh exploded")
+
+    monkeypatch.setattr(orchestrator, "rolling_detail_refresh", crashing_rolling)
+    with pytest.raises(RuntimeError):
+        await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    assert [c["status"] for c in recorded if c["step"] == "public"] == ["running", "failed"]
+
+
+@pytest.fixture(autouse=True)
+def _isolated_state(monkeypatch, tmp_path):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "data_dir", tmp_path)

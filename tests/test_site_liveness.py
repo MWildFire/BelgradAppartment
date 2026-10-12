@@ -40,7 +40,7 @@ _N = itertools.count(1)
 def test_liveness_config_defaults() -> None:
     s = Settings()
     assert s.site_liveness_enabled is True
-    assert s.site_liveness_auto_hide is False  # D1 — warn-first
+    assert s.site_liveness_auto_hide is True  # D1 — Q3.21: hide, with the removal-alarm gate
     assert s.site_liveness_max_hides == 10  # D3
     assert s.nightly_dupes_write is True  # D2
 
@@ -180,8 +180,9 @@ async def test_all_dead_hides_when_autohide_on(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_all_dead_is_candidate_when_autohide_off(db):
-    """Default warn-first (D1): all-dead → confirmed candidate, card NOT hidden."""
+async def test_all_dead_is_candidate_when_autohide_off(db, monkeypatch):
+    """Warn-first (D1): all-dead → confirmed candidate, card NOT hidden."""
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", False)
     lst = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
     sl = await _card(lst)
 
@@ -264,8 +265,9 @@ async def test_dry_run_computes_but_does_not_mutate(db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_singleton_group_dead_is_confirmed_candidate(db):
+async def test_singleton_group_dead_is_confirmed_candidate(db, monkeypatch):
     """A listing that never joined a dup-group (dup_group_id NULL) is a group of one."""
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", False)
     lst = await _listing(is_active=False, dup_group_id=None, url="https://nekretnine.rs/gone/")
     sl = await _card(lst)
 
@@ -285,8 +287,9 @@ async def test_empty_run_is_all_zero(db):
 
 
 @pytest.mark.asyncio
-async def test_district_falls_back_to_address_then_title(db):
+async def test_district_falls_back_to_address_then_title(db, monkeypatch):
     """D8 fix for the retention screenshot's «—»: district → address_raw → title."""
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", False)
     lst = await _listing(
         is_active=False, district=None, address_raw="Кнеза Милоша 10", title="Стан",
         url="https://nekretnine.rs/gone/",
@@ -539,3 +542,77 @@ async def test_hung_oldest_link_does_not_starve_next_same_source_run(db, monkeyp
         assert oldest.link_next_retry_at is not None
         assert oldest.link_status == 'INCONCLUSIVE'
         assert not oldest.is_active
+
+
+@pytest.mark.asyncio
+async def test_liveness_nightly_line_says_when_the_removal_alarm_withheld_hides(monkeypatch):
+    """Q3.21: auto-hide is on, but this night's removal alarm passed auto_hide=False → 🚨 line."""
+    from types import SimpleNamespace
+
+    import src.cli as cli_mod
+
+    monkeypatch.setattr(get_settings(), "site_liveness_enabled", True)
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    seen: dict[str, bool | None] = {}
+
+    async def fake_sweep(*, max_hides=None, auto_hide=None):
+        seen["auto_hide"] = auto_hide
+        return SimpleNamespace(
+            hidden=[], candidates_confirmed=[], candidates_unconfirmed=[],
+            kept_active=0, kept_pinned=0, errors=0, checked=0, skipped=0, source_errors=0,
+        )
+
+    monkeypatch.setattr("src.site.liveness.site_liveness_sweep", fake_sweep)
+    line = await cli_mod._liveness_nightly_line(notify=False, auto_hide=False)
+
+    assert seen["auto_hide"] is False
+    assert line.startswith("🚨 ") and "автоскрытие пропущено" in line
+
+
+@pytest.mark.asyncio
+async def test_autohide_off_wins_over_a_caller_asking_for_hides(db, monkeypatch):
+    """SITE_LIVENESS_AUTO_HIDE=0 is the kill switch: auto_hide=True from a caller cannot override."""
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", False)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
+    sl = await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})), auto_hide=True)
+
+    assert report.hidden == []
+    assert [c.site_listing_id for c in report.candidates_confirmed] == [sl]
+
+
+@pytest.mark.asyncio
+async def test_recent_dead_mark_from_another_run_is_probed_not_trusted(db, monkeypatch):
+    """The public detail run marks DEAD; the sweep must probe the listing before any auto-hide."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from src.db.models import Listing
+
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/back/")
+    await _card(lst)
+    async with get_session() as s:
+        await s.execute(update(Listing).where(Listing.id == lst).values(
+            link_status="DEAD", link_checked_at=datetime.now(UTC) - timedelta(hours=2),
+        ))
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/back/": 200})))
+
+    assert report.checked == 1  # probed, not reused from the mark
+    assert report.hidden == []
+
+
+@pytest.mark.asyncio
+async def test_caller_can_withhold_hides_for_one_sweep(db, monkeypatch):
+    """auto_hide=False keeps one sweep warn-only, e.g. on a night with a removal alarm."""
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+    lst = await _listing(is_active=False, url="https://nekretnine.rs/gone/")
+    sl = await _card(lst)
+
+    report = await site_liveness_sweep(client=_client(_by_path({"/gone/": 404})), auto_hide=False)
+
+    assert report.hidden == []
+    assert [c.site_listing_id for c in report.candidates_confirmed] == [sl]

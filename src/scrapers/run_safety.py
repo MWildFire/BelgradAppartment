@@ -170,3 +170,4 @@ def source_removal_alarm(*, deactivated: int, attempted: int) -> bool:
         deactivated > 0 and attempted >= ALARM_MIN_SAMPLE
         and deactivated / attempted > REMOVAL_ALARM_SHARE
     )
+
