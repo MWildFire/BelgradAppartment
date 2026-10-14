@@ -134,3 +134,18 @@ Runtime — отдельные `offhost/runtime/<SHA>/{code,venv}` из точн
 гарантирует копию моложе 36 часов. Просрочку определяют по исходной дате последнего
 подтверждённого поколения. Начатое 10 сентября поколение `20260910-080628-2989418e`
 прервано по просьбе пользователя: не принято, собственный source staging штатно удалён runner. Для продолжения нужна новая source копия.
+
+## Sanitized-копия: пин ревизии прода (с 14.10.2026)
+
+Снимок на сервере требует, чтобы `release.json.revision` совпадал с `SOURCE_REVISION`
+в `scripts/sanitized_contract.py`. **После каждого выката** нужен PR: новый `SOURCE_REVISION`
+(полный SHA ревизии прода), пересчитанный `HELPER_SET_SHA256` в `scripts/sanitized_helper_pin.py`
+и деплой нового набора `scripts/` на сервер в каталог `/tmp/otz-sanitized-tools-<8 hex>/`
+(владелец `otz`, каталоги 755, файлы 644). Иначе сервер откажет `source_revision_changed`
+или `remote_helper_digest_mismatch`; приёмник причину не показывает — локально виден только `sanitized_backup_failed`.
+Поколения, снятые при старом пине, проверяются кодом своей эпохи (`git checkout` ревизии с тем пином).
+Запись `resume/<GEN>.json` в состоянии `requested` после быстрого отказа блокирует новые запуски.
+Снять её может только `resolve-requested --decision abandon` и только когда на сервере нет
+снимка (`snapshot_absent`); это решение оператора-владельца.
+Ключ к проду — `~/.ssh/rentbelgrad-offhost/rentbelgrad-backup-key` на машине оператора,
+частный корень копий — `~/Backups/RentBelgrad/offhost/data-only/sanitized-v1`.
