@@ -520,14 +520,26 @@ def monitor(no_backfill: bool) -> None:
 
 @cli.command("subscription-bot")
 def subscription_bot() -> None:
-    """C2 — run the Telegram linking daemon for saved-search subscriptions (long-polling).
+    """C2 legacy name: runs the unified `otz bot` daemon (if SUBSCRIPTION_BOT_ENABLED=1).
 
-    Listens for /start sub_<token> and links the sender's chat to the subscription. Config-gated:
-    when SUBSCRIPTION_BOT_ENABLED=0 (default) the command no-ops. Runs forever until interrupted.
+    A bot token allows only one poller, so /start subscription linking now lives in
+    `otz bot` together with /clean. Runs forever until interrupted.
     """
     from src.telegram.subscription_bot import run_subscription_bot
 
     run_cooperatively(run_subscription_bot())
+
+
+@cli.command("bot")
+def bot() -> None:
+    """Unified RentFinderBot long-polling daemon: /clean (platform marks) + /start subscriptions.
+
+    WATERMARK_BOT_ENABLED and SUBSCRIPTION_BOT_ENABLED decide what runs; with both off the
+    command exits immediately. Unit: deploy/otz-bot.service.
+    """
+    from src.telegram.bot_daemon import run_bot_daemon
+
+    run_cooperatively(run_bot_daemon())
 
 
 @cli.command("notify-subscriptions")
