@@ -130,6 +130,33 @@ async def _send_album_with_floodwait(bot: Bot, chat_id: int, media: list[InputMe
         return await send()
 
 
+async def _clean_delivery_paths(match_id: int, photo_paths: list[Path]) -> list[Path]:
+    """Swap in watermark-free copies (WATERMARK_CLEAN_ON_DELIVERY); originals on any problem."""
+    import asyncio
+
+    from src.watermark.store import ensure_clean
+
+    def _clean_all() -> list[Path]:
+        out: list[Path] = []
+        for path in photo_paths:
+            result = ensure_clean(str(path))
+            best = result.best if result is not None else path
+            # A re-encoded copy must not break the Bot API 10 MB limit the original passed.
+            if best != path and best.stat().st_size > BOT_PHOTO_LIMIT_BYTES:
+                best = path
+            out.append(best)
+        return out
+
+    try:
+        return await asyncio.to_thread(_clean_all)
+    except Exception:
+        logger.warning(
+            "[bot_delivery] match=%d watermark cleaning failed — sending originals",
+            match_id, exc_info=True,
+        )
+        return photo_paths
+
+
 async def send_match_via_bot(
     match_id: int,
     *,
@@ -187,6 +214,11 @@ async def send_match_via_bot(
             raise BotDeliveryError(f"Match {match_id}: no inbound photos on disk")
         if any(not p.is_file() for p in photo_paths):
             raise BotDeliveryError(f"Match {match_id}: missing inbound photo files")
+
+    if saved_payload is None and get_settings().watermark_clean_on_delivery:
+        # First send only: the frozen payload then records the clean copies, so retries and
+        # /clean see the same album. Any cleaning failure sends the originals instead.
+        photo_paths = await _clean_delivery_paths(match_id, photo_paths)
 
     rendered_text = (
         post_text_override

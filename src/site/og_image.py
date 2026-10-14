@@ -93,7 +93,9 @@ def _photo_file(photos: list[str]) -> Path | None:
     candidate = root / rel
     try:
         if candidate.is_file():
-            return candidate
+            from src.watermark.store import site_source
+
+            return site_source(candidate)
     except OSError:
         return None
     return None
