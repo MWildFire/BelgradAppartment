@@ -1,8 +1,10 @@
 """Nightly summary alarm levels.
 
-Item errors below half of the items a source processed, and budget skips, are warnings (⚠️).
-At least half of them make the source degraded, and a degraded source fails the night (PR #6,
-owner decision Q3.16). Source-level failures, skipped link checks and failed steps stay alarms (🚨).
+Item errors below half of the items a source processed, budget skips, and the expected rolling
+source limits (TimeoutError, NoProxyAvailableError, source_budget_exhausted) are warnings (⚠️).
+At least half of the items failing makes the source degraded, and that fails the night (PR #6,
+owner decision Q3.16). Skipped pages and anti-bot coverage gaps do not (Q3.9). Unexpected
+source-level failures, mass removals, skipped link checks and failed steps stay alarms (🚨).
 """
 
 from __future__ import annotations
@@ -193,7 +195,7 @@ def test_real_item_errors_degrade_the_source_and_fail_the_night():
     """Pins the item-error policy with real ScrapeResult objects, not SimpleNamespace fakes.
 
     Item errors at least half of the processed items make the source "degraded" (run_safety
-    evaluate_source, reason item_error_rate), and _nightly_unhealthy fails the night on "degraded".
+    evaluate_source, reason item_error_rate), and _nightly_unhealthy fails the night on that reason.
     """
     healthy = dict(
         dead=[], low_coverage=[], parse_degraded=[], sweep_reasons=[],
@@ -383,7 +385,10 @@ async def test_night_with_expected_anti_bot_gaps_does_not_fail(db, heal_rolling_
 
 
 def test_skipped_pages_alone_do_not_fail_the_night():
-    """Skipped pages still show ⚠️ «Частичный обход» in the summary; by themselves they pass."""
+    """Skipped pages are a partial walk (Q3.9): by themselves they do not fail the night.
+
+    The ⚠️ «Частичный обход» line is written by _nightly_refresh_impl and is not checked here.
+    """
     assert not _unhealthy([_source(skipped_pages=1, pages_failed=1)])
 
 
@@ -394,6 +399,10 @@ def test_skipped_pages_alone_do_not_fail_the_night():
     pytest.param({"crawl_complete": False, "previewed": 5, "site_total": 0}, id="zero_denominator"),
     pytest.param({"quality_reasons": ["parse_degraded"]}, id="other_quality_reason"),
     pytest.param({"previewed": 10, "fetched": 0, "errors": 1}, id="failed"),
+    pytest.param({"denominator_trusted": False, "site_total": -1}, id="negative_denominator"),
+    pytest.param({"stop_reason": "item_limit"}, id="item_limit"),
+    pytest.param({"observed_ids": _ids(50)}, id="missing_presence_evidence"),
+    pytest.param({"pages_attempted": 0}, id="missing_page_evidence"),
 ])
 def test_real_source_failures_fail_the_night(source):
     assert _unhealthy([_source(**source)])

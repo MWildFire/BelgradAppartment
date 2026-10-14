@@ -48,6 +48,40 @@ async def test_all_item_errors_fail_even_with_previews(monkeypatch, tmp_path):
     forbidden.assert_not_called()
 
 
+async def test_price_drop_step_failure_fails_the_night(monkeypatch, tmp_path):
+    """A failing price-drop step prints 🚨 in the summary, and that 🚨 line fails the night."""
+    import src.jobs.run_history as history
+
+    healthy = [
+        ScrapeResult(
+            platform=p, previewed=10, fetched=10, full_crawl=True, crawl_complete=True,
+            denominator_trusted=True, site_total=10, pages_attempted=1, stop_reason="complete",
+            observed_ids={str(number) for number in range(10)},
+        )
+        for p in commands.SCRAPERS
+    ]
+    monkeypatch.setattr(commands, "_run_all", AsyncMock(return_value=healthy))
+    monkeypatch.setattr(
+        commands,
+        "_run_nightly_steps",
+        AsyncMock(return_value=commands.NightlyStepsResult([], [], [])),
+    )
+    for name in ("_liveness_nightly_line", "_analytics_nightly_line", "_dupes_report_nightly_line"):
+        monkeypatch.setattr(commands, name, AsyncMock(return_value="ok"))
+    monkeypatch.setattr(commands, "_open_userbot_if_needed", AsyncMock(side_effect=AssertionError))
+    monkeypatch.setattr(history.get_settings(), "data_dir", tmp_path)
+
+    monkeypatch.setattr(commands, "_build_price_drop_alerts", AsyncMock(return_value=([], None)))
+    await commands._nightly_refresh(1, 3, True, False, no_notify=True)  # healthy night exits 0
+
+    monkeypatch.setattr(
+        commands, "_build_price_drop_alerts", AsyncMock(side_effect=RuntimeError("boom")),
+    )
+    with pytest.raises(SystemExit) as exc:
+        await commands._nightly_refresh(1, 3, True, False, no_notify=True)
+    assert exc.value.code == 1
+
+
 @pytest.mark.parametrize("skipped", [0, 3])
 async def test_link_budget_skips_control_nightly_exit_and_durable_status(
     monkeypatch, tmp_path, skipped

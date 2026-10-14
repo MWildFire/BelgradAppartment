@@ -1612,8 +1612,10 @@ async def _nightly_refresh(
             finish_refresh(token, error=error)
 
 
-# Source errors the night survives (Q3.9): the budget ran out, a page timed out, or anti-bot blocks
-# used up the proxy pool. Any other class is a real source failure and stays 🚨.
+# Source errors the night survives (Q3.9): the source's time budget ran out, or anti-bot blocks
+# used up the proxy pool. Any other class is a real source failure and stays 🚨. Matching is by
+# exception class name, as freshness.py records it: a TimeoutError raised outside the budget
+# (for example, a browser start) matches as well.
 _EXPECTED_SOURCE_LIMITS = frozenset({
     "TimeoutError", "NoProxyAvailableError", "source_budget_exhausted",
 })
@@ -1636,8 +1638,9 @@ def _source_fails_night(result) -> bool:
 def _nightly_unhealthy(*, dead, low_coverage, parse_degraded, sweep_reasons,
                        maintenance_failed, results) -> bool:
     """Exit 1 only for real failures (Q3.9): a dead platform, coverage under 70%, a broken parser,
-    a failed sweep, a 🚨 line (failed step, public run, mass removal, unexpected source error) or a
-    failed source. Item errors (⚠️ Ошибки: N) and skipped pages stay warnings in the summary.
+    a failed sweep, a 🚨 line (failed step, public run, mass removal, unexpected source error), or
+    a source that failed or degraded for a reason outside an expected gap (_source_fails_night).
+    Item errors (⚠️ Ошибки: N) and skipped pages stay warnings in the summary.
     """
     return bool(dead or low_coverage or parse_degraded or sweep_reasons or maintenance_failed
                 or any(_source_fails_night(r) for r in results))
@@ -1852,7 +1855,7 @@ async def _nightly_refresh_impl(
     if incremental:
         lines.append("ℹ️ Daily incremental run: stale sweep deferred to weekly full refresh")
     maintenance_failed = any("🚨" in line for line in [
-        *steps.summary_lines, liveness_line, analytics_line, dupes_line,
+        *steps.summary_lines, price_line or "", liveness_line, analytics_line, dupes_line,
     ])
     unhealthy = _nightly_unhealthy(
         dead=dead, low_coverage=low_coverage, parse_degraded=parse_degraded,
