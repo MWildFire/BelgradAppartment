@@ -62,6 +62,23 @@ def _holds(at: datetime, now: datetime) -> bool:
     return now - at < timedelta(hours=GUARD_HOURS)
 
 
+FRESH_ALARM_HOURS = 24
+
+
+def fresh_alarm(state_dir: Path, step: str, *, now: datetime) -> tuple[str, datetime] | None:
+    """The step's alarm or failure written in the last FRESH_ALARM_HOURS, else None.
+
+    The nightly after a public-run alarm reports it once with 🚨 (the night fails); later
+    nights inside GUARD_HOURS only hold the hides (⚠️ when auto-hide is on)."""
+    held = _load(_path(state_dir, step))
+    if held is None or held[0] not in (ALARM, FAILED):
+        return None
+    status, at = held
+    if timedelta(0) <= now - at < timedelta(hours=FRESH_ALARM_HOURS):
+        return status, at
+    return None
+
+
 def write_step(
     state_dir: Path, step: str, *, status: str, now: datetime,
     deactivated: int = 0, attempted: int = 0,

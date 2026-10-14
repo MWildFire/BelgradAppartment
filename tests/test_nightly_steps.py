@@ -880,6 +880,68 @@ async def test_public_alarm_holds_the_nights_hides(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("auto_hide", [False, True])
+async def test_fresh_public_alarm_adds_one_nightly_alarm_line(monkeypatch, tmp_path, auto_hide):
+    """R02: a public run's alarm from the last 24 h gets its own 🚨 line, whatever auto-hide says."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import removal_guard
+
+    _nightly_settings(monkeypatch, detail_refresh=0)
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", auto_hide)
+    removal_guard.write_step(
+        tmp_path / "state", "public", status="alarm", now=datetime.now(UTC) - timedelta(hours=2),
+    )
+    _canned_step_stubs(monkeypatch)
+
+    result = await _run_nightly_steps()
+
+    public_lines = [line for line in result.summary_lines if "публичный прогон" in line]
+    assert len(public_lines) == 1
+    assert public_lines[0].startswith("🚨") and "массовое снятие" in public_lines[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_hide", [False, True])
+async def test_fresh_public_failure_adds_one_nightly_alarm_line(monkeypatch, tmp_path, auto_hide):
+    """R02: a public run that crashed 2 h ago gets its own 🚨 line, whatever auto-hide says."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+    from src.scrapers import removal_guard
+
+    _nightly_settings(monkeypatch, detail_refresh=0)
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", auto_hide)
+    removal_guard.write_step(
+        tmp_path / "state", "public", status="failed", now=datetime.now(UTC) - timedelta(hours=2),
+    )
+    _canned_step_stubs(monkeypatch)
+
+    result = await _run_nightly_steps()
+
+    public_lines = [line for line in result.summary_lines if "публичный прогон" in line]
+    assert len(public_lines) == 1
+    assert public_lines[0].startswith("🚨") and "шаг упал" in public_lines[0]
+
+
+@pytest.mark.asyncio
+async def test_public_alarm_older_than_a_day_adds_no_nightly_alarm_line(monkeypatch, tmp_path):
+    """R02: a 25 h old public alarm still holds the hides (Q3.21), but no longer fails the night."""
+    from src.cli import _run_nightly_steps
+    from src.scrapers import removal_guard
+
+    _nightly_settings(monkeypatch, detail_refresh=0)
+    removal_guard.write_step(
+        tmp_path / "state", "public", status="alarm", now=datetime.now(UTC) - timedelta(hours=25),
+    )
+    _canned_step_stubs(monkeypatch)
+
+    result = await _run_nightly_steps()
+
+    assert not any("публичный прогон" in line for line in result.summary_lines)
+    assert result.removal_alarm is True
+
+
+@pytest.mark.asyncio
 async def test_rolling_alarm_reaches_the_verify_hides(monkeypatch, tmp_path):
     """Q3.21: the rolling refresh's mass-removal alarm holds the guard for the verify pass."""
     from datetime import UTC, datetime

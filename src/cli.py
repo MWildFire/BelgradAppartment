@@ -1876,7 +1876,8 @@ class NightlyStepsResult(NamedTuple):
     site_listings_hidden: int = 0
     # Q3.21: the removal guard holds every hide pass this night (an alarm, a failure, a missing or
     # unfinished step, or a clean record older than 26 h). With auto-hide on, a hold shows as ⚠️
-    # and never fails the night.
+    # and never fails the night. A public alarm or failure from the last 24 h adds its own 🚨
+    # line (see fresh_alarm).
     removal_alarm: bool = False
 
 
@@ -2139,8 +2140,15 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     else:
         click.echo("→ Embeddings prune disabled (NIGHTLY_PRUNE_EMBEDDINGS=0)")
 
+    now = datetime.now(UTC)
+    public = removal_guard.fresh_alarm(state_dir, "public", now=now)
+    if public is not None:
+        status, at = public
+        what = "массовое снятие" if status == removal_guard.ALARM else "шаг упал"
+        lines.append(f"🚨 публичный прогон {at:%d.%m %H:%M} UTC: {what} — ночь помечена сбоем; "
+                     "автоскрытие (если включено) удерживается 26 ч")
     removal_alarm = removal_guard.withholds_hides(
-        state_dir, now=datetime.now(UTC), steps=_guard_steps(settings, include_verify=True),
+        state_dir, now=now, steps=_guard_steps(settings, include_verify=True),
     )
     return NightlyStepsResult(summary_lines=lines, price_changes=price_changes, alerts=alerts,
                              site_listings_hidden=site_listings_hidden, removal_alarm=removal_alarm)
@@ -2806,8 +2814,9 @@ async def _refetch_details(
                 "проверь схему URL и парсер площадки"
             )
         # Source failures fail the public run; item errors and budget skips only warn. A mass
-        # removal only alarms here and holds the removal guard: with auto-hide on, the nights in
-        # the window warn (⚠️) and do not fail.
+        # removal only alarms here and holds the removal guard: the next nightly (within 24 h)
+        # reports it with 🚨 and fails — owner decision, exit 1 for a mass removal applies at
+        # night only; later nights in the 26 h window only warn (⚠️) when auto-hide is on.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())
