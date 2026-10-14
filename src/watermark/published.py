@@ -15,6 +15,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from src.config import get_settings
+from src.watermark.pipeline import NotAnImageError
 from src.watermark.store import ensure_clean, is_current, resolve_stored
 
 logger = logging.getLogger(__name__)
@@ -55,10 +56,18 @@ def pending(paths: list[str]) -> list[str]:
 
 
 def clean_batch(paths: list[str], *, force: bool = False) -> tuple[int, int]:
-    """ensure_clean for each path -> (photos that had marks, photos missing on disk)."""
+    """ensure_clean for each path -> (photos that had marks, photos missing on disk).
+
+    A file that is not a readable image is logged and skipped: one broken photo must not stop
+    the rest of the sweep (it would fail the same way on every run).
+    """
     changed = missing = 0
     for stored in paths:
-        result = ensure_clean(stored, force=force)
+        try:
+            result = ensure_clean(stored, force=force)
+        except NotAnImageError:
+            logger.warning("[watermark] not a readable image, skipped: %s", stored)
+            continue
         if result is None:
             missing += 1
         elif result.clean is not None:

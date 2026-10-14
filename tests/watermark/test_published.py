@@ -76,6 +76,10 @@ def _cleaned(paths: list[str]) -> bool:
     return all(store.clean_or_original(Path(p)) != Path(p).resolve() for p in paths)
 
 
+def _corrupt(stored: str) -> None:
+    Path(stored).write_bytes(b"not a photo")
+
+
 async def test_sweep_cleans_public_photos_once(db, inbound):
     public = await _apartment(inbound, 31, public=True)
     hidden = await _apartment(inbound, 32, public=False)
@@ -83,6 +87,14 @@ async def test_sweep_cleans_public_photos_once(db, inbound):
     assert _cleaned(public)
     assert published.pending(hidden) == hidden  # apartments not on the site are left alone
     assert await published.sweep_once() == 0
+
+
+async def test_sweep_skips_undecodable_photo(db, inbound):
+    broken = await _apartment(inbound, 36, public=True)
+    _corrupt(broken[0])
+    valid = await _apartment(inbound, 37, public=True)
+    await published.sweep_once()  # one broken file must not stop the sweep
+    assert _cleaned(valid)
 
 
 def test_wm_revert_keeps_the_original(inbound, monkeypatch):
