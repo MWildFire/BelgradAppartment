@@ -1,0 +1,31 @@
+{
+  "id": "cityexpert_center",
+  "platform": "cityexpert",
+  "title": "CityExpert — логотип по центру",
+  "opacity": [
+    0.2,
+    0.2,
+    0.2
+  ],
+  "strategy": "reverse_blend",
+  "inpaint_backend": "telea",
+  "lama_fallback": "telea",
+  "ref_width": 1920,
+  "scale_mode": "width",
+  "instances": [
+    {
+      "anchor": "center",
+      "dx": -876.8,
+      "dy": -174.2
+    }
+  ],
+  "scale_search": [
+    0.97,
+    1.0,
+    1.03
+  ],
+  "pos_tol": 0.02,
+  "min_score": 0.14,
+  "width": 1759,
+  "height": 349
+}
