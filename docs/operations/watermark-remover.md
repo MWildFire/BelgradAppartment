@@ -83,6 +83,8 @@ sudo -u otz bash -c 'cd /opt/otz && rm -rf /tmp/wm-qa-in /tmp/wm-qa-out && mkdir
 3. Проверка: `systemctl is-active otz-bot` → `active`; в `/var/log/otz/bot.log` есть
    `long-polling started` и нет `TelegramConflictError`. В личке бота `/clean` → подсказка;
    ответ `/clean` на последний альбом кандидата → альбом без знаков с подписью «🧽 Готово…».
+4. Откат: `WATERMARK_BOT_ENABLED=false` и `sudo systemctl disable --now otz-bot`. Если нужны
+   подписки, демон не выключать: оставить его с выключенным флагом знаков.
 
 `SUBSCRIPTION_BOT_ENABLED=true` (если когда-то включат подписки в Telegram) обслуживает тот же
 `otz-bot`.
@@ -97,14 +99,17 @@ sudo -u otz bash -c 'cd /opt/otz && rm -rf /tmp/wm-qa-in /tmp/wm-qa-out && mkdir
 ### Этап 3 — сайт без знаков
 
 1. `WATERMARK_SITE_USE_CLEAN=true`, затем
-   `sudo systemctl restart otz-site otz-admin otz-monitor otz-bot`.
-2. Разово: `wm-clean-published --dry-run` (сколько фото), потом `wm-clean-published`.
-   Дальше новые публикации бот дочищает сам раз в 10 минут (нужен этап 1).
+   `sudo systemctl restart otz-site otz-admin otz-monitor`. По желанию `wm-clean-published --dry-run`
+   покажет объём работы.
+2. `sudo systemctl restart otz-bot`: его проход сам почистит фото и пересоберёт превью (прогресс —
+   в `/var/log/otz/bot.log`). Ручной `wm-clean-published` одновременно с ботом не запускать: две
+   модели LaMa занимают ≈ 2,2 ГБ. Если он нужен, сначала остановите `otz-bot`. Дальше новые
+   публикации бот дочищает сам раз в 10 минут (нужен этап 1).
 3. Cloudflare: Caddy отдаёт `/photos/*` с `no-store`, но если в Cache Rules для `/photos/*`
    включён «Cache Everything» с Edge TTL, сделать Purge by prefix `rentbelgrad.com/photos/`,
    иначе до недели будут видны старые картинки.
 4. Плохая чистка у конкретной квартиры: `wm-revert <match_id>`.
-5. Полный откат: флаг `false` + рестарт тех же сервисов. Уже пересобранные превью остаются
+5. Полный откат: флаг `false` + `sudo systemctl restart otz-site otz-admin otz-monitor otz-bot`. Уже пересобранные превью остаются
    чистыми (это безвредно); для конкретных квартир — `wm-revert`.
 
 ## Диагностика
