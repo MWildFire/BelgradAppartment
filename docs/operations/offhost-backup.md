@@ -143,9 +143,15 @@ Runtime — отдельные `offhost/runtime/<SHA>/{code,venv}` из точн
 и деплой нового набора `scripts/` на сервер в каталог `/tmp/otz-sanitized-tools-<8 hex>/`
 (владелец `otz`, каталоги 755, файлы 644). Иначе сервер откажет `source_revision_changed`
 или `remote_helper_digest_mismatch`; приёмник причину не показывает — локально виден только `sanitized_backup_failed`.
-Поколения, снятые при старом пине, проверяются кодом своей эпохи (`git checkout` ревизии с тем пином).
-Запись `resume/<GEN>.json` в состоянии `requested` после быстрого отказа блокирует новые запуски.
-Снять её может только `resolve-requested --decision abandon` и только когда на сервере нет
-снимка (`snapshot_absent`); это решение оператора-владельца.
+До мержа PR с новым пином и деплоя набора разберите старое состояние кодом старой эпохи
+(`git checkout` ревизии с прежним пином; для этого PR — `91d6676`): записи `resume/` приватного
+корня и снимок на сервере, снятый под старым пином; старый каталог набора на сервере до этого
+не удалять. Новый код их не примет: `resume_record_mismatch` при resume, `helper_pin_mismatch`
+при `resolve-requested`, `unresolved_resume_record` при любом новом запуске,
+`source_revision_or_schema_changed` при `discard-snapshot`. Поколения старого пина новый код
+отклоняет как `source_revision_changed`: проверяйте их кодом своей эпохи.
+Запись `resume/<GEN>.json` в состоянии `requested` после любого сбоя вызова снимка блокирует
+новые запуски; снять её может только `resolve-requested --decision abandon`, и только когда на
+сервере нет снимка (`snapshot_absent`). Это решение оператора-владельца.
 Ключ к проду — `~/.ssh/rentbelgrad-offhost/rentbelgrad-backup-key` на машине оператора,
 частный корень копий — `~/Backups/RentBelgrad/offhost/data-only/sanitized-v1`.
