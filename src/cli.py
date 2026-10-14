@@ -1050,11 +1050,12 @@ async def _liveness_nightly_line(
             broken = probe_sweep_broken(checked=checked, failed=errors - source_errors)
         else:
             broken = source_errors > 0
-        # Setting on, but this night's removal alarm withheld the hides: say so, loudly.
+        # Setting on, but the removal guard withheld the hides: a warning, the night still passes.
+        # Only a broken sweep is an alarm (🚨 makes the night fail).
         gated = get_settings().site_liveness_auto_hide and not auto_hide
-        prefix = "🚨 " if broken or gated else ("⚠️ " if errors else "")
+        prefix = "🚨 " if broken else ("⚠️ " if errors or gated else "")
         if gated:
-            note += ", автоскрытие пропущено: тревога или сбой этой ночью"
+            note += ", автоскрытие отложено: тревога, сбой или незавершённый шаг в окне 26 ч"
         note += (f", проверок {checked}, "
                  f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
@@ -1873,7 +1874,10 @@ class NightlyStepsResult(NamedTuple):
     price_changes: list[PriceChange]  # W2-C2 contract for the Wave-3 price-drop alert
     alerts: list[str]  # standalone 🚨 messages (must not drown in the summary)
     site_listings_hidden: int = 0
-    removal_alarm: bool = False  # Q3.21: a removal alarm this night gates every hide pass
+    # Q3.21: the removal guard holds every hide pass this night (an alarm, a failure, a missing or
+    # unfinished step, or a clean record older than 26 h). With auto-hide on, a hold shows as ⚠️
+    # and never fails the night.
+    removal_alarm: bool = False
 
 
 def _guard_steps(settings, *, include_verify: bool) -> tuple[str, ...]:
@@ -2033,9 +2037,12 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             site_listings_hidden = vl.site_listings_hidden
             if vl.site_listings_hidden:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
-            if vl.hides_withheld:
-                line += (f", 🚨 автоскрытие пропущено: {vl.hides_withheld} объявлений — "
-                         "тревога или сбой этой ночью")
+            if getattr(vl, "removal_alarm", False):
+                line += (f", 🚨 массовое снятие ссылок: {vl.deactivated} — "
+                         "автоскрытие этой ночью не выполняется")
+            elif vl.hides_withheld:
+                line += (f", ⚠️ автоскрытие отложено: {vl.hides_withheld} объявлений "
+                         "(тревога, сбой или незавершённый шаг в окне 26 ч)")
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
             # Most probes failing (network down, blocked) is an outage: the sweep cannot confirm
@@ -2799,7 +2806,8 @@ async def _refetch_details(
                 "проверь схему URL и парсер площадки"
             )
         # Source failures fail the public run; item errors and budget skips only warn. A mass
-        # removal only alarms here: owner decision, exit 1 for it applies at night only.
+        # removal only alarms here and holds the removal guard: with auto-hide on, the nights in
+        # the window warn (⚠️) and do not fail.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())

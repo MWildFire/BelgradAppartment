@@ -22,6 +22,7 @@ ALARM = "alarm"
 FAILED = "failed"
 UNREADABLE = "unreadable"
 _HOLDING = (ALARM, FAILED, UNREADABLE)
+_KNOWN = (RUNNING, CLEAN, ALARM, FAILED)  # the statuses write_step writes
 
 log = logging.getLogger(__name__)
 
@@ -31,11 +32,14 @@ def _path(state_dir: Path, step: str) -> Path:
 
 
 def _load(path: Path) -> tuple[str, datetime] | None:
-    """The status and time of a record. Missing gives None; unreadable gives UNREADABLE with the
-    file's modification time, so it holds like an alarm inside the window."""
+    """The status and time of a record. Missing gives None; unreadable, or with no known status,
+    gives UNREADABLE with the file's modification time, so it holds like an alarm in the window."""
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
+        status = record["status"]
         at = datetime.fromisoformat(record["at"])
+        if status not in _KNOWN:
+            raise ValueError(f"unknown removal-guard status {status!r}")
     except FileNotFoundError:
         return None
     except (OSError, ValueError, KeyError, TypeError):
@@ -45,7 +49,7 @@ def _load(path: Path) -> tuple[str, datetime] | None:
             return None
     if at.tzinfo is None:
         at = at.replace(tzinfo=UTC)
-    return str(record["status"]), at
+    return status, at
 
 
 def _within(at: datetime, now: datetime) -> bool:

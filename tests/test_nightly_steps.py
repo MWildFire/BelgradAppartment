@@ -822,7 +822,37 @@ async def test_run_nightly_steps_reports_withheld_hides_as_alarm(monkeypatch):
     lines, _price_changes, _alerts, hidden, alarm = await _run_nightly_steps()
 
     assert hidden == 0 and alarm is True
-    assert any("автоскрытие пропущено: 6" in line for line in lines)
+    assert any("🚨" in line and "массовое снятие ссылок: 6" in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_withheld_hides_without_an_alarm_warn_and_do_not_alarm(monkeypatch):
+    """Q3.21: hides held by a missing or unfinished step are ⚠️ on the links line, never 🚨."""
+    from src.cli import _run_nightly_steps
+    from src.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "nightly_heal_limit", 0)
+    monkeypatch.setattr(settings, "nightly_detail_refresh", 0)
+    monkeypatch.setattr(settings, "nightly_prune_embeddings", False)
+    monkeypatch.setattr(settings, "nightly_metrics", False)
+    monkeypatch.setattr(settings, "nightly_verify_links", True)
+    monkeypatch.setattr(settings, "nightly_auto_publish", False)
+    _canned_step_stubs(monkeypatch)
+
+    async def verify_withheld(
+        *, limit=None, deadline=None, platform=None, client=None, hides_allowed=True, guard_dir=None,
+    ):
+        return orchestrator.LinkVerifyStats(checked=10, hides_withheld=6, removal_alarm=False)
+
+    monkeypatch.setattr(orchestrator, "verify_active_links", verify_withheld)
+
+    lines, _price_changes, _alerts, hidden, _alarm = await _run_nightly_steps()
+
+    links_line = next(line for line in lines if "ссылки:" in line)
+    assert hidden == 0
+    assert "⚠️ автоскрытие отложено: 6" in links_line
+    assert "🚨" not in links_line
 
 
 @pytest.mark.asyncio

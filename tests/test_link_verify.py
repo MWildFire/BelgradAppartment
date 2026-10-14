@@ -867,6 +867,25 @@ async def test_night_gate_withholds_hides_after_an_alarm_in_an_earlier_step(fact
 
 
 @pytest.mark.asyncio
+async def test_night_gate_with_auto_hide_off_withholds_nothing_to_count(factory, monkeypatch):
+    from src.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", False)
+    lid = await _seed_listing(
+        factory, url="https://nekretnine.rs/gone/", site_listing=True, site_public=True,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    stats = await verify_active_links(client=_client(handler), hides_allowed=False)
+
+    assert stats.deactivated == 1
+    assert stats.site_listings_hidden == 0 and stats.hides_withheld == 0
+    assert await _site_state(factory, lid) == (True, False)
+
+
+@pytest.mark.asyncio
 async def test_verify_records_its_outcome_for_the_removal_guard(factory, tmp_path):
     import json
 

@@ -40,7 +40,7 @@ _N = itertools.count(1)
 def test_liveness_config_defaults() -> None:
     s = Settings()
     assert s.site_liveness_enabled is True
-    assert s.site_liveness_auto_hide is True  # D1 — Q3.21: hide, with the removal-alarm gate
+    assert s.site_liveness_auto_hide is False  # D1 — warn-first; the server turns hides on later
     assert s.site_liveness_max_hides == 10  # D3
     assert s.nightly_dupes_write is True  # D2
 
@@ -546,7 +546,7 @@ async def test_hung_oldest_link_does_not_starve_next_same_source_run(db, monkeyp
 
 @pytest.mark.asyncio
 async def test_liveness_nightly_line_says_when_the_removal_alarm_withheld_hides(monkeypatch):
-    """Q3.21: auto-hide is on, but this night's removal alarm passed auto_hide=False → 🚨 line."""
+    """Q3.21: auto-hide is on, but the removal guard held the hides (auto_hide=False) → ⚠️ line."""
     from types import SimpleNamespace
 
     import src.cli as cli_mod
@@ -566,7 +566,30 @@ async def test_liveness_nightly_line_says_when_the_removal_alarm_withheld_hides(
     line = await cli_mod._liveness_nightly_line(notify=False, auto_hide=False)
 
     assert seen["auto_hide"] is False
-    assert line.startswith("🚨 ") and "автоскрытие пропущено" in line
+    assert line.startswith("⚠️ ") and "автоскрытие отложено" in line
+    assert "🚨" not in line
+
+
+@pytest.mark.asyncio
+async def test_broken_liveness_sweep_stays_a_loud_line_when_hides_are_withheld(monkeypatch):
+    """A sweep that broke is 🚨 whether or not the removal guard also withheld the hides."""
+    from types import SimpleNamespace
+
+    import src.cli as cli_mod
+
+    monkeypatch.setattr(get_settings(), "site_liveness_enabled", True)
+    monkeypatch.setattr(get_settings(), "site_liveness_auto_hide", True)
+
+    async def fake_sweep(*, max_hides=None, auto_hide=None):
+        return SimpleNamespace(
+            hidden=[], candidates_confirmed=[], candidates_unconfirmed=[],
+            kept_active=0, kept_pinned=0, errors=2, checked=0, skipped=0, source_errors=2,
+        )
+
+    monkeypatch.setattr("src.site.liveness.site_liveness_sweep", fake_sweep)
+    line = await cli_mod._liveness_nightly_line(notify=False, auto_hide=False)
+
+    assert line.startswith("🚨 ")
 
 
 @pytest.mark.asyncio

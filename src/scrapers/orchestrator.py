@@ -1083,7 +1083,8 @@ async def verify_active_links(
     stats.skipped = len(rows) - stats.checked
 
     # Q3.21 guard: a run that trips the removal alarm, or a night that did, hides nothing.
-    # NIGHTLY_AUTO_HIDE_SITE_LISTINGS=0 (the X2 kill switch) skips the pass without counting it.
+    # NIGHTLY_AUTO_HIDE_SITE_LISTINGS=0 (the X2 kill switch) and SITE_LIVENESS_AUTO_HIDE=0 skip the
+    # pass without counting it.
     stats.removal_alarm = source_removal_alarm(
         deactivated=stats.deactivated, attempted=stats.checked,
     )
@@ -1093,7 +1094,8 @@ async def verify_active_links(
             status=removal_guard.ALARM if stats.removal_alarm else removal_guard.CLEAN,
             now=datetime.now(UTC), deactivated=stats.deactivated, attempted=stats.checked,
         )
-    hide_pass = bool(dead_ids) and not dry_run and get_settings().nightly_auto_hide_site_listings
+    hide_pass = (bool(dead_ids) and not dry_run and get_settings().nightly_auto_hide_site_listings
+                 and get_settings().site_liveness_auto_hide)
     if hide_pass and (stats.removal_alarm or not hides_allowed):
         stats.hides_withheld = len(dead_ids)
     elif hide_pass:

@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.scrapers import removal_guard as guard
 
 NOW = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
@@ -96,3 +98,23 @@ def test_an_unreadable_record_holds_for_the_window_then_releases(tmp_path):
     later = NOW + timedelta(hours=guard.GUARD_HOURS)
     guard.write_step(tmp_path, "public", status=guard.CLEAN, now=later)
     assert guard.withholds_hides(tmp_path, now=later, steps=("public",)) is False
+
+
+@pytest.mark.parametrize("record", [
+    {"at": NOW.isoformat()},
+    {"at": NOW.isoformat(), "status": None},
+    {"at": NOW.isoformat(), "status": "weird"},
+])
+def test_a_record_without_a_known_status_holds_instead_of_raising(tmp_path, record):
+    import json
+    import os
+
+    for step in STEPS:
+        _write(tmp_path, step, guard.CLEAN)
+    path = tmp_path / "removal_guard" / "verify.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    recent = (NOW - timedelta(hours=1)).timestamp()
+    os.utime(path, (recent, recent))
+    assert guard.withholds_hides(tmp_path, now=NOW, steps=STEPS) is True
+    guard.write_step(tmp_path, "verify", status=guard.CLEAN, now=NOW)
+    assert json.loads(path.read_text(encoding="utf-8")) == record
