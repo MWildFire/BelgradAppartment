@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
 import src.watermark.store as store
-from src.config import get_settings
+from src.config import PROJECT_ROOT, get_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
 
@@ -90,3 +92,16 @@ def test_is_current_follows_sidecar_and_original(dirs):
     later = sidecar.stat().st_mtime_ns + 10_000_000
     os.utime(src, ns=(later, later))  # the original was replaced after cleaning
     assert not store.is_current(src)
+
+
+def test_store_and_site_imports_do_not_load_opencv():
+    """Without the watermark flags the site and admin must not import OpenCV (cv2)."""
+    probe = (
+        "import sys, src.watermark.store, src.site.photos, src.site.media, src.site.og_image; "
+        "print('cv2' in sys.modules)"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, check=True, timeout=120,
+    )
+    assert done.stdout.strip() == "False"

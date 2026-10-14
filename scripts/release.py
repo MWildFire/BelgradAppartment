@@ -936,7 +936,7 @@ def stage_runtime_environment(release, uv_bin):
         env=env,
     )
     new_python = release / "venv/bin/python"
-    run([str(new_python), "-c", "import sqlalchemy,playwright,torch,open_clip,fastapi"])
+    run([str(new_python), "-c", "import sqlalchemy,playwright,torch,open_clip,fastapi,cv2"])
     # Install under the actual service account/home, not root's cache or an assumed home.
     # Existing service environment overrides remain an operator configuration gate.
     import pwd

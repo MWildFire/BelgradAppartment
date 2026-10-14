@@ -18,7 +18,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.config import PROJECT_ROOT, get_settings
-from src.watermark.pipeline import clean_file
 
 STORE_VERSION = 1
 SIDECAR_SUFFIX = ".wm.json"
@@ -127,6 +126,10 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
             report=report if isinstance(report, dict) else {},
             reused=True,
         )
+
+    # lazy: keeps OpenCV out of the site and admin imports
+    from src.watermark.pipeline import clean_file
+
     report = clean_file(original, clean, quality=get_settings().watermark_jpeg_quality)
     if not report.changed and clean.exists():
         clean.unlink()  # stale copy from an older algorithm version
