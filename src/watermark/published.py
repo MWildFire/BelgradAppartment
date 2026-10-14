@@ -12,16 +12,24 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Any
 
 from src.config import get_settings
 from src.watermark.pipeline import NotAnImageError
-from src.watermark.store import ensure_clean, is_current, resolve_stored
+from src.watermark.store import (
+    clean_or_original,
+    ensure_clean,
+    is_current,
+    resolve_stored,
+    site_marker_for,
+)
 
 logger = logging.getLogger(__name__)
 
 SWEEP_INTERVAL_SECONDS = 600
 SWEEP_BATCH = 4
+SITE_VARIANT_BATCH = 20
 
 Runner = Callable[..., Awaitable[Any]]
 
@@ -75,6 +83,61 @@ def clean_batch(paths: list[str], *, force: bool = False) -> tuple[int, int]:
     return changed, missing
 
 
+def site_variant_files(stored: str) -> list[Path]:
+    """Site card/detail files of one photo; empty when the photo is not under photos_root()."""
+    from src.site.photos import VARIANT_WIDTHS, photos_root
+
+    original = resolve_stored(stored)
+    if original is None:
+        return []
+    root = photos_root()
+    try:
+        rel = original.relative_to(root).as_posix()
+    except ValueError:
+        return []
+    return [root / f"{rel}.{kind}.webp" for kind in VARIANT_WIDTHS]
+
+
+def _clean_copy(stored: str) -> Path | None:
+    original = resolve_stored(stored)
+    if original is None:
+        return None
+    clean = clean_or_original(original)
+    return None if clean == original else clean
+
+
+def needs_site_variants(stored: str) -> bool:
+    """A clean copy exists and the site variants are missing or older than it."""
+    clean = _clean_copy(stored)
+    if clean is None:
+        return False
+    marker = site_marker_for(clean)
+    return not marker.exists() or marker.stat().st_mtime_ns < clean.stat().st_mtime_ns
+
+
+def rebuild_site_variants(paths: list[str]) -> int:
+    """Rebuild the site variants that are older than the clean copy; returns the photo count.
+
+    process_photo alone misses a variant built from the original before the clean copy existed,
+    so the old variants are deleted first and a marker records each rebuild. No-op while
+    WATERMARK_SITE_USE_CLEAN is off.
+    """
+    from src.site.photos import generate_for_stored_paths
+
+    if not get_settings().watermark_site_use_clean:
+        return 0
+    todo = [stored for stored in paths if needs_site_variants(stored)]
+    for stored in todo:
+        for variant in site_variant_files(stored):
+            variant.unlink(missing_ok=True)
+    generate_for_stored_paths(todo)
+    for stored in todo:
+        clean = _clean_copy(stored)
+        if clean is not None:
+            site_marker_for(clean).touch()
+    return len(todo)
+
+
 async def _in_thread(func: Callable[..., Any], *args: Any) -> Any:
     return await asyncio.to_thread(func, *args)
 
@@ -82,13 +145,13 @@ async def _in_thread(func: Callable[..., Any], *args: Any) -> Any:
 async def sweep_once(run: Runner | None = None) -> int:
     """Clean new photos of public listings and refresh their site variants; returns their count."""
     runner = run or _in_thread
-    todo = await asyncio.to_thread(pending, await published_photo_paths())
+    paths = await published_photo_paths()
+    todo = await asyncio.to_thread(pending, paths)
     for start in range(0, len(todo), SWEEP_BATCH):
         await runner(clean_batch, todo[start : start + SWEEP_BATCH])
-    if todo and get_settings().watermark_site_use_clean:
-        from src.site.photos import generate_for_stored_paths
-
-        await asyncio.to_thread(generate_for_stored_paths, todo)
+    if get_settings().watermark_site_use_clean:
+        for start in range(0, len(paths), SITE_VARIANT_BATCH):
+            await runner(rebuild_site_variants, paths[start : start + SITE_VARIANT_BATCH])
     return len(todo)
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -11,6 +10,7 @@ from PIL import Image
 
 import src.site.photos as photos
 import src.watermark.cli as wm_cli
+import src.watermark.published as published
 from src.cli import cli
 from src.config import get_settings
 from src.site.media import _permitted_file
@@ -52,18 +52,27 @@ def _detail_has_marks(root: Path, rel: str) -> bool:
 def test_variants_come_from_clean_copy_only_with_flag(root, monkeypatch):
     orig = _marked_photo(root)
     rel = orig.relative_to(root).as_posix()
-    ensure_clean(str(orig))
     photos.process_photo(orig, rel, root)
     assert _detail_has_marks(root, rel)  # flag off -> variants come from the original
+    ensure_clean(str(orig))
     monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
-    clean = Path(get_settings().watermark_clean_dir) / rel
-    later = (root / f"{rel}.detail.webp").stat().st_mtime_ns + 10_000_000
-    os.utime(clean, ns=(later, later))  # clean copy is newer than the old variants
     _entry, generated, _skipped = photos.process_photo(orig, rel, root)
-    assert generated == 2
+    assert generated == 2  # the clean copy is newer than the old variants
     assert not _detail_has_marks(root, rel)
     _entry, generated, skipped = photos.process_photo(orig, rel, root)
     assert (generated, skipped) == (0, 2)  # idempotent again afterwards
+
+
+def test_clean_copy_older_than_variants_is_rebuilt(root, monkeypatch):
+    orig = _marked_photo(root)
+    rel = orig.relative_to(root).as_posix()
+    ensure_clean(str(orig))
+    photos.process_photo(orig, rel, root)  # flag off: variants from the original, marks visible
+    assert _detail_has_marks(root, rel)
+    monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
+    assert published.rebuild_site_variants([str(orig)]) == 1  # clean copy is older than variants
+    assert not _detail_has_marks(root, rel)
+    assert published.rebuild_site_variants([str(orig)]) == 0
 
 
 def test_original_url_serves_clean_copy_with_flag(root, monkeypatch):

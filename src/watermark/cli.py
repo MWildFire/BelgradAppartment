@@ -212,7 +212,8 @@ def wm_revert(match_id: int) -> None:
     For a cleaned photo that looks wrong: removes its clean copies, remembers the decision
     (sweeps will not recreate them) and regenerates the site card/detail images.
     """
-    from src.site.photos import VARIANT_WIDTHS, generate_for_stored_paths
+    from src.site.photos import generate_for_stored_paths
+    from src.watermark.published import site_variant_files
     from src.watermark.store import discard, resolve_stored
 
     paths = asyncio.run(_match_photo_paths(match_id))
@@ -224,8 +225,8 @@ def wm_revert(match_id: int) -> None:
         if original is None or not discard(original):
             click.echo(f"{stored}: skipped (not on disk or outside inbound)")
             continue
-        for kind in VARIANT_WIDTHS:  # generated files; rebuilt right below from the original
-            original.with_name(f"{original.name}.{kind}.webp").unlink(missing_ok=True)
+        for variant in site_variant_files(stored):  # rebuilt below from the original
+            variant.unlink(missing_ok=True)
         reverted.append(stored)
         click.echo(f"{stored}: original restored")
     written = generate_for_stored_paths(reverted) if reverted else 0
@@ -257,11 +258,15 @@ def wm_clean_published(limit: int | None, force: bool, dry_run: bool) -> None:
     by hand once after enabling the flag. Reruns only process new or changed photos.
     """
     from src.config import get_settings
-    from src.watermark.published import clean_batch, pending, published_photo_paths
+    from src.watermark.published import (
+        clean_batch,
+        pending,
+        published_photo_paths,
+        rebuild_site_variants,
+    )
 
-    paths = asyncio.run(published_photo_paths())
-    if not force:
-        paths = pending(paths)
+    published = asyncio.run(published_photo_paths())
+    paths = pending(published) if not force else published
     if limit is not None:
         paths = paths[:limit]
     click.echo(f"wm-clean-published: {len(paths)} photos{' [DRY-RUN]' if dry_run else ''}")
@@ -273,10 +278,8 @@ def wm_clean_published(limit: int | None, force: bool, dry_run: bool) -> None:
         changed, missing = changed + batch_changed, missing + batch_missing
         click.echo(f"  ... {min(start + 50, len(paths))}/{len(paths)}")
     if get_settings().watermark_site_use_clean:
-        from src.site.photos import generate_for_stored_paths
-
-        written = generate_for_stored_paths(paths)
-        click.echo(f"  site variants rebuilt: {written}")
+        rebuilt = rebuild_site_variants(published)
+        click.echo(f"  site variants rebuilt for {rebuilt} photos")
     else:
         click.echo("  WATERMARK_SITE_USE_CLEAN=0: site variants left untouched")
     click.echo(f"=== DONE: with_marks={changed} missing={missing} total={len(paths)} ===")

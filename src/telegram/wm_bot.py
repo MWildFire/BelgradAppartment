@@ -238,9 +238,9 @@ async def _refresh_site_variants(paths: list[str]) -> None:
     if not get_settings().watermark_site_use_clean:
         return
     try:
-        from src.site.photos import generate_for_stored_paths
+        from src.watermark.published import rebuild_site_variants
 
-        await asyncio.to_thread(generate_for_stored_paths, paths)
+        await asyncio.to_thread(rebuild_site_variants, paths)
     except Exception:
         logger.warning("[wm-bot] site variant refresh failed (cleaning kept)", exc_info=True)
 

@@ -22,6 +22,7 @@ from src.watermark.pipeline import clean_file
 
 STORE_VERSION = 1
 SIDECAR_SUFFIX = ".wm.json"
+SITE_MARKER_SUFFIX = ".site"
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,11 @@ def clean_path_for(original: Path) -> Path | None:
 
 def sidecar_for(clean: Path) -> Path:
     return clean.with_name(clean.name + SIDECAR_SUFFIX)
+
+
+def site_marker_for(clean: Path) -> Path:
+    """Marker next to a clean copy: its mtime is when the site variants were built from it."""
+    return clean.with_name(clean.name + SITE_MARKER_SUFFIX)
 
 
 def _sha256(path: Path) -> str:
@@ -152,6 +158,7 @@ def discard(original: Path) -> bool:
         return False
     if clean.exists():
         clean.unlink()
+    site_marker_for(clean).unlink(missing_ok=True)
     _write_sidecar(
         clean,
         {
