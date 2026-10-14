@@ -9,7 +9,9 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import src.watermark.pipeline as pipeline
 from src.config import get_settings
+from src.watermark.detect import match_instance, to_gray
 from src.watermark.pipeline import (
     NotAnImageError,
     clean_array,
@@ -108,6 +110,27 @@ def test_parts_with_weaker_opacity_are_restored_too(seed):
     letters[:, :bars_x] = False
     assert abs(float(bias[bars].mean())) < 1.5
     assert abs(float(bias[letters].mean())) < 1.5
+
+
+def test_cityexpert_detection_without_a_mark_changes_nothing(monkeypatch):
+    """Without a real mark the fitted opacity k stops at its 0.60 lower bound: no change."""
+    tpl = _tpl("cityexpert_center")
+    bg = make_background(1920, 1080, seed=3)
+
+    def fake_find_marks(img, templates=None):
+        h, w = img.shape[:2]
+        return [(tpl, match_instance(to_gray(img), tpl, tpl.predicted(w, h)[0]))]
+
+    monkeypatch.setattr(pipeline, "find_marks", fake_find_marks)
+    out, report = clean_array(bg)
+    assert report.changed is False
+    assert np.array_equal(out, bg)
+
+
+def test_cityexpert_real_mark_is_still_removed():
+    _bg, img = _marked("cityexpert_center", (1920, 1080))
+    _out, report = clean_array(img)
+    assert report.changed is True
 
 
 def test_lama_fallback_when_lama_is_missing():

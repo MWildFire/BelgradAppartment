@@ -25,6 +25,8 @@ from src.watermark.templates import WatermarkTemplate, load_templates
 
 PLATFORM_TITLES = {"halooglasi": "Halo Oglasi", "4zida": "4zida", "cityexpert": "CityExpert"}
 DEFAULT_JPEG_QUALITY = 95
+# A real reverse-blend mark fits k at 0.94-1.00; a false match hits the 0.60 lower bound.
+MIN_PLAUSIBLE_K = 0.7
 MAX_PIXELS = 40_000_000  # decompression-bomb guard: Telegram <= 2560 px, platforms <= 1920 px
 
 
@@ -130,7 +132,10 @@ def clean_array(
     for tpl, det in find_marks(img_rgb, templates):
         method, inpainter = removal_for(tpl)
         if inpainter is None:
-            out, _k = remove_reverse_blend(out, tpl, det)
+            candidate, k = remove_reverse_blend(out, tpl, det)
+            if k <= MIN_PLAUSIBLE_K:
+                continue  # not a real mark: leave the photo and the report as they are
+            out = candidate
         else:
             out = remove_inpaint(out, tpl, det, inpainter)
         residual = score_at(to_gray(out), tpl, det)

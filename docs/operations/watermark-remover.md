@@ -64,11 +64,11 @@ sudo -u otz bash -c 'cd /opt/otz && .venv/bin/python -m src.cli <команда>
 ```bash
 sudo -u otz bash -c 'cd /opt/otz && .venv/bin/python -m src.cli wm-fetch-model'
 sudo -u otz bash -c 'cd /opt/otz && rm -rf /tmp/wm-qa-in /tmp/wm-qa-out && mkdir -p /tmp/wm-qa-in \
-  && find data/inbound -name "*.jpg" -mtime -7 | head -60 | xargs -r cp --parents -t /tmp/wm-qa-in \
+  && find data/inbound -name "*.jpg" -mtime -7 | head -300 | xargs -r cp --parents -t /tmp/wm-qa-in \
   && .venv/bin/python -m src.cli wm-qa /tmp/wm-qa-in --out-dir /tmp/wm-qa-out'
 ```
 
-Скачать `/tmp/wm-qa-out/*.marks.jpg` к себе (`scp -r <сервер>:/tmp/wm-qa-out .`) и посмотреть:
+Скачать к себе все `/tmp/wm-qa-out/*.marks.jpg` (`scp -r <сервер>:/tmp/wm-qa-out .`) и посмотреть каждый:
 знак исчез, на его месте нет пятен и обрывов линий; на фото без знаков `marks.jpg` нет.
 После просмотра: `sudo rm -rf /tmp/wm-qa-in /tmp/wm-qa-out`.
 
