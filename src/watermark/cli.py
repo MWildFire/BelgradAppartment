@@ -92,10 +92,14 @@ def _read_expectations(path: Path) -> dict[str, str]:
 )
 def wm_clean(paths: tuple[Path, ...], out_dir: Path | None) -> None:
     """Remove platform marks from arbitrary files (sources are never modified)."""
+    from src.config import get_settings
     from src.watermark.pipeline import NotAnImageError, clean_file
 
+    inbound = Path(get_settings().inbound_photos_dir).resolve()
     for src in paths:
         dst = (out_dir or src.parent) / f"{src.stem}.clean.jpg"
+        if dst.resolve().is_relative_to(inbound):
+            raise click.ClickException(f"{dst}: use --out-dir outside data/inbound")
         try:
             report = clean_file(src, dst)
         except NotAnImageError as error:

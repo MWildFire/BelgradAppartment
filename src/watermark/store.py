@@ -51,7 +51,12 @@ def resolve_stored(stored: str) -> Path | None:
 
 
 def clean_root() -> Path:
-    return Path(get_settings().watermark_clean_dir).resolve()
+    """Clean copies must not be written inside inbound (originals stay untouched)."""
+    root = Path(get_settings().watermark_clean_dir).resolve()
+    inbound = Path(get_settings().inbound_photos_dir).resolve()
+    if root.is_relative_to(inbound):  # equal to inbound or inside it
+        raise RuntimeError(f"WATERMARK_CLEAN_DIR {root} must lie outside {inbound}")
+    return root
 
 
 def clean_path_for(original: Path) -> Path | None:
@@ -179,7 +184,10 @@ def discard(original: Path) -> bool:
 
 def clean_or_original(original: Path) -> Path:
     """For display: the clean copy when it exists for the current version, else the original."""
-    clean = clean_path_for(original)
+    try:
+        clean = clean_path_for(original)
+    except RuntimeError:  # unsafe clean dir: show the original rather than fail the page
+        return original
     if clean is None or not clean.is_file():
         return original
     meta = read_sidecar(clean)
@@ -191,7 +199,10 @@ def clean_or_original(original: Path) -> Path:
 def is_current(original: Path) -> bool:
     """True when a sidecar for this algorithm version exists and is not older than the
     original. No hashing: the periodic site sweep calls this for every public photo."""
-    clean = clean_path_for(original)
+    try:
+        clean = clean_path_for(original)
+    except RuntimeError:  # unsafe clean dir: there is no clean copy to keep current
+        return True
     if clean is None:
         return True
     try:

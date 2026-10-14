@@ -192,3 +192,12 @@ def test_clean_file_writes_only_when_marks_found(tmp_path: Path):
     assert clean_file(marked, tmp_path / "out" / "marked.clean.jpg").changed
     assert (tmp_path / "out" / "marked.clean.jpg").is_file()
     assert marked.read_bytes() == original_bytes
+
+
+def test_clean_file_never_overwrites_its_source(tmp_path: Path):
+    marked = tmp_path / "marked.jpg"
+    Image.fromarray(_marked("halo_corner", (1000, 750))[1]).save(marked, "JPEG", quality=92)
+    original_bytes = marked.read_bytes()
+    with pytest.raises(ValueError):
+        clean_file(marked, marked)
+    assert marked.read_bytes() == original_bytes

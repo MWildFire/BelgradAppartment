@@ -165,6 +165,8 @@ def clean_bytes(data: bytes, *, quality: int = DEFAULT_JPEG_QUALITY) -> tuple[by
 
 def clean_file(src: Path, dst: Path, *, quality: int = DEFAULT_JPEG_QUALITY) -> CleanReport:
     """Write dst (JPEG) atomically, only when marks were found; src is never touched."""
+    if dst.resolve() == src.resolve():
+        raise ValueError(f"refusing to overwrite the original: {src}")
     img = decode_image(src.read_bytes())
     out, report = clean_array(img)
     if report.changed:

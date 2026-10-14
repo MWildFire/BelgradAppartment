@@ -38,6 +38,14 @@ def test_wm_clean_writes_only_marked_files(samples, tmp_path):
     assert not (out / "plain.clean.jpg").exists()
 
 
+def test_wm_clean_refuses_output_inside_inbound(samples, monkeypatch):
+    monkeypatch.setattr(get_settings(), "inbound_photos_dir", samples)
+    result = CliRunner().invoke(cli, ["wm-clean", str(samples / "zida" / "marked.jpg")])
+    assert result.exit_code != 0
+    assert "use --out-dir outside data/inbound" in result.output
+    assert not list(samples.rglob("*.clean.jpg"))
+
+
 def test_wm_qa_pairs_report_and_expectations(samples, tmp_path):
     good = tmp_path / "good.csv"
     good.write_text("file,marks\nzida/marked.jpg,zida_logo#1;zida_logo#0\nplain.jpg,\n")

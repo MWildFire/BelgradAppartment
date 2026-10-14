@@ -105,3 +105,16 @@ def test_store_and_site_imports_do_not_load_opencv():
         cwd=PROJECT_ROOT, capture_output=True, text=True, check=True, timeout=120,
     )
     assert done.stdout.strip() == "False"
+
+
+@pytest.mark.parametrize("sub", [".", "clean"])
+def test_clean_dir_inside_inbound_is_refused(dirs, monkeypatch, sub):
+    inbound, _clean = dirs
+    monkeypatch.setattr(get_settings(), "watermark_clean_dir", inbound / sub)
+    src = _photo(inbound / "5" / "5" / "00.jpg", marked=True)
+    with pytest.raises(RuntimeError):
+        store.clean_root()
+    with pytest.raises(RuntimeError):
+        store.ensure_clean(str(src))
+    assert store.clean_or_original(src) == src  # the site keeps showing the original
+    assert store.is_current(src)
