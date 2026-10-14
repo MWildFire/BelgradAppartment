@@ -2803,9 +2803,15 @@ async def _refetch_details(
         if result.skipped:
             click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
         mass_removal = source_removal_alarm(deactivated=removed, attempted=attempted)
+        # A source failure fails this run too (below): the guard must not read the run as clean.
+        if mass_removal:
+            status = removal_guard.ALARM
+        elif result.source_errors:
+            status = removal_guard.FAILED
+        else:
+            status = removal_guard.CLEAN
         removal_guard.write_step(
-            public_state_dir, "public",
-            status=removal_guard.ALARM if mass_removal else removal_guard.CLEAN,
+            public_state_dir, "public", status=status,
             now=datetime.now(UTC), deactivated=removed, attempted=attempted,
         )
         if mass_removal:
@@ -2813,10 +2819,11 @@ async def _refetch_details(
                 f"🚨 Массовое снятие: {removed} из {attempted} попыток за прогон — "
                 "проверь схему URL и парсер площадки"
             )
-        # Source failures fail the public run; item errors and budget skips only warn. A mass
-        # removal only alarms here and holds the removal guard: the next nightly (within 24 h)
-        # reports it with 🚨 and fails — owner decision, exit 1 for a mass removal applies at
-        # night only; later nights in the 26 h window only warn (⚠️) when auto-hide is on.
+        # Source failures fail the public run and record it as failed, so the next nightly reports
+        # it with 🚨 too. Item errors and budget skips only warn. A mass removal only alarms here
+        # and holds the removal guard: the next nightly (within 24 h) reports it with 🚨 and fails
+        # — owner decision, exit 1 for a mass removal applies at night only; later nights in the
+        # 26 h window only warn (⚠️) when auto-hide is on.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())
