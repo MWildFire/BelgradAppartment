@@ -137,11 +137,15 @@ def download_model(dest: Path, *, url: str = MODEL_URL, sha256: str = MODEL_SHA2
     if dest.is_file() and sha256_of(dest) == sha256:
         return dest
     tmp = dest.with_name(f".{dest.name}.{os.getpid()}.part")
-    with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(60.0)) as resp:
-        resp.raise_for_status()
-        with tmp.open("wb") as fh:
-            for chunk in resp.iter_bytes(1 << 20):
-                fh.write(chunk)
+    try:
+        with httpx.stream("GET", url, follow_redirects=True, timeout=httpx.Timeout(60.0)) as resp:
+            resp.raise_for_status()
+            with tmp.open("wb") as fh:
+                for chunk in resp.iter_bytes(1 << 20):
+                    fh.write(chunk)
+    except BaseException:
+        tmp.unlink(missing_ok=True)  # a dropped connection must not leave a partial model behind
+        raise
     actual = sha256_of(tmp)
     if actual != sha256:
         tmp.unlink(missing_ok=True)

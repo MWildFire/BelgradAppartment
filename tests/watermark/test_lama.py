@@ -49,6 +49,26 @@ def test_download_model_keeps_only_a_verified_file(tmp_path):
     assert not list(tmp_path.glob(".bad.pt.*"))  # the partial download is removed
 
 
+def test_download_model_removes_partial_file_on_dropped_connection(tmp_path):
+    import httpx
+    import respx
+
+    from src.watermark.lama import download_model
+
+    class DroppedStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b"model-"
+            raise httpx.ReadError("connection dropped")
+
+    url = "https://models.example.invalid/big-lama.pt"
+    with respx.mock:
+        respx.get(url).mock(return_value=httpx.Response(200, stream=DroppedStream()))
+        with pytest.raises(httpx.ReadError):
+            download_model(tmp_path / "big-lama.pt", url=url, sha256="0" * 64)
+    assert not (tmp_path / "big-lama.pt").exists()
+    assert not list(tmp_path.glob(".big-lama.pt.*"))  # no partial file left behind
+
+
 def test_falls_back_to_telea_without_model(monkeypatch, tmp_path):
     monkeypatch.setattr(get_settings(), "watermark_lama_enabled", True)
     monkeypatch.setattr(get_settings(), "watermark_lama_model_path", tmp_path / "missing.pt")
