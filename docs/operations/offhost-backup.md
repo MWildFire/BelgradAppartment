@@ -22,8 +22,9 @@
 часть разделены: `generations/<id>` и `protected/<id>`. Конфигурация и SQLite-сессии
 не входят в обычный архив данных, репозиторий или журналы.
 
-SSH-ключ задания хранится отдельно в `offhost/ssh/rentbelgrad-backup-key`, с правами
-`0600` внутри приватного каталога. Проверка A/B 10 сентября установила: тот же ключ
+SSH-ключ задания по состоянию на проверку A/B 10 сентября хранился в
+`offhost/ssh/rentbelgrad-backup-key` внутри приватного каталога, с правами `0600`. Актуальный ключ
+для `receive` указан в разделе «Sanitized-копия» в конце. Проверка A/B 10 сентября установила: тот же ключ
 из Downloads дважды не завершил SSH-canary за 35 секунд в launchd, а его побайтово
 идентичная копия в приватном каталоге завершила проверку за 4,208 секунды.
 Конкретный механизм macOS этой проверкой не установлен.
@@ -143,15 +144,17 @@ Runtime — отдельные `offhost/runtime/<SHA>/{code,venv}` из точн
 и деплой нового набора `scripts/` на сервер в каталог `/tmp/otz-sanitized-tools-<8 hex>/`
 (владелец `otz`, каталоги 755, файлы 644). Иначе сервер откажет `source_revision_changed`
 или `remote_helper_digest_mismatch`; приёмник причину не показывает — локально виден только `sanitized_backup_failed`.
-До мержа PR с новым пином и деплоя набора разберите старое состояние кодом старой эпохи
-(`git checkout` ревизии с прежним пином; для этого PR — `91d6676`): записи `resume/` приватного
-корня и снимок на сервере, снятый под старым пином; старый каталог набора на сервере до этого
-не удалять. Новый код их не примет: `resume_record_mismatch` при resume, `helper_pin_mismatch`
-при `resolve-requested`, `unresolved_resume_record` при любом новом запуске,
-`source_revision_or_schema_changed` при `discard-snapshot`. Поколения старого пина новый код
+До мержа PR с новым пином и деплоя набора разберите старое состояние кодом старой эпохи.
+Эпоха — коммит, чей `HELPER_SET_SHA256` равен полю `helper_set_sha256` записи. Найти его:
+`git log -S '<digest>' --oneline -- scripts/sanitized_helper_pin.py` (для `1806d239…` digest введён
+в `7010ddf`, а ревизия `91d6676` тоже с этим пином). Разбираются записи `resume/` приватного корня
+и снимок на сервере, снятый под старым пином; старый каталог набора на сервере до этого не удалять.
+Новый код их не примет: `resume_record_mismatch` при resume, `helper_pin_mismatch` при
+`resolve-requested`, `unresolved_resume_record` при любом новом запуске, `source_revision_changed`
+при `discard-snapshot` (сначала срабатывает `validate_scope_record`). Поколения старого пина новый код
 отклоняет как `source_revision_changed`: проверяйте их кодом своей эпохи.
 Запись `resume/<GEN>.json` в состоянии `requested` после любого сбоя вызова снимка блокирует
 новые запуски; снять её может только `resolve-requested --decision abandon`, и только когда на
 сервере нет снимка (`snapshot_absent`). Это решение оператора-владельца.
-Ключ к проду — `~/.ssh/rentbelgrad-offhost/rentbelgrad-backup-key` на машине оператора,
+Ключ к проду — `~/.ssh/rentbelgrad-offhost/rentbelgrad-backup-key` на Mac Studio,
 частный корень копий — `~/Backups/RentBelgrad/offhost/data-only/sanitized-v1`.
