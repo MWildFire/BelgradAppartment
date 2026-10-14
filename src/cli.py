@@ -23,6 +23,7 @@ from src.scrapers import SCRAPERS, removal_guard
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
 from src.scrapers.run_safety import probe_sweep_broken, source_removal_alarm
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
+from src.watermark.cli import register_watermark_commands
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
     from src.matching.dedup import DedupStats
@@ -41,6 +42,9 @@ def _setup_logging() -> None:
 def cli() -> None:
     """otz-rent-finder CLI."""
     _setup_logging()
+
+
+register_watermark_commands(cli)
 
 
 PLATFORM_NAMES = {p.value.lower(): p for p in Platform}
