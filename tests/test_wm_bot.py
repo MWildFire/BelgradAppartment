@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from aiogram import Bot, Dispatcher
+from aiogram.types import Chat, Message, PhotoSize, Update, User
 from PIL import Image
 
 from src.config import get_settings
@@ -188,3 +191,30 @@ async def test_unknown_match_id(db):
     msg = FakeMessage(51)
     await wm_bot.handle_clean_command(msg, "424242")
     assert msg.texts == [wm_bot.MATCH_NOT_FOUND.format(match_id=424242)]
+
+
+async def test_clean_in_photo_caption_goes_to_the_photo_handler(monkeypatch):
+    calls: list[str] = []
+
+    async def fake_add(self, message):
+        calls.append("photo")
+
+    async def fake_clean(message, args):
+        calls.append("clean")
+
+    monkeypatch.setattr(wm_bot.AlbumCollector, "add", fake_add)
+    monkeypatch.setattr(wm_bot, "handle_clean_command", fake_clean)
+    dp = Dispatcher()
+    dp.include_router(wm_bot.build_watermark_router(frozenset({5})))
+    bot = Bot(token="42:TEST")
+    msg = Message(
+        message_id=1,
+        date=datetime.now(UTC),
+        chat=Chat(id=5, type="private"),
+        from_user=User(id=5, is_bot=False, first_name="D"),
+        photo=[PhotoSize(file_id="f", file_unique_id="u", width=10, height=10)],
+        caption="/clean",
+    )
+    await dp.feed_update(bot, Update(update_id=1, message=msg))
+    await bot.session.close()
+    assert calls == ["photo"]

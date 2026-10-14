@@ -361,7 +361,7 @@ def build_watermark_router(allowed: frozenset[int]) -> Any:
     router.message.filter(F.chat.type == "private", F.chat.id.in_(allowed))
     collector = AlbumCollector(process_photo_messages)
 
-    @router.message(Command("clean", "watermark"))
+    @router.message(Command("clean", "watermark"), F.text)
     async def _on_clean(message: Message, command: CommandObject) -> None:  # pragma: no cover
         await handle_clean_command(message, command.args)
 
