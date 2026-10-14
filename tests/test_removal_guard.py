@@ -2,6 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from src.scrapers import removal_guard as guard
 
 NOW = datetime(2026, 10, 11, 12, 0, tzinfo=UTC)
@@ -96,3 +98,53 @@ def test_an_unreadable_record_holds_for_the_window_then_releases(tmp_path):
     later = NOW + timedelta(hours=guard.GUARD_HOURS)
     guard.write_step(tmp_path, "public", status=guard.CLEAN, now=later)
     assert guard.withholds_hides(tmp_path, now=later, steps=("public",)) is False
+
+
+@pytest.mark.parametrize("record", [
+    {"at": NOW.isoformat()},
+    {"at": NOW.isoformat(), "status": None},
+    {"at": NOW.isoformat(), "status": "weird"},
+])
+def test_a_record_without_a_known_status_holds_instead_of_raising(tmp_path, record):
+    import json
+    import os
+
+    for step in STEPS:
+        _write(tmp_path, step, guard.CLEAN)
+    path = tmp_path / "removal_guard" / "verify.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    recent = (NOW - timedelta(hours=1)).timestamp()
+    os.utime(path, (recent, recent))
+    assert guard.withholds_hides(tmp_path, now=NOW, steps=STEPS) is True
+    guard.write_step(tmp_path, "verify", status=guard.CLEAN, now=NOW)
+    assert json.loads(path.read_text(encoding="utf-8")) == record
+
+
+@pytest.mark.parametrize(
+    ("status", "age", "expected"),
+    [
+        (guard.ALARM, timedelta(hours=1), guard.ALARM),
+        (guard.FAILED, timedelta(hours=23, minutes=59), guard.FAILED),
+        (guard.ALARM, timedelta(hours=24), None),
+        (guard.ALARM, timedelta(hours=-1), None),
+        (guard.CLEAN, timedelta(hours=1), None),
+    ],
+    ids=["alarm-1h", "failed-23h59", "alarm-24h", "alarm-future", "clean-1h"],
+)
+def test_fresh_alarm_reports_an_alarm_or_failure_younger_than_a_day(
+    tmp_path, status, age, expected
+):
+    at = NOW - age
+    _write(tmp_path, "public", status, at=at)
+    found = guard.fresh_alarm(tmp_path, "public", now=NOW)
+    assert found == (None if expected is None else (expected, at))
+
+
+def test_fresh_alarm_is_none_without_a_record(tmp_path):
+    assert guard.fresh_alarm(tmp_path, "public", now=NOW) is None
+
+
+def test_fresh_alarm_ignores_an_unreadable_record(tmp_path):
+    _write(tmp_path, "public", guard.ALARM)
+    (tmp_path / "removal_guard" / "public.json").write_text("{not json", encoding="utf-8")
+    assert guard.fresh_alarm(tmp_path, "public", now=NOW) is None

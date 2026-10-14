@@ -118,10 +118,9 @@ class Settings(BaseSettings):
     # while the apartment exists on ≥1 platform (dup-group A4) and only comes down when confirmed
     # gone from ALL. site_liveness_enabled is the kill switch for the whole nightly step.
     site_liveness_enabled: bool = True  # SITE_LIVENESS_ENABLED=0 → skip the liveness step entirely
-    # D1 — auto-hide confirmed-dead public cards (owner decision Q3.21: скрывать, 11.10).
-    # A night whose removal alarm fires hides nothing and says so with 🚨 (cli nightly steps).
-    # SITE_LIVENESS_AUTO_HIDE=0 returns to the warn-only notice.
-    site_liveness_auto_hide: bool = True
+    # D1 — warn-first by default: the nightly notice lists confirmed-dead candidates but hides
+    # nothing. Flip SITE_LIVENESS_AUTO_HIDE=1 on the server after ~a week of clean notices.
+    site_liveness_auto_hide: bool = False
     # D3 — safety cap on auto-hides per night (mirrors the price-drop cap); overflow → notice
     # candidates instead of being hidden, so a bad night can't wipe the whole showcase.
     site_liveness_max_hides: int = 10

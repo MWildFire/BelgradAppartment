@@ -166,3 +166,39 @@ async def test_removal_alarm_of_the_night_reaches_the_liveness_step(
     await commands._nightly_refresh(1, 3, True, False, no_notify=True)
 
     assert liveness_line.await_args.kwargs["auto_hide"] is (not removal_alarm)
+
+
+@pytest.mark.parametrize("status", ["alarm", "failed"])
+async def test_fresh_public_alarm_fails_the_night(monkeypatch, tmp_path, status):
+    """R02: a public run's alarm or failure from the last 24 h fails the next nightly, once."""
+    from datetime import UTC, datetime, timedelta
+
+    from src.scrapers import orchestrator, removal_guard
+
+    settings = commands.get_settings()
+    for name, value in {
+        "data_dir": tmp_path,
+        "nightly_heal_limit": 0,
+        "nightly_detail_refresh": 0,
+        "nightly_verify_links": True,
+        "nightly_auto_publish": False,
+        "nightly_metrics": False,
+        "nightly_prune_embeddings": False,
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+    removal_guard.write_step(
+        tmp_path / "state", "public", status=status, now=datetime.now(UTC) - timedelta(hours=2),
+    )
+    results = [ScrapeResult(platform=p, previewed=5, fetched=5) for p in commands.SCRAPERS]
+    monkeypatch.setattr(commands, "_run_all", AsyncMock(return_value=results))
+    monkeypatch.setattr(
+        orchestrator, "verify_active_links",
+        AsyncMock(return_value=orchestrator.LinkVerifyStats(checked=5)),
+    )
+    monkeypatch.setattr(commands, "_build_price_drop_alerts", AsyncMock(return_value=([], None)))
+    for name in ("_liveness_nightly_line", "_analytics_nightly_line", "_dupes_report_nightly_line"):
+        monkeypatch.setattr(commands, name, AsyncMock(return_value="ok"))
+
+    with pytest.raises(SystemExit) as exc:
+        await commands._nightly_refresh(1, 3, True, False, no_notify=True)
+    assert exc.value.code == 1

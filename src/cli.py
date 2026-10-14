@@ -1050,11 +1050,12 @@ async def _liveness_nightly_line(
             broken = probe_sweep_broken(checked=checked, failed=errors - source_errors)
         else:
             broken = source_errors > 0
-        # Setting on, but this night's removal alarm withheld the hides: say so, loudly.
+        # Setting on, but the removal guard withheld the hides: a warning, the night still passes.
+        # Only a broken sweep is an alarm (🚨 makes the night fail).
         gated = get_settings().site_liveness_auto_hide and not auto_hide
-        prefix = "🚨 " if broken or gated else ("⚠️ " if errors else "")
+        prefix = "🚨 " if broken else ("⚠️ " if errors or gated else "")
         if gated:
-            note += ", автоскрытие пропущено: тревога или сбой этой ночью"
+            note += ", автоскрытие отложено: тревога, сбой или незавершённый шаг в окне 26 ч"
         note += (f", проверок {checked}, "
                  f"отложено {getattr(report, 'skipped', 0)}, ошибок {errors}")
         return (
@@ -1873,7 +1874,11 @@ class NightlyStepsResult(NamedTuple):
     price_changes: list[PriceChange]  # W2-C2 contract for the Wave-3 price-drop alert
     alerts: list[str]  # standalone 🚨 messages (must not drown in the summary)
     site_listings_hidden: int = 0
-    removal_alarm: bool = False  # Q3.21: a removal alarm this night gates every hide pass
+    # Q3.21: the removal guard holds every hide pass this night (an alarm, a failure, a missing or
+    # unfinished step, or a clean record older than 26 h). With auto-hide on, a hold shows as ⚠️
+    # and never fails the night. A public alarm or failure from the last 24 h adds its own 🚨
+    # line (see fresh_alarm).
+    removal_alarm: bool = False
 
 
 def _guard_steps(settings, *, include_verify: bool) -> tuple[str, ...]:
@@ -2033,9 +2038,12 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             site_listings_hidden = vl.site_listings_hidden
             if vl.site_listings_hidden:
                 line += f", скрыто карточек с сайта: {vl.site_listings_hidden}"  # X2 auto-remove
-            if vl.hides_withheld:
-                line += (f", 🚨 автоскрытие пропущено: {vl.hides_withheld} объявлений — "
-                         "тревога или сбой этой ночью")
+            if getattr(vl, "removal_alarm", False):
+                line += (f", 🚨 массовое снятие ссылок: {vl.deactivated} — "
+                         "автоскрытие этой ночью не выполняется")
+            elif vl.hides_withheld:
+                line += (f", ⚠️ автоскрытие отложено: {vl.hides_withheld} объявлений "
+                         "(тревога, сбой или незавершённый шаг в окне 26 ч)")
             if vl.skipped:
                 line += f", пропущено по бюджету: {vl.skipped}"
             # Most probes failing (network down, blocked) is an outage: the sweep cannot confirm
@@ -2132,8 +2140,15 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
     else:
         click.echo("→ Embeddings prune disabled (NIGHTLY_PRUNE_EMBEDDINGS=0)")
 
+    now = datetime.now(UTC)
+    public = removal_guard.fresh_alarm(state_dir, "public", now=now)
+    if public is not None:
+        status, at = public
+        what = "массовое снятие" if status == removal_guard.ALARM else "шаг упал"
+        lines.append(f"🚨 публичный прогон {at:%d.%m %H:%M} UTC: {what} — ночь помечена сбоем; "
+                     "автоскрытие (если включено) удерживается 26 ч")
     removal_alarm = removal_guard.withholds_hides(
-        state_dir, now=datetime.now(UTC), steps=_guard_steps(settings, include_verify=True),
+        state_dir, now=now, steps=_guard_steps(settings, include_verify=True),
     )
     return NightlyStepsResult(summary_lines=lines, price_changes=price_changes, alerts=alerts,
                              site_listings_hidden=site_listings_hidden, removal_alarm=removal_alarm)
@@ -2788,9 +2803,15 @@ async def _refetch_details(
         if result.skipped:
             click.echo(f"⚠️ пропущено по бюджету: {result.skipped}")
         mass_removal = source_removal_alarm(deactivated=removed, attempted=attempted)
+        # A source failure fails this run too (below): the guard must not read the run as clean.
+        if mass_removal:
+            status = removal_guard.ALARM
+        elif result.source_errors:
+            status = removal_guard.FAILED
+        else:
+            status = removal_guard.CLEAN
         removal_guard.write_step(
-            public_state_dir, "public",
-            status=removal_guard.ALARM if mass_removal else removal_guard.CLEAN,
+            public_state_dir, "public", status=status,
             now=datetime.now(UTC), deactivated=removed, attempted=attempted,
         )
         if mass_removal:
@@ -2798,8 +2819,13 @@ async def _refetch_details(
                 f"🚨 Массовое снятие: {removed} из {attempted} попыток за прогон — "
                 "проверь схему URL и парсер площадки"
             )
-        # Source failures fail the public run; item errors and budget skips only warn. A mass
-        # removal only alarms here: owner decision, exit 1 for it applies at night only.
+        # Source failures fail the public run and record it as failed: the next nightly reports
+        # it with 🚨 and holds the hides for 26 h. So does a source cut short by the run budget
+        # (freshness: source_budget_exhausted, or TimeoutError for its share). Item errors and
+        # item-level budget skips only warn. A mass removal only alarms here and holds the
+        # removal guard: the next nightly (within 24 h) reports it with 🚨 and fails — owner
+        # decision, exit 1 for a mass removal applies at night only; later nights in the
+        # 26 h window only warn (⚠️) when auto-hide is on.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
                 f"{platform}: {code}" for platform, code in sorted(result.source_errors.items())

@@ -245,6 +245,16 @@ async def test_public_refresh_source_failure_exits_one(monkeypatch, capsys):
     assert "🚨 Ошибки площадок: NEKRETNINE: TimeoutError" in capsys.readouterr().out
 
 
+async def test_public_refresh_source_failure_records_a_failed_step(monkeypatch):
+    """A run that exits 1 for a source failure must not leave the guard reading it as clean."""
+    recorded = _public_refresh(
+        monkeypatch, errors=0, skipped=0, source_errors={"NEKRETNINE": "TimeoutError"},
+    )
+    with pytest.raises(SystemExit):
+        await cli_mod._refetch_details(None, False, None, False, public_only=True)
+    assert recorded[-1]["status"] == removal_guard.FAILED
+
+
 async def test_public_refresh_mass_removal_alarms_but_exits_zero(monkeypatch, capsys):
     """A changed URL scheme deactivates most attempted listings: print the count and alarm. The
     public run exits 0, because exit 1 for a mass removal applies at night only."""
