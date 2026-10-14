@@ -1,0 +1,35 @@
+# otz-bot.service — unified RentFinderBot long-polling daemon (`otz bot`):
+#   /clean + incoming photos: remove listing-platform watermarks (WATERMARK_BOT_ENABLED=1),
+#   /start sub_<token>: site subscription linking (SUBSCRIPTION_BOT_ENABLED=1).
+# A bot token allows only ONE poller: never run it together with otz-subscription-bot.
+# Enable once, after the release and the flags in /opt/otz/.env:
+#   systemctl disable --now otz-subscription-bot 2>/dev/null || true
+#   systemctl enable --now otz-bot
+# With both flags off the command exits immediately (exit 0, unit becomes inactive).
+
+[Unit]
+Description=otz-rent-finder RentFinderBot daemon (watermark /clean + subscription linking)
+After=network-online.target
+Wants=network-online.target
+OnFailure=otz-notify-failure@%n.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=otz
+Group=otz
+WorkingDirectory=/opt/otz
+EnvironmentFile=/opt/otz/.env
+Environment=PATH=/opt/otz/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/otz/.venv/bin/python -m src.cli bot
+Restart=on-failure
+RestartSec=30
+# Photo cleaning (OpenCV + LaMa, ~1.1 GB peak) must not starve the monitor or the site.
+Nice=10
+MemoryMax=2G
+StandardOutput=append:/var/log/otz/bot.log
+StandardError=append:/var/log/otz/bot.log
+
+[Install]
+WantedBy=multi-user.target
