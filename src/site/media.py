@@ -36,7 +36,11 @@ def _permitted_file(path: str, stored_paths: list[str]) -> Path | None:
         if resolved is None:
             continue
         _, rel = resolved
-        if path == rel or path in {f"{rel}.{kind}.webp" for kind in VARIANT_WIDTHS}:
+        if path == rel:
+            from src.watermark.store import site_source
+
+            return site_source(target)
+        if path in {f"{rel}.{kind}.webp" for kind in VARIANT_WIDTHS}:
             return target
     return None
 

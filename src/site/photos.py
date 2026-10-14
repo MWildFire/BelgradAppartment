@@ -120,6 +120,20 @@ def _entry(rel: str, w: int, h: int) -> ManifestEntry:
     return {"w": w, "h": h, "card": f"{rel}.card.webp", "detail": f"{rel}.detail.webp"}
 
 
+def _variant_source(orig: Path) -> Path:
+    """Pixels for the variants: the watermark-free copy (WATERMARK_SITE_USE_CLEAN=1) or orig."""
+    from src.watermark.store import site_source
+
+    return site_source(orig)
+
+
+def _stale(target: Path, source: Path) -> bool:
+    try:
+        return target.stat().st_mtime_ns < source.stat().st_mtime_ns
+    except OSError:
+        return True
+
+
 def process_photo(
     orig: Path, rel: str, root: Path, *, dry_run: bool = False
 ) -> tuple[ManifestEntry | None, int, int]:
@@ -129,8 +143,11 @@ def process_photo(
     оригинал → (None, …) + warn-лог, НИКОГДА не raise. dry_run считает generated, не пишет.
     """
     generated = skipped = 0
+    # Watermark-free source: a variant older than the clean copy is rebuilt from it.
+    source = _variant_source(orig)
+    from_clean = source != orig
     try:
-        with Image.open(orig) as im:
+        with Image.open(source) as im:
             w, h = im.size
             if w <= 0 or h <= 0:
                 raise ValueError(f"degenerate size {im.size}")
@@ -142,7 +159,7 @@ def process_photo(
             decoded: Image.Image | None = None  # декодируем лениво: full-skip не читает пиксели
             for kind, width in VARIANT_WIDTHS.items():
                 target = root / f"{rel}.{kind}.webp"
-                if target.exists():
+                if target.exists() and not (from_clean and _stale(target, source)):
                     skipped += 1
                     continue
                 generated += 1
