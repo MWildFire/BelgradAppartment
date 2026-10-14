@@ -2819,10 +2819,12 @@ async def _refetch_details(
                 f"🚨 Массовое снятие: {removed} из {attempted} попыток за прогон — "
                 "проверь схему URL и парсер площадки"
             )
-        # Source failures fail the public run and record it as failed, so the next nightly reports
-        # it with 🚨 too. Item errors and budget skips only warn. A mass removal only alarms here
-        # and holds the removal guard: the next nightly (within 24 h) reports it with 🚨 and fails
-        # — owner decision, exit 1 for a mass removal applies at night only; later nights in the
+        # Source failures fail the public run and record it as failed: the next nightly reports
+        # it with 🚨 and holds the hides for 26 h. So does a source cut short by the run budget
+        # (freshness: source_budget_exhausted, or TimeoutError for its share). Item errors and
+        # item-level budget skips only warn. A mass removal only alarms here and holds the
+        # removal guard: the next nightly (within 24 h) reports it with 🚨 and fails — owner
+        # decision, exit 1 for a mass removal applies at night only; later nights in the
         # 26 h window only warn (⚠️) when auto-hide is on.
         if result.source_errors:
             click.echo("🚨 Ошибки площадок: " + ", ".join(
