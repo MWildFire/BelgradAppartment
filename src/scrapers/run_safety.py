@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+# Partial-walk reasons (Q3.9). They block the sweep but do not fail the night by themselves: an
+# anti-bot walk misses a few listings while the site total is known. A source without a known
+# denominator still fails the night (see cli._nightly_unhealthy).
+COMPLETENESS_REASONS = frozenset({
+    "crawl_incomplete", "coverage_mismatch", "untrusted_denominator",
+    "skipped_pages", "failed_pages",
+})
+
 
 @dataclass(frozen=True)
 class SourceEvaluation:

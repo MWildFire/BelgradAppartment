@@ -778,7 +778,7 @@ async def test_photo_coverage_by_platform(db):
     assert coverage["HALOOGLASI"] == (0, 0)
 
 
-async def test_completed_refresh_with_source_timeout_is_reported_degraded(monkeypatch):
+async def test_completed_refresh_with_source_timeout_is_a_warning(monkeypatch):
     from src.cli import _run_nightly_steps
     from src.config import get_settings
     _canned_step_stubs(monkeypatch)
@@ -792,7 +792,8 @@ async def test_completed_refresh_with_source_timeout_is_reported_degraded(monkey
 
     monkeypatch.setattr(orchestrator, 'rolling_detail_refresh', deadline_after_commit)
     result = await _run_nightly_steps(notify=False)
-    assert any(line.startswith('🚨') and 'обновлено: 2' in line for line in result.summary_lines)
+    detail = next(line for line in result.summary_lines if 'обновлено: 2' in line)
+    assert detail.startswith('⚠️') and 'NEKRETNINE: TimeoutError' in detail
 
 
 @pytest.mark.asyncio
