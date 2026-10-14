@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 MAX_ALBUM = 10
 TELEGRAM_CAPTION_LIMIT = 1024
 BOT_PHOTO_LIMIT_BYTES = 10 * 1024 * 1024
+DELIVERY_CLEAN_TIMEOUT_SECONDS = 180  # slower cleaning: the album goes out with the originals
 
 
 class BotDeliveryError(RuntimeError):
@@ -148,7 +149,14 @@ async def _clean_delivery_paths(match_id: int, photo_paths: list[Path]) -> list[
         return out
 
     try:
-        return await asyncio.to_thread(_clean_all)
+        return await asyncio.wait_for(
+            asyncio.to_thread(_clean_all), timeout=DELIVERY_CLEAN_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        logger.warning(
+            "[bot_delivery] match=%d watermark cleaning timed out — sending originals", match_id
+        )
+        return photo_paths
     except Exception:
         logger.warning(
             "[bot_delivery] match=%d watermark cleaning failed — sending originals",
@@ -215,11 +223,6 @@ async def send_match_via_bot(
         if any(not p.is_file() for p in photo_paths):
             raise BotDeliveryError(f"Match {match_id}: missing inbound photo files")
 
-    if saved_payload is None and get_settings().watermark_clean_on_delivery:
-        # First send only: the frozen payload then records the clean copies, so retries and
-        # /clean see the same album. Any cleaning failure sends the originals instead.
-        photo_paths = await _clean_delivery_paths(match_id, photo_paths)
-
     rendered_text = (
         post_text_override
         if post_text_override is not None
@@ -267,6 +270,8 @@ async def send_match_via_bot(
             frozen = await claimed_payload(match_id, chat_id, token)
             full_caption = frozen["caption"]
             photo_paths = [Path(p) for p in frozen["photo_paths"]]
+            if get_settings().watermark_clean_on_delivery:
+                photo_paths = await _clean_delivery_paths(match_id, photo_paths)
             if any(not p.is_file() for p in photo_paths):
                 await finish_recipient(match_id, chat_id, token,
                                        error=ValueError("missing frozen photo files"))

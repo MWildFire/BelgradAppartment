@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -95,7 +96,7 @@ async def test_flag_on_sends_clean_copies(db, env, monkeypatch):
     match_id, paths = await _seed(inbound)
     await bot_delivery.send_match_via_bot(match_id)
     assert _all_under(bot.albums[0], Path(get_settings().watermark_clean_dir))
-    assert await _frozen_paths(match_id) == bot.albums[0]
+    assert await _frozen_paths(match_id) == paths
     assert _all_exist(paths)  # originals are still there
 
 
@@ -124,5 +125,21 @@ async def test_clean_copy_over_the_bot_limit_falls_back_to_the_original(db, env,
     limit = min(_sizes(clean)) - 1
     assert max(_sizes(paths)) <= limit  # q95 clean copies are larger than the q92 originals
     monkeypatch.setattr(bot_delivery, "BOT_PHOTO_LIMIT_BYTES", limit)
+    await bot_delivery.send_match_via_bot(match_id)
+    assert bot.albums == [paths]
+
+
+async def test_cleaning_timeout_sends_originals(db, env, monkeypatch):
+    inbound, bot = env
+    monkeypatch.setattr(get_settings(), "watermark_clean_on_delivery", True)
+    monkeypatch.setattr(bot_delivery, "DELIVERY_CLEAN_TIMEOUT_SECONDS", 0.05)
+    real = store.ensure_clean
+
+    def slow(stored, **kw):
+        time.sleep(1)
+        return real(stored, **kw)
+
+    monkeypatch.setattr(store, "ensure_clean", slow)
+    match_id, paths = await _seed(inbound)
     await bot_delivery.send_match_via_bot(match_id)
     assert bot.albums == [paths]
