@@ -78,7 +78,7 @@ Activation currently supports `/opt/otz` and its canonical systemd topology only
    before any running service is stopped.
 3. Refuses active/starting scheduled or manual maintenance jobs. It pauses the previously
    active timers and checks again, then stops the previously active monitor/site/admin/
-   subscription-bot services together. Unrelated units are not changed.
+   subscription-bot/bot services together. Unrelated units are not changed.
 4. Retains prior code/environment in `/opt/otz/.releases/<revision>/rollback`, replaces
    runtime paths, applies additive Alembic migrations to the explicitly selected live DB,
    copies canonical service/timer files and performs `daemon-reload`.

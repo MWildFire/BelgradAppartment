@@ -104,35 +104,34 @@ async def handle_start(message, *, database_url: str | None = None) -> bool:
     return True
 
 
-async def run_subscription_bot() -> None:
-    """Run the aiogram long-polling Dispatcher (blocks). Gated by subscription_bot_enabled.
-
-    Imported lazily inside so the heavy aiogram Dispatcher machinery only loads when the daemon
-    is actually started — the send path and the unit-tested handle_start never trigger it.
-    """
-    from aiogram import Bot, Dispatcher
+def build_subscription_router():
+    """aiogram Router with /start subscription linking (included by src/telegram/bot_daemon.py)."""
+    from aiogram import Router
     from aiogram.filters import CommandStart
+
+    router = Router(name="subscription")
+
+    @router.message(CommandStart(deep_link=True))
+    async def _on_start_with_payload(message):  # pragma: no cover - exercised live only
+        await handle_start(message)
+
+    @router.message(CommandStart())
+    async def _on_plain_start(message):  # pragma: no cover - exercised live only
+        await handle_start(message)
+
+    return router
+
+
+async def run_subscription_bot() -> None:
+    """Compatibility for the old `otz subscription-bot` command: runs the unified daemon.
+
+    A bot token allows only one poller, so there is no separate Dispatcher here any more:
+    /start subscription linking lives in src/telegram/bot_daemon.py together with /clean.
+    """
+    from src.telegram.bot_daemon import run_bot_daemon
 
     settings = get_settings()
     if not settings.subscription_bot_enabled:
         logger.warning("[subscription-bot] disabled (SUBSCRIPTION_BOT_ENABLED=0) — not starting")
         return
-    if not settings.tg_bot_token:
-        raise RuntimeError("TG_BOT_TOKEN not set — cannot run the subscription linking bot")
-
-    bot = Bot(token=settings.tg_bot_token)
-    dp = Dispatcher()
-
-    @dp.message(CommandStart(deep_link=True))
-    async def _on_start_with_payload(message):  # pragma: no cover - exercised live only
-        await handle_start(message)
-
-    @dp.message(CommandStart())
-    async def _on_plain_start(message):  # pragma: no cover - exercised live only
-        await handle_start(message)
-
-    logger.info("[subscription-bot] starting long-polling for /start linking")
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    await run_bot_daemon()
