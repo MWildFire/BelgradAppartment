@@ -9,7 +9,7 @@ from scripts import data_only_preflight as preflight
 
 FORMAT = "renfinder-db-media-sanitized-v1"
 SCOPE = "db_media_sanitized"
-SOURCE_REVISION = "f477601b43593b35596e561d7b9a6d4a4a86ef23"
+SOURCE_REVISION = "2c8d0bae03fc9bc6ce7365bc1b2380a2112b9a28"
 EXPECTED = {
     "affected_cells": 5,
     "replaced_url_values": 43,
