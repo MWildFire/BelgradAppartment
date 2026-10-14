@@ -60,9 +60,9 @@ async def run_bot_daemon() -> None:
 
         sweep = asyncio.create_task(sweep_forever(run_exclusive))
     try:
-        # Skip updates that queued up while the daemon was down: otherwise the bot would
-        # suddenly start cleaning photos that were sent to it a day ago.
-        await bot.delete_webhook(drop_pending_updates=True)
+        # Keep updates that queued up while the daemon was down: /start links of subscriptions
+        # must not be lost. Old photos are skipped by wm_bot (MAX_MEDIA_AGE) instead.
+        await bot.delete_webhook(drop_pending_updates=False)
         logger.info("[bot] long-polling started")
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:

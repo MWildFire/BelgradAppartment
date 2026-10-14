@@ -18,6 +18,7 @@ import asyncio
 import io
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 ALBUM_WAIT_SECONDS = 1.5
 MAX_ALBUM = 10
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024  # Bot API downloads files up to 20 MB
+MAX_MEDIA_AGE = timedelta(minutes=30)  # older photos were queued while the bot was down
 _WORK_LOCK = asyncio.Semaphore(1)
 
 # User-facing texts (Russian, for Darya).
@@ -315,6 +317,14 @@ async def handle_clean_command(message: Any, args: str | None) -> None:
     await message.answer(NOT_FOUND_MATCH)
 
 
+def is_stale(message: Any, now: datetime | None = None) -> bool:
+    """True for a photo sent more than MAX_MEDIA_AGE ago. A message without a date is fresh."""
+    sent = getattr(message, "date", None)
+    if sent is None:
+        return False
+    return (now or datetime.now(UTC)) - sent > MAX_MEDIA_AGE
+
+
 class AlbumCollector:
     """Telegram delivers an album as separate messages sharing media_group_id: collect them
     for ALBUM_WAIT_SECONDS and handle them together."""
@@ -367,6 +377,9 @@ def build_watermark_router(allowed: frozenset[int]) -> Any:
 
     @router.message(F.photo | F.document)
     async def _on_media(message: Message) -> None:  # pragma: no cover
+        if is_stale(message):
+            logger.info("[wm-bot] skipped a photo older than 30 min chat=%s", message.chat.id)
+            return
         await collector.add(message)
 
     return router

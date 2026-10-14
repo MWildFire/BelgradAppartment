@@ -16,7 +16,6 @@ import logging
 
 from sqlalchemy import select, update
 
-from src.config import get_settings
 from src.db.models import Subscription
 from src.site import db as sitedb
 
@@ -123,15 +122,11 @@ def build_subscription_router():
 
 
 async def run_subscription_bot() -> None:
-    """Compatibility for the old `otz subscription-bot` command: runs the unified daemon.
+    """Compatibility for the old `otz subscription-bot` command: it starts no poller any more.
 
-    A bot token allows only one poller, so there is no separate Dispatcher here any more:
-    /start subscription linking lives in src/telegram/bot_daemon.py together with /clean.
+    A bot token allows only one poller: /start subscription linking lives in
+    src/telegram/bot_daemon.py (`otz bot`) together with /clean. A leftover unit must not
+    become a second poller, so this only logs a warning.
     """
-    from src.telegram.bot_daemon import run_bot_daemon
-
-    settings = get_settings()
-    if not settings.subscription_bot_enabled:
-        logger.warning("[subscription-bot] disabled (SUBSCRIPTION_BOT_ENABLED=0) — not starting")
-        return
-    await run_bot_daemon()
+    logger.warning("[subscription-bot] replaced by otz bot (otz-bot.service), not starting")
+    return

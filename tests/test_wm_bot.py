@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -218,3 +218,10 @@ async def test_clean_in_photo_caption_goes_to_the_photo_handler(monkeypatch):
     await dp.feed_update(bot, Update(update_id=1, message=msg))
     await bot.session.close()
     assert calls == ["photo"]
+
+
+def test_is_stale_only_for_photos_older_than_thirty_minutes():
+    now = datetime(2026, 10, 15, 12, 0, tzinfo=UTC)
+    assert wm_bot.is_stale(SimpleNamespace(date=now - timedelta(minutes=31)), now=now)
+    assert not wm_bot.is_stale(SimpleNamespace(date=now - timedelta(minutes=29)), now=now)
+    assert not wm_bot.is_stale(SimpleNamespace(date=None), now=now)

@@ -520,10 +520,10 @@ def monitor(no_backfill: bool) -> None:
 
 @cli.command("subscription-bot")
 def subscription_bot() -> None:
-    """C2 legacy name: runs the unified `otz bot` daemon (if SUBSCRIPTION_BOT_ENABLED=1).
+    """C2 legacy name: starts no poller any more, use `otz bot` instead.
 
-    A bot token allows only one poller, so /start subscription linking now lives in
-    `otz bot` together with /clean. Runs forever until interrupted.
+    A bot token allows only one poller, so /start subscription linking lives in
+    `otz bot` together with /clean.
     """
     from src.telegram.subscription_bot import run_subscription_bot
 
