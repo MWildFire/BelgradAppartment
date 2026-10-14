@@ -116,7 +116,7 @@ async def test_album_is_collected_into_one_reply():
     collector = wm_bot.AlbumCollector(handler, wait=0.05)
     await collector.add(FakeMessage(21, bot=bot, photo_id="a", group="g1"))
     await collector.add(FakeMessage(22, bot=bot, photo_id="b", group="g1"))
-    await asyncio.sleep(0.2)
+    await asyncio.sleep(0.5)
     assert [[m.message_id for m in batch] for batch in handled] == [[21, 22]]
 
 
@@ -225,3 +225,42 @@ def test_is_stale_only_for_photos_older_than_thirty_minutes():
     assert wm_bot.is_stale(SimpleNamespace(date=now - timedelta(minutes=31)), now=now)
     assert not wm_bot.is_stale(SimpleNamespace(date=now - timedelta(minutes=29)), now=now)
     assert not wm_bot.is_stale(SimpleNamespace(date=None), now=now)
+
+
+@pytest.mark.parametrize(
+    ("chat_id", "chat_type", "media", "expected"),
+    [
+        (5, "private", False, ["clean"]),  # allowed private chat: /clean is a command
+        (6, "private", False, []),  # private chat of a chat that is not allowed
+        (5, "group", False, []),  # groups are not served
+        (5, "private", True, ["photo"]),  # a photo whose caption is /clean
+    ],
+)
+async def test_watermark_router_serves_only_allowed_private_chats(
+    monkeypatch, chat_id, chat_type, media, expected
+):
+    calls: list[str] = []
+
+    async def fake_clean(message, args):
+        calls.append("clean")
+
+    async def fake_add(self, message):
+        calls.append("photo")
+
+    monkeypatch.setattr(wm_bot, "handle_clean_command", fake_clean)
+    monkeypatch.setattr(wm_bot.AlbumCollector, "add", fake_add)
+    photo = [PhotoSize(file_id="f", file_unique_id="u", width=10, height=10)]
+    content = {"photo": photo, "caption": "/clean"} if media else {"text": "/clean"}
+    msg = Message(
+        message_id=1,
+        date=datetime.now(UTC),
+        chat=Chat(id=chat_id, type=chat_type),
+        from_user=User(id=5, is_bot=False, first_name="D"),
+        **content,
+    )
+    dp = Dispatcher()
+    dp.include_router(wm_bot.build_watermark_router(frozenset({5})))
+    bot = Bot(token="42:TEST")
+    await dp.feed_update(bot, Update(update_id=1, message=msg))
+    await bot.session.close()
+    assert calls == expected

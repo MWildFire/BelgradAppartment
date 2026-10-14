@@ -53,7 +53,6 @@ class LamaInpainter:
             if self._model is None:
                 import torch
 
-                torch.set_num_threads(max(1, min(4, os.cpu_count() or 1)))
                 model = torch.jit.load(str(self.model_path), map_location="cpu")
                 model.eval()
                 self._model = model
