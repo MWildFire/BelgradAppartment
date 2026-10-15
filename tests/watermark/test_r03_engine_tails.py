@@ -74,6 +74,9 @@ def test_is_current_warns_once_per_call_without_retrying(monkeypatch, tmp_path, 
     inbound = tmp_path / "inbound"
     monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
     monkeypatch.setattr(get_settings(), "watermark_clean_dir", inbound / "clean")
+    # Alembic migration tests disable existing loggers through fileConfig.
+    # Restore this test logger explicitly so caplog exercises the warning itself.
+    monkeypatch.setattr(store.logger, "disabled", False)
     with caplog.at_level(logging.WARNING, logger="src.watermark.store"):
         assert store.is_current(inbound / "photo.jpg") is True
     warnings = [r for r in caplog.records if r.name == "src.watermark.store"]
