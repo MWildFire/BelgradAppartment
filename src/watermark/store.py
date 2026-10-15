@@ -15,12 +15,16 @@ import hashlib
 import importlib.util
 import json
 import logging
+import os
+import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from src.config import PROJECT_ROOT, get_settings
 from src.watermark.files import atomic_write
+from src.watermark.generations import locked_token, read_token, replace_token
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +157,21 @@ def _write_sidecar(clean: Path, payload: dict[str, object]) -> None:
     atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8"))
 
 
+def _generation_path(clean: Path) -> Path:
+    """Validate every derived path before creating the short-lived lock handle."""
+    sidecar_for(clean)
+    site_marker_for(clean)
+    path = _checked_clean_path(clean.with_name(clean.name + ".wm.lock"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return _checked_clean_path(path)
+
+
+def _cached_result(original: Path, clean: Path, meta: dict[str, object]) -> StoredResult:
+    report = meta.get("report")
+    return StoredResult(original, clean if meta.get("changed") else None,
+                        report if isinstance(report, dict) else {}, reused=True)
+
+
 def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
     """Make sure one photo has an up-to-date clean copy. None: the file is not on disk.
 
@@ -167,42 +186,62 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
         return StoredResult(
             original=original, clean=None, report={"outside_inbound": True}, reused=True
         )
-    digest = _sha256(original)
-    meta = read_sidecar(clean)
-    if (
-        not force
-        and meta is not None
-        and _matches_policy(meta)
-        and not _retry_available_corner(meta)
-        and meta.get("sha256") == digest
-        and (not meta.get("changed") or clean.is_file())
-    ):
-        report = meta.get("report")
-        return StoredResult(
-            original=original,
-            clean=clean if meta.get("changed") else None,
-            report=report if isinstance(report, dict) else {},
-            reused=True,
-        )
+    lock = _generation_path(clean)
+    with locked_token(lock) as stream:
+        source_bytes = original.read_bytes()
+        digest = hashlib.sha256(source_bytes).hexdigest()
+        meta = read_sidecar(clean)
+        if (
+            not force
+            and meta is not None
+            and not meta.get("publishing")
+            and _matches_policy(meta)
+            and not _retry_available_corner(meta)
+            and meta.get("sha256") == digest
+            and (not meta.get("changed") or clean.is_file())
+        ):
+            return _cached_result(original, clean, meta)
+        token = uuid.uuid4().hex.encode("ascii")
+        replace_token(stream, token)
+        version = STORE_VERSION
+        mode = get_settings().watermark_halo_corner_mode
+        quality = get_settings().watermark_jpeg_quality
 
     # lazy: keeps OpenCV out of the site and admin imports
     from src.watermark.pipeline import clean_file
 
-    report = clean_file(original, clean, quality=get_settings().watermark_jpeg_quality)
-    if not report.changed and clean.exists():
-        clean.unlink()  # stale copy from an older algorithm version
-    _write_sidecar(
-        clean,
-        {
-            "version": STORE_VERSION,
-            "halo_corner_mode": get_settings().watermark_halo_corner_mode,
-            "sha256": digest,
-            "changed": report.changed,
-            "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "source": str(original),
-            "report": report.to_dict(),
-        },
-    )
+    # Neither an obsolete worker nor a failed encoder may touch the public clean path.
+    with tempfile.TemporaryDirectory(prefix=f".{clean.name}.wm-", dir=clean.parent) as work:
+        snapshot = Path(work) / "original.jpg"
+        staged = Path(work) / "clean.jpg"
+        snapshot.write_bytes(source_bytes)
+        report = clean_file(snapshot, staged, quality=quality)
+        with locked_token(_generation_path(clean)) as stream:
+            if (
+                read_token(stream) != token
+                or _sha256(original) != digest
+                or version != STORE_VERSION
+                or mode != get_settings().watermark_halo_corner_mode
+            ):
+                raise RuntimeError("watermark result superseded by a newer request or source")
+            if report.changed and (not staged.is_file() or not staged.stat().st_size):
+                raise RuntimeError("watermark result is incomplete")
+            # A crash/failure between the two atomic replacements leaves a retryable,
+            # unselected pending record, never an accepted image with another report.
+            _write_sidecar(clean, {
+                "version": version, "halo_corner_mode": mode, "sha256": digest,
+                "changed": False, "publishing": True, "report": {},
+            })
+            if report.changed:
+                os.replace(staged, _checked_clean_path(clean))
+            elif clean.exists():
+                clean.unlink()  # stale derivative, never the original
+            _write_sidecar(clean, {
+                "version": version, "halo_corner_mode": mode, "sha256": digest,
+                "changed": report.changed,
+                "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
+                "source": str(original), "report": report.to_dict(),
+            })
     return StoredResult(
         original=original,
         clean=clean if report.changed else None,
@@ -222,12 +261,10 @@ def discard(original: Path) -> bool:
     sidecar_for(clean)
     marker = site_marker_for(clean)
     digest = _sha256(original)
-    if clean.exists():
-        clean.unlink()
-    marker.unlink(missing_ok=True)
-    _write_sidecar(
-        clean,
-        {
+    with locked_token(_generation_path(clean)) as stream:
+        replace_token(stream, uuid.uuid4().hex.encode("ascii"))
+        # Persist opt-out before removing derivatives, so even a failed unlink is safe.
+        _write_sidecar(clean, {
             "version": STORE_VERSION,
             "halo_corner_mode": get_settings().watermark_halo_corner_mode,
             "sha256": digest,
@@ -236,8 +273,10 @@ def discard(original: Path) -> bool:
             "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "source": str(original),
             "report": {"discarded": True},
-        },
-    )
+        })
+        if clean.exists():
+            clean.unlink()
+        marker.unlink(missing_ok=True)
     return True
 
 
@@ -264,7 +303,10 @@ def is_current(original: Path) -> bool:
         if sidecar_for(clean).stat().st_mtime_ns < original.stat().st_mtime_ns:
             return False
         meta = read_sidecar(clean)
-        if meta is None or not _matches_policy(meta) or _retry_available_corner(meta):
+        if (
+            meta is None or meta.get("publishing")
+            or not _matches_policy(meta) or _retry_available_corner(meta)
+        ):
             return False
         return not meta.get("changed") or clean.is_file()
     except RuntimeError as error:
