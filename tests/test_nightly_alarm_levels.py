@@ -1,7 +1,7 @@
 """Nightly summary alarm levels.
 
 Item errors below half of the items a source processed, budget skips, and the expected rolling
-source limits (TimeoutError, NoProxyAvailableError, source_budget_exhausted) are warnings (⚠️).
+source limits (NoProxyAvailableError, source_budget_exhausted) are warnings (⚠️).
 At least half of the items failing makes the source degraded, and that fails the night (PR #6,
 owner decision Q3.16). Skipped pages and anti-bot coverage gaps do not (Q3.9). Unexpected
 source-level failures, mass removals, skipped link checks and failed steps stay alarms (🚨).
@@ -365,7 +365,7 @@ def _unhealthy(results, *, maintenance_failed=False, dead=(), low_coverage=(), p
 
 
 @pytest.mark.parametrize(
-    "source_error", ["TimeoutError", "NoProxyAvailableError", "source_budget_exhausted"],
+    "source_error", ["NoProxyAvailableError", "source_budget_exhausted"],
 )
 async def test_night_with_expected_anti_bot_gaps_does_not_fail(db, heal_rolling_links, source_error):
     lines = await _nightly_lines(
@@ -430,6 +430,7 @@ def test_dead_low_coverage_parser_and_sweep_failures_fail_the_night():
 @pytest.mark.parametrize("source_errors", [
     {"NEKRETNINE": "RefreshError"},
     {"NEKRETNINE": "TargetClosedError"},
+    {"HALOOGLASI": "TimeoutError"},
     {"NEKRETNINE": "TimeoutError", "CETIRI_ZIDA": "RefreshError"},
 ])
 async def test_unexpected_source_error_is_alarm_and_fails_the_night(

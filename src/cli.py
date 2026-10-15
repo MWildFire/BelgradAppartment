@@ -1613,11 +1613,10 @@ async def _nightly_refresh(
 
 
 # Source errors the night survives (Q3.9): the source's time budget ran out, or anti-bot blocks
-# used up the proxy pool. Any other class is a real source failure and stays 🚨. Matching is by
-# exception class name, as freshness.py records it: a TimeoutError raised outside the budget
-# (for example, a browser start) matches as well.
+# used up the proxy pool. freshness.py labels an expired source budget explicitly; a TimeoutError
+# raised by browser startup or teardown is a real source failure and stays 🚨.
 _EXPECTED_SOURCE_LIMITS = frozenset({
-    "TimeoutError", "NoProxyAvailableError", "source_budget_exhausted",
+    "NoProxyAvailableError", "source_budget_exhausted",
 })
 
 
@@ -2033,7 +2032,7 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             if (rolling.errors or rolling.skipped or source_errors
                     or mass_removal
                     or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
-                # Budget, timeout and proxy limits are expected (Q3.9): ⚠️, and the source is named.
+                # Source budget and proxy limits are expected (Q3.9): ⚠️; name the source.
                 unexpected = any(
                     code not in _EXPECTED_SOURCE_LIMITS for code in source_errors.values()
                 )

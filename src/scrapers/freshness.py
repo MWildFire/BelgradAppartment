@@ -427,8 +427,9 @@ async def run_fair_refresh(
         attempted_at = None
         source_code = "source_budget_exhausted"
         if source_budget > 0:
+            source_timeout = asyncio.timeout(source_budget)
             try:
-                async with asyncio.timeout(source_budget), context_factory(platform) as context:
+                async with source_timeout, context_factory(platform) as context:
                     for row in rows:
                         in_flight, attempted_at = row, datetime.now(UTC)
                         attempted_ids.add(row.id)
@@ -454,7 +455,10 @@ async def run_fair_refresh(
                         )
                         in_flight = None
             except Exception as error:
-                source_code = type(error).__name__
+                source_code = (
+                    "source_budget_exhausted" if source_timeout.expired()
+                    else type(error).__name__
+                )
                 source_errors[platform.value] = source_code
                 if in_flight is not None:
                     items.append(

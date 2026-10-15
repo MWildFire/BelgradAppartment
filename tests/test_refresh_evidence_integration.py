@@ -194,7 +194,7 @@ async def test_hanging_first_source_leaves_time_for_second_source(db, monkeypatc
     )
     assert entered == ["slow", "fast"]
     assert stats.verified == 1 and stats.skipped == 1
-    assert stats.source_errors == {first.platform.value: "TimeoutError"}
+    assert stats.source_errors == {first.platform.value: "source_budget_exhausted"}
     assert (await read(first)).details_refreshed_at is None
     assert (await read(second)).details_succeeded_at is not None
 
@@ -413,7 +413,7 @@ async def test_source_timeout_during_commit_preserves_success_and_continues_queu
         },
     )
     assert stats.verified == 2 and stats.errors == 0
-    assert stats.source_errors == {first.platform.value: "TimeoutError"}
+    assert stats.source_errors == {first.platform.value: "source_budget_exhausted"}
     assert (await read(first)).details_succeeded_at is not None
     assert (await read(second)).details_succeeded_at is not None
 
