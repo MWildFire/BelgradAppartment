@@ -1623,13 +1623,16 @@ _EXPECTED_SOURCE_LIMITS = frozenset({
 
 def _source_fails_night(result) -> bool:
     """A failed source always fails the night. A degraded one fails it unless every blocking reason
-    is a partial-walk reason (COMPLETENESS_REASONS) and the site total is a known positive number.
+    is a partial-walk reason (COMPLETENESS_REASONS), the run is a full crawl, and the site total
+    is a positive integer. A degraded incremental crawl still fails: coverage is unproven.
     Then the gap is an expected anti-bot gap (Q3.9); its sweep stays blocked all the same.
     """
     if result.outcome == "failed":
         return True
     if result.outcome != "degraded":
         return False
+    if not result.full_crawl:
+        return True
     blocking = set(result.sweep_blocked_reasons) - {"not_full_crawl", "item_errors"}
     known_total = isinstance(result.site_total, int) and result.site_total > 0
     return bool(blocking - COMPLETENESS_REASONS) or not known_total

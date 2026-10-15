@@ -392,6 +392,16 @@ def test_skipped_pages_alone_do_not_fail_the_night():
     assert not _unhealthy([_source(skipped_pages=1, pages_failed=1)])
 
 
+def test_partial_incremental_walk_fails_the_night():
+    result = orchestrator.ScrapeResult(
+        platform=Platform.HALOOGLASI, full_crawl=False, previewed=20, fetched=20,
+        site_total=2604, denominator_trusted=True, skipped_pages=9, pages_failed=9,
+        pages_attempted=10, stop_reason="complete",
+    )
+    assert result.outcome == "degraded" and not result.sweep_allowed
+    assert _unhealthy([result])
+
+
 @pytest.mark.parametrize("source", [
     pytest.param({"previewed": 10, "fetched": 3, "errors": 7}, id="item_error_rate"),
     pytest.param({"previewed": 100, "fetched": 90}, id="items_unprocessed"),
