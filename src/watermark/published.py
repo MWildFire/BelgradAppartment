@@ -19,9 +19,11 @@ from src.config import get_settings
 from src.watermark.pipeline import NotAnImageError
 from src.watermark.store import (
     clean_or_original,
+    clean_path_for,
     ensure_clean,
     is_current,
     resolve_stored,
+    sidecar_for,
     site_marker_for,
 )
 
@@ -98,21 +100,31 @@ def site_variant_files(stored: str) -> list[Path]:
     return [root / f"{rel}.{kind}.webp" for kind in VARIANT_WIDTHS]
 
 
-def _clean_copy(stored: str) -> Path | None:
+def _variant_state(stored: str) -> tuple[Path, Path] | None:
+    """(copy location, freshness source), including a current decision to keep originals."""
     original = resolve_stored(stored)
     if original is None:
         return None
-    clean = clean_or_original(original)
-    return None if clean == original else clean
+    try:
+        target = clean_path_for(original)
+        if target is None or not is_current(original):
+            return None
+        source = clean_or_original(original)
+        # When all marks are skipped the old clean copy disappears. Its new sidecar still
+        # invalidates previews, so the next sweep restores them from the original.
+        return target, sidecar_for(target) if source == original else source
+    except RuntimeError:
+        return None
 
 
 def needs_site_variants(stored: str) -> bool:
-    """A clean copy exists and the site variants are missing or older than it."""
-    clean = _clean_copy(stored)
-    if clean is None:
+    """Site variants have not been rebuilt for the current clean/original decision."""
+    state = _variant_state(stored)
+    if state is None:
         return False
-    marker = site_marker_for(clean)
-    return not marker.exists() or marker.stat().st_mtime_ns < clean.stat().st_mtime_ns
+    target, source = state
+    marker = site_marker_for(target)
+    return not marker.exists() or marker.stat().st_mtime_ns < source.stat().st_mtime_ns
 
 
 def rebuild_site_variants(paths: list[str]) -> int:
@@ -132,9 +144,9 @@ def rebuild_site_variants(paths: list[str]) -> int:
             variant.unlink(missing_ok=True)
     generate_for_stored_paths(todo)
     for stored in todo:
-        clean = _clean_copy(stored)
-        if clean is not None:
-            site_marker_for(clean).touch()
+        state = _variant_state(stored)
+        if state is not None:
+            site_marker_for(state[0]).touch()
     return len(todo)
 
 

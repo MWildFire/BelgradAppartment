@@ -40,6 +40,7 @@ CASES = [
 def _telea_only(monkeypatch):
     """CI has no torch: test the Telea path (LaMa has its own skippable tests)."""
     monkeypatch.setattr(get_settings(), "watermark_lama_enabled", False)
+    monkeypatch.setattr(get_settings(), "watermark_halo_corner_mode", "telea")
 
 
 def _tpl(tid):

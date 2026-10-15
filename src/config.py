@@ -273,9 +273,12 @@ class Settings(BaseSettings):
     # Clean copies: <clean_dir>/<path relative to inbound_photos_dir>. Originals never change.
     # Must stay OUTSIDE inbound_photos_dir (the site backfill walks that whole tree).
     watermark_clean_dir: Path = PROJECT_ROOT / "data" / "clean"
-    # LaMa neural inpainting for Halo Oglasi marks (needs torch from the `clip` extra + model).
+    # LaMa for central Halo and 4zida logos (needs torch from the `clip` extra + model).
     watermark_lama_enabled: bool = True
     watermark_lama_model_path: Path = PROJECT_ROOT / "data" / "models" / "big-lama.pt"
+    # skip keeps Halo corner marks; telea uses the previous inpainting method.
+    # R03: skip by default while Q1 for Dmitry remains open.
+    watermark_halo_corner_mode: Literal["skip", "telea"] = "skip"
     # Deliver candidates to Darya already cleaned (off by default).
     watermark_clean_on_delivery: bool = False
     # The site serves clean copies instead of originals when they exist (off by default).
