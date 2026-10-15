@@ -153,3 +153,39 @@ async def test_x2_removal_alarm_reaches_nightly_exit(db, nightly, monkeypatch, a
     )
     record, _ = await nightly(fails=alarm)
     assert any("🚨 массовое снятие ссылок" in line for line in record["summary"]) is alarm
+
+
+@pytest.mark.parametrize("cleanup_error", [RuntimeError, TimeoutError, PlaywrightTimeoutError])
+async def test_cleanup_failure_after_budget_still_fails_night(
+    db, nightly, monkeypatch, cleanup_error,
+):
+    plan = select_fair([
+        RefreshCandidate(1, Platform.HALOOGLASI, "https://example.invalid/1"),
+    ], limit=1)
+
+    @asynccontextmanager
+    async def context(_platform):
+        try:
+            yield None
+        finally:
+            raise cleanup_error("cleanup failed after source cancellation")
+
+    async def callback(_row, _context):
+        await asyncio.Event().wait()
+
+    executed = await run_fair_refresh(
+        plan, callback, budget_sec=0.05, item_timeout_sec=1, context_factory=context,
+    )
+    code = cleanup_error.__name__
+    assert executed.source_errors == {"HALOOGLASI": code}
+    assert executed.items[0].attempted and executed.items[0].evidence.reason == code
+    monkeypatch.setattr(
+        orchestrator, "rolling_detail_refresh",
+        AsyncMock(return_value=orchestrator.RollingRefreshResult(
+            selected=1, refreshed=0, errors=1, price_changes=[],
+            source_errors=executed.source_errors,
+        )),
+    )
+    record, _ = await nightly(fails=True)
+    line = next(line for line in record["summary"] if "деталей обновлено" in line)
+    assert line.startswith("🚨 ") and f"HALOOGLASI: {code}" in line
