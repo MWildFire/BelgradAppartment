@@ -9,7 +9,6 @@ new image or write a new file.
 from __future__ import annotations
 
 import io
-import os
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -20,6 +19,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from src.config import get_settings
 from src.watermark.detect import Detection, match_instance, score_at, to_gray
+from src.watermark.files import atomic_write
 from src.watermark.inpaint import Inpainter, get_inpainter
 from src.watermark.remove import remove_inpaint, remove_reverse_blend
 from src.watermark.templates import WatermarkTemplate, load_templates
@@ -175,8 +175,5 @@ def clean_file(src: Path, dst: Path, *, quality: int = DEFAULT_JPEG_QUALITY) -> 
     img = decode_image(src.read_bytes())
     out, report = clean_array(img)
     if report.changed:
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
-        tmp.write_bytes(encode_jpeg(out, quality))
-        os.replace(tmp, dst)
+        atomic_write(dst, encode_jpeg(out, quality))
     return report
