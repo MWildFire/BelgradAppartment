@@ -125,6 +125,8 @@ def wm_qa(folder: Path, out_dir: Path, expect: Path | None) -> None:
 
     from src.watermark.pipeline import NotAnImageError, clean_array, decode_image
 
+    if out_dir.resolve().is_relative_to(folder.resolve()):
+        raise click.UsageError("--out-dir must lie outside the input folder")
     out_dir.mkdir(parents=True, exist_ok=True)
     rows: list[list[str]] = []
     actual: dict[str, str] = {}
@@ -192,20 +194,37 @@ async def _match_photo_paths(match_id: int) -> list[str] | None:
 @click.option("--force", is_flag=True, help="Recompute even if the clean copy is current.")
 def wm_clean_match(match_id: int, force: bool) -> None:
     """Make clean copies (data/clean/...) of one match's photos."""
+    from src.watermark.pipeline import NotAnImageError
     from src.watermark.store import ensure_clean
 
     paths = asyncio.run(_match_photo_paths(match_id))
     if paths is None:
         raise click.ClickException(f"Match {match_id} not found")
+    errors = cleaned = reused = unchanged = 0
     for stored in paths:
-        result = ensure_clean(stored, force=force)
+        try:
+            result = ensure_clean(stored, force=force)
+        except (NotAnImageError, OSError) as error:
+            errors += 1
+            click.echo(f"{stored}: error ({error})")
+            continue
         if result is None:
+            errors += 1
             click.echo(f"{stored}: file not on disk")
         elif result.clean is None:
+            unchanged += 1
             click.echo(f"{stored}: no marks")
         else:
+            reused += int(result.reused)
+            cleaned += int(not result.reused)
             state = "reused" if result.reused else "cleaned"
             click.echo(f"{stored}: {state} -> {result.clean}")
+    click.echo(
+        f"=== total={len(paths)}, cleaned={cleaned}, reused={reused}, "
+        f"unchanged={unchanged}, errors={errors} ==="
+    )
+    if errors:
+        raise click.ClickException(f"Cleaning completed with {errors} photo errors")
 
 
 @click.command("wm-revert")

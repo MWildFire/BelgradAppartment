@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from src.config import PROJECT_ROOT, get_settings
+from src.watermark.files import atomic_write
+
+logger = logging.getLogger(__name__)
 
 STORE_VERSION = 2
 SIDECAR_SUFFIX = ".wm.json"
@@ -59,6 +62,18 @@ def clean_root() -> Path:
     return root
 
 
+def _checked_clean_path(path: Path) -> Path:
+    """Reject derived paths redirected through symlinks, including sidecars/markers."""
+    root = clean_root()
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError) as error:
+        raise RuntimeError(f"unsafe clean path: {path}") from error
+    if not resolved.is_relative_to(root) or resolved != path.absolute():
+        raise RuntimeError(f"unsafe clean path outside its expected location: {path}")
+    return path
+
+
 def clean_path_for(original: Path) -> Path | None:
     """data/inbound/<rel> -> data/clean/<rel> (.jpg); None when the file is outside inbound."""
     inbound = Path(get_settings().inbound_photos_dir).resolve()
@@ -69,16 +84,16 @@ def clean_path_for(original: Path) -> Path | None:
     target = clean_root() / rel
     if target.suffix.lower() not in (".jpg", ".jpeg"):
         target = target.with_name(target.name + ".jpg")
-    return target
+    return _checked_clean_path(target)
 
 
 def sidecar_for(clean: Path) -> Path:
-    return clean.with_name(clean.name + SIDECAR_SUFFIX)
+    return _checked_clean_path(clean.with_name(clean.name + SIDECAR_SUFFIX))
 
 
 def site_marker_for(clean: Path) -> Path:
     """Marker next to a clean copy: its mtime is when the site variants were built from it."""
-    return clean.with_name(clean.name + SITE_MARKER_SUFFIX)
+    return _checked_clean_path(clean.with_name(clean.name + SITE_MARKER_SUFFIX))
 
 
 def _sha256(path: Path) -> str:
@@ -103,10 +118,7 @@ def _matches_policy(meta: dict[str, object]) -> bool:
 
 def _write_sidecar(clean: Path, payload: dict[str, object]) -> None:
     path = sidecar_for(clean)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8"))
 
 
 def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
@@ -173,15 +185,19 @@ def discard(original: Path) -> bool:
     clean = clean_path_for(original)
     if clean is None:
         return False
+    # Validate all derived paths and read the source before any deletion.
+    sidecar_for(clean)
+    marker = site_marker_for(clean)
+    digest = _sha256(original)
     if clean.exists():
         clean.unlink()
-    site_marker_for(clean).unlink(missing_ok=True)
+    marker.unlink(missing_ok=True)
     _write_sidecar(
         clean,
         {
             "version": STORE_VERSION,
             "halo_corner_mode": get_settings().watermark_halo_corner_mode,
-            "sha256": _sha256(original),
+            "sha256": digest,
             "changed": False,
             "discarded": True,
             "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -196,34 +212,34 @@ def clean_or_original(original: Path) -> Path:
     """For display: the clean copy when it exists for the current version, else the original."""
     try:
         clean = clean_path_for(original)
-    except RuntimeError:  # unsafe clean dir: show the original rather than fail the page
+        if clean is None or not clean.is_file():
+            return original
+        meta = read_sidecar(clean)
+        if meta is None or not _matches_policy(meta) or not meta.get("changed"):
+            return original
+        return clean
+    except RuntimeError:  # unsafe clean paths: show the original rather than fail the page
         return original
-    if clean is None or not clean.is_file():
-        return original
-    meta = read_sidecar(clean)
-    if meta is None or not _matches_policy(meta) or not meta.get("changed"):
-        return original
-    return clean
 
 
 def is_current(original: Path) -> bool:
-    """True when a sidecar for this algorithm version exists and is not older than the
-    original. No hashing: the periodic site sweep calls this for every public photo."""
+    """True when a current sidecar is not older than the original; no source hashing."""
     try:
         clean = clean_path_for(original)
-    except RuntimeError:  # unsafe clean dir: there is no clean copy to keep current
-        return True
-    if clean is None:
-        return True
-    try:
+        if clean is None:
+            return True
         if sidecar_for(clean).stat().st_mtime_ns < original.stat().st_mtime_ns:
             return False
+        meta = read_sidecar(clean)
+        if meta is None or not _matches_policy(meta):
+            return False
+        return not meta.get("changed") or clean.is_file()
+    except RuntimeError as error:
+        # Do not repeatedly schedule a job that cannot safely write to this location.
+        logger.warning("[watermark] unsafe clean storage for %s: %s", original, error)
+        return True
     except OSError:
         return False
-    meta = read_sidecar(clean)
-    if meta is None or not _matches_policy(meta):
-        return False
-    return not meta.get("changed") or clean.is_file()
 
 
 def site_source(original: Path) -> Path:

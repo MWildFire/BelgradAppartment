@@ -123,8 +123,20 @@ def needs_site_variants(stored: str) -> bool:
     if state is None:
         return False
     target, source = state
-    marker = site_marker_for(target)
-    return not marker.exists() or marker.stat().st_mtime_ns < source.stat().st_mtime_ns
+    try:
+        marker = site_marker_for(target)
+        variants = site_variant_files(stored)
+        if not variants:
+            return False
+        return (
+            not all(variant.is_file() for variant in variants)
+            or not marker.exists()
+            or marker.stat().st_mtime_ns < source.stat().st_mtime_ns
+        )
+    except RuntimeError:
+        return False
+    except OSError:
+        return True
 
 
 def rebuild_site_variants(paths: list[str]) -> int:
@@ -143,11 +155,14 @@ def rebuild_site_variants(paths: list[str]) -> int:
         for variant in site_variant_files(stored):
             variant.unlink(missing_ok=True)
     generate_for_stored_paths(todo)
+    rebuilt = 0
     for stored in todo:
         state = _variant_state(stored)
-        if state is not None:
+        variants = site_variant_files(stored)
+        if state is not None and variants and all(variant.is_file() for variant in variants):
             site_marker_for(state[0]).touch()
-    return len(todo)
+            rebuilt += 1
+    return rebuilt
 
 
 async def _in_thread(func: Callable[..., Any], *args: Any) -> Any:
