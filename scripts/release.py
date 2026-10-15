@@ -26,7 +26,7 @@ from urllib.parse import quote, urlsplit
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ("src", "alembic", "scripts", "deploy", "pyproject.toml", "uv.lock", "alembic.ini")
 SYSTEMD_UNITS = Path("/etc/systemd/system")
-SERVICES = ("otz-monitor", "otz-site", "otz-admin", "otz-subscription-bot")
+SERVICES = ("otz-monitor", "otz-site", "otz-admin", "otz-subscription-bot", "otz-bot")
 JOBS = (
     "otz-nightly-refresh", "otz-weekly-full-refresh", "otz-scrape-smoke",
     "otz-daily-summary", "otz-public-detail-refresh",
@@ -936,7 +936,7 @@ def stage_runtime_environment(release, uv_bin):
         env=env,
     )
     new_python = release / "venv/bin/python"
-    run([str(new_python), "-c", "import sqlalchemy,playwright,torch,open_clip,fastapi"])
+    run([str(new_python), "-c", "import sqlalchemy,playwright,torch,open_clip,fastapi,cv2"])
     # Install under the actual service account/home, not root's cache or an assumed home.
     # Existing service environment overrides remain an operator configuration gate.
     import pwd

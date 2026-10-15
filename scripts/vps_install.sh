@@ -257,37 +257,45 @@ RandomizedDelaySec=5min
 WantedBy=timers.target
 UNIT
 
-# ─── C2: saved-search subscription LINKING daemon (OPTIONAL, OFF by default) ───
-# A NEW long-running aiogram poller that handles /start sub_<token> to link a Telegram chat to a
-# saved-search subscription. It is OPTIONAL: enabling it is a deploy choice (it needs TG_BOT_TOKEN
-# + SITE_TELEGRAM_BOT_USERNAME set, and SUBSCRIPTION_BOT_ENABLED=1 in .env — without that the
-# command no-ops). The unit is written but NOT enabled here; enable it manually only when running
-# the Telegram subscription channel. e-mail subscriptions need NONE of this.
-cat >/etc/systemd/system/otz-subscription-bot.service <<UNIT
+# ─── RentFinderBot interactive daemon (OPTIONAL, OFF by default) ───
+# ONE long-running aiogram poller (a bot token allows only one) for both interactive features:
+#   /clean + incoming photos → remove listing-platform watermarks (WATERMARK_BOT_ENABLED=1);
+#   /start sub_<token> → link a Telegram chat to a saved-search subscription
+#   (SUBSCRIPTION_BOT_ENABLED=1, needs SITE_TELEGRAM_BOT_USERNAME too).
+# It replaces the old otz-subscription-bot unit; with both flags off the command no-ops.
+# The canonical unit is deploy/otz-bot.service (release.py installs it); written here for
+# fresh hosts but NOT enabled. e-mail subscriptions need NONE of this.
+cat >/etc/systemd/system/otz-bot.service <<UNIT
 [Unit]
-Description=otz-rent-finder — Telegram saved-search subscription linking daemon (C2, optional)
+Description=otz-rent-finder RentFinderBot daemon (watermark /clean + subscription linking)
 After=network-online.target
 Wants=network-online.target
 OnFailure=otz-notify-failure@%n.service
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=$OTZ_USER
+Group=$OTZ_USER
 WorkingDirectory=$OTZ_HOME
-ExecStart=$OTZ_HOME/.venv/bin/python -m src.cli subscription-bot
+EnvironmentFile=$OTZ_HOME/.env
+Environment=PATH=$OTZ_HOME/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=$OTZ_HOME/.venv/bin/python -m src.cli bot
 Restart=on-failure
 RestartSec=30
-StartLimitBurst=5
-StartLimitIntervalSec=600
-StandardOutput=append:/var/log/otz/subscription-bot.log
-StandardError=append:/var/log/otz/subscription-bot.log
+Nice=10
+MemoryMax=2G
+StandardOutput=append:/var/log/otz/bot.log
+StandardError=append:/var/log/otz/bot.log
 
 [Install]
 WantedBy=multi-user.target
 UNIT
-# NOTE: intentionally NOT enabled. To turn on the Telegram subscription channel:
-#   1) set SUBSCRIPTION_BOT_ENABLED=1, TG_BOT_TOKEN=…, SITE_TELEGRAM_BOT_USERNAME=<botname> in .env
-#   2) systemctl enable --now otz-subscription-bot
+# NOTE: intentionally NOT enabled. To turn it on:
+#   1) set WATERMARK_BOT_ENABLED=1 and/or SUBSCRIPTION_BOT_ENABLED=1 (+ TG_BOT_TOKEN) in .env
+#   2) systemctl disable --now otz-subscription-bot 2>/dev/null || true
+#   3) systemctl enable --now otz-bot
 
 # Triggered via OnFailure=otz-notify-failure@%n.service on the units above.
 # %i = name of the failed unit. Smoke: systemctl start otz-notify-failure@smoke.service

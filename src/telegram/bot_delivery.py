@@ -49,6 +49,7 @@ logger = logging.getLogger(__name__)
 MAX_ALBUM = 10
 TELEGRAM_CAPTION_LIMIT = 1024
 BOT_PHOTO_LIMIT_BYTES = 10 * 1024 * 1024
+DELIVERY_CLEAN_TIMEOUT_SECONDS = 180  # slower cleaning: the album goes out with the originals
 
 
 class BotDeliveryError(RuntimeError):
@@ -128,6 +129,40 @@ async def _send_album_with_floodwait(bot: Bot, chat_id: int, media: list[InputMe
         )
         await asyncio.sleep(wait)
         return await send()
+
+
+async def _clean_delivery_paths(match_id: int, photo_paths: list[Path]) -> list[Path]:
+    """Swap in watermark-free copies (WATERMARK_CLEAN_ON_DELIVERY); originals on any problem."""
+    import asyncio
+
+    from src.watermark.store import ensure_clean
+
+    def _clean_all() -> list[Path]:
+        out: list[Path] = []
+        for path in photo_paths:
+            result = ensure_clean(str(path))
+            best = result.best if result is not None else path
+            # A re-encoded copy must not break the Bot API 10 MB limit the original passed.
+            if best != path and best.stat().st_size > BOT_PHOTO_LIMIT_BYTES:
+                best = path
+            out.append(best)
+        return out
+
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_clean_all), timeout=DELIVERY_CLEAN_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        logger.warning(
+            "[bot_delivery] match=%d watermark cleaning timed out — sending originals", match_id
+        )
+        return photo_paths
+    except Exception:
+        logger.warning(
+            "[bot_delivery] match=%d watermark cleaning failed — sending originals",
+            match_id, exc_info=True,
+        )
+        return photo_paths
 
 
 async def send_match_via_bot(
@@ -235,6 +270,8 @@ async def send_match_via_bot(
             frozen = await claimed_payload(match_id, chat_id, token)
             full_caption = frozen["caption"]
             photo_paths = [Path(p) for p in frozen["photo_paths"]]
+            if get_settings().watermark_clean_on_delivery:
+                photo_paths = await _clean_delivery_paths(match_id, photo_paths)
             if any(not p.is_file() for p in photo_paths):
                 await finish_recipient(match_id, chat_id, token,
                                        error=ValueError("missing frozen photo files"))

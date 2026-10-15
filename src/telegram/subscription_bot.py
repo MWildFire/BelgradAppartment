@@ -16,7 +16,6 @@ import logging
 
 from sqlalchemy import select, update
 
-from src.config import get_settings
 from src.db.models import Subscription
 from src.site import db as sitedb
 
@@ -104,35 +103,30 @@ async def handle_start(message, *, database_url: str | None = None) -> bool:
     return True
 
 
-async def run_subscription_bot() -> None:
-    """Run the aiogram long-polling Dispatcher (blocks). Gated by subscription_bot_enabled.
-
-    Imported lazily inside so the heavy aiogram Dispatcher machinery only loads when the daemon
-    is actually started — the send path and the unit-tested handle_start never trigger it.
-    """
-    from aiogram import Bot, Dispatcher
+def build_subscription_router():
+    """aiogram Router with /start subscription linking (included by src/telegram/bot_daemon.py)."""
+    from aiogram import Router
     from aiogram.filters import CommandStart
 
-    settings = get_settings()
-    if not settings.subscription_bot_enabled:
-        logger.warning("[subscription-bot] disabled (SUBSCRIPTION_BOT_ENABLED=0) — not starting")
-        return
-    if not settings.tg_bot_token:
-        raise RuntimeError("TG_BOT_TOKEN not set — cannot run the subscription linking bot")
+    router = Router(name="subscription")
 
-    bot = Bot(token=settings.tg_bot_token)
-    dp = Dispatcher()
-
-    @dp.message(CommandStart(deep_link=True))
+    @router.message(CommandStart(deep_link=True))
     async def _on_start_with_payload(message):  # pragma: no cover - exercised live only
         await handle_start(message)
 
-    @dp.message(CommandStart())
+    @router.message(CommandStart())
     async def _on_plain_start(message):  # pragma: no cover - exercised live only
         await handle_start(message)
 
-    logger.info("[subscription-bot] starting long-polling for /start linking")
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    return router
+
+
+async def run_subscription_bot() -> None:
+    """Compatibility for the old `otz subscription-bot` command: it starts no poller any more.
+
+    A bot token allows only one poller: /start subscription linking lives in
+    src/telegram/bot_daemon.py (`otz bot`) together with /clean. A leftover unit must not
+    become a second poller, so this only logs a warning.
+    """
+    logger.warning("[subscription-bot] replaced by otz bot (otz-bot.service), not starting")
+    return

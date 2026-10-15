@@ -20,6 +20,7 @@ import fcntl
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -120,6 +121,20 @@ def _entry(rel: str, w: int, h: int) -> ManifestEntry:
     return {"w": w, "h": h, "card": f"{rel}.card.webp", "detail": f"{rel}.detail.webp"}
 
 
+def _variant_source(orig: Path) -> Path:
+    """Pixels for the variants: the watermark-free copy (WATERMARK_SITE_USE_CLEAN=1) or orig."""
+    from src.watermark.store import site_source
+
+    return site_source(orig)
+
+
+def _stale(target: Path, source: Path) -> bool:
+    try:
+        return target.stat().st_mtime_ns < source.stat().st_mtime_ns
+    except OSError:
+        return True
+
+
 def process_photo(
     orig: Path, rel: str, root: Path, *, dry_run: bool = False
 ) -> tuple[ManifestEntry | None, int, int]:
@@ -129,8 +144,11 @@ def process_photo(
     оригинал → (None, …) + warn-лог, НИКОГДА не raise. dry_run считает generated, не пишет.
     """
     generated = skipped = 0
+    # Watermark-free source: a variant older than the clean copy is rebuilt from it.
+    source = _variant_source(orig)
+    from_clean = source != orig
     try:
-        with Image.open(orig) as im:
+        with Image.open(source) as im:
             w, h = im.size
             if w <= 0 or h <= 0:
                 raise ValueError(f"degenerate size {im.size}")
@@ -142,7 +160,7 @@ def process_photo(
             decoded: Image.Image | None = None  # декодируем лениво: full-skip не читает пиксели
             for kind, width in VARIANT_WIDTHS.items():
                 target = root / f"{rel}.{kind}.webp"
-                if target.exists():
+                if target.exists() and not (from_clean and _stale(target, source)):
                     skipped += 1
                     continue
                 generated += 1
@@ -160,9 +178,18 @@ def process_photo(
                     variant = decoded.resize((tw, th), Image.Resampling.LANCZOS)
                 # tmp + rename: Caddy никогда не отдаст полузаписанный webp, а упавший
                 # процесс не оставит «существующий» огрызок, который скип бы увековечил.
-                tmp = target.with_name(target.name + ".tmp")
-                variant.save(tmp, "WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
-                os.replace(tmp, target)
+                # The bot sweep and publish hooks can rebuild the same photo concurrently.
+                tmp = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False,
+                    ) as temporary:
+                        tmp = Path(temporary.name)
+                        variant.save(temporary, "WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
+                    os.replace(tmp, target)
+                finally:
+                    if tmp is not None:
+                        tmp.unlink(missing_ok=True)
     except _BROKEN_IMAGE_ERRORS as e:
         logger.warning("skip broken photo %s: %s", orig, e)
         return None, generated, skipped
