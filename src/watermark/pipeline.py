@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from src.config import get_settings
 from src.watermark.detect import Detection, match_instance, score_at, to_gray
 from src.watermark.inpaint import Inpainter, get_inpainter
 from src.watermark.remove import remove_inpaint, remove_reverse_blend
@@ -43,7 +44,7 @@ class MarkResult:
     x: float
     y: float
     scale: float
-    method: str  # "reverse_blend" | "inpaint:lama" | "inpaint:telea"
+    method: str  # "reverse_blend" | "inpaint:lama" | "inpaint:telea" | "skip"
     residual: float  # correlation at the same place after removal
 
 
@@ -56,7 +57,7 @@ class CleanReport:
 
     @property
     def changed(self) -> bool:
-        return bool(self.marks)
+        return any(mark.method != "skip" for mark in self.marks)
 
     def platform_counts(self) -> Counter[str]:
         return Counter(PLATFORM_TITLES.get(m.platform, m.platform) for m in self.marks)
@@ -114,6 +115,8 @@ def find_marks(
 
 def removal_for(tpl: WatermarkTemplate) -> tuple[str, Inpainter | None]:
     """(method name, inpainter) for a template; honours lama_fallback when LaMa is missing."""
+    if tpl.id == "halo_corner" and get_settings().watermark_halo_corner_mode == "skip":
+        return "skip", None
     if tpl.strategy == "reverse_blend":
         return "reverse_blend", None
     inpainter = get_inpainter(tpl.inpaint_backend)
@@ -131,7 +134,9 @@ def clean_array(
     out = img_rgb
     for tpl, det in find_marks(img_rgb, templates):
         method, inpainter = removal_for(tpl)
-        if inpainter is None:
+        if method == "skip":
+            pass  # retain the detection in reports without changing any pixels
+        elif inpainter is None:
             candidate, k = remove_reverse_blend(out, tpl, det)
             if k <= MIN_PLAUSIBLE_K:
                 continue  # not a real mark: leave the photo and the report as they are
@@ -164,7 +169,7 @@ def clean_bytes(data: bytes, *, quality: int = DEFAULT_JPEG_QUALITY) -> tuple[by
 
 
 def clean_file(src: Path, dst: Path, *, quality: int = DEFAULT_JPEG_QUALITY) -> CleanReport:
-    """Write dst (JPEG) atomically, only when marks were found; src is never touched."""
+    """Write dst (JPEG) atomically only when a mark was removed; src is never touched."""
     if dst.resolve() == src.resolve():
         raise ValueError(f"refusing to overwrite the original: {src}")
     img = decode_image(src.read_bytes())

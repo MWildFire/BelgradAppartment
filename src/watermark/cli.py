@@ -25,7 +25,7 @@ def _report_line(name: str, report: object) -> str:
     from src.watermark.pipeline import CleanReport
 
     assert isinstance(report, CleanReport)
-    if not report.changed:
+    if not report.marks:
         return f"{name}: no marks ({report.seconds:.2f}s)"
     parts = [f"{m.template_id}#{m.instance} score={m.score:.2f} {m.method}" for m in report.marks]
     return f"{name}: " + "; ".join(parts) + f" ({report.seconds:.2f}s)"

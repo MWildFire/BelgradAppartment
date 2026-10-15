@@ -19,7 +19,7 @@ from pathlib import Path
 
 from src.config import PROJECT_ROOT, get_settings
 
-STORE_VERSION = 1
+STORE_VERSION = 2
 SIDECAR_SUFFIX = ".wm.json"
 SITE_MARKER_SUFFIX = ".site"
 
@@ -93,6 +93,14 @@ def read_sidecar(clean: Path) -> dict[str, object] | None:
     return data if isinstance(data, dict) else None
 
 
+def _matches_policy(meta: dict[str, object]) -> bool:
+    """Mode switches invalidate copies; an explicit discard remains in effect."""
+    return meta.get("version") == STORE_VERSION and (
+        bool(meta.get("discarded"))
+        or meta.get("halo_corner_mode") == get_settings().watermark_halo_corner_mode
+    )
+
+
 def _write_sidecar(clean: Path, payload: dict[str, object]) -> None:
     path = sidecar_for(clean)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +128,7 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
     if (
         not force
         and meta is not None
-        and meta.get("version") == STORE_VERSION
+        and _matches_policy(meta)
         and meta.get("sha256") == digest
         and (not meta.get("changed") or clean.is_file())
     ):
@@ -142,6 +150,7 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
         clean,
         {
             "version": STORE_VERSION,
+            "halo_corner_mode": get_settings().watermark_halo_corner_mode,
             "sha256": digest,
             "changed": report.changed,
             "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -171,6 +180,7 @@ def discard(original: Path) -> bool:
         clean,
         {
             "version": STORE_VERSION,
+            "halo_corner_mode": get_settings().watermark_halo_corner_mode,
             "sha256": _sha256(original),
             "changed": False,
             "discarded": True,
@@ -191,7 +201,7 @@ def clean_or_original(original: Path) -> Path:
     if clean is None or not clean.is_file():
         return original
     meta = read_sidecar(clean)
-    if meta is None or meta.get("version") != STORE_VERSION or not meta.get("changed"):
+    if meta is None or not _matches_policy(meta) or not meta.get("changed"):
         return original
     return clean
 
@@ -211,7 +221,7 @@ def is_current(original: Path) -> bool:
     except OSError:
         return False
     meta = read_sidecar(clean)
-    if meta is None or meta.get("version") != STORE_VERSION:
+    if meta is None or not _matches_policy(meta):
         return False
     return not meta.get("changed") or clean.is_file()
 
