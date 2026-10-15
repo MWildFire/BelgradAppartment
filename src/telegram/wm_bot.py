@@ -20,21 +20,17 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
 from src.config import get_settings
 from src.db import get_session
 from src.db.models import InboundPost, Match, MatchDelivery
-from src.watermark.pipeline import (
-    PLATFORM_TITLES,
-    CleanReport,
-    MarkResult,
-    NotAnImageError,
-    clean_bytes,
-)
 from src.watermark.store import StoredResult, ensure_clean
+
+if TYPE_CHECKING:
+    from src.watermark.pipeline import CleanReport
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +83,8 @@ def allowed_chat_ids() -> frozenset[int]:
 
 def summarize(reports: Iterable[CleanReport]) -> str:
     """Caption for the cleaned album, e.g. 'Halo Oglasi - 1, 4zida - 2' in Russian wording."""
+    from src.watermark.pipeline import PLATFORM_TITLES
+
     reports = list(reports)
     counts: dict[str, int] = {}
     for report in reports:
@@ -150,6 +148,8 @@ async def _send_files(
 
 async def process_photo_messages(messages: list[Any]) -> None:
     """Photos sent to the bot: download -> clean -> send back (as photos or as files)."""
+    from src.watermark.pipeline import NotAnImageError, clean_bytes
+
     first = messages[0]
     bot = first.bot
     items: list[tuple[Any, str]] = []
@@ -249,6 +249,8 @@ async def _refresh_site_variants(paths: list[str]) -> None:
 
 def _report_from_dict(result: StoredResult) -> CleanReport:
     """StoredResult keeps the report as a dict (from the sidecar); rebuild it for summarize()."""
+    from src.watermark.pipeline import CleanReport, MarkResult
+
     report = result.report if isinstance(result.report, dict) else {}
     raw_marks = report.get("marks")
     marks = [MarkResult(**m) for m in raw_marks or [] if isinstance(m, dict)]  # type: ignore[union-attr]

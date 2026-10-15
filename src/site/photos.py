@@ -20,6 +20,7 @@ import fcntl
 import json
 import logging
 import os
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -177,9 +178,18 @@ def process_photo(
                     variant = decoded.resize((tw, th), Image.Resampling.LANCZOS)
                 # tmp + rename: Caddy никогда не отдаст полузаписанный webp, а упавший
                 # процесс не оставит «существующий» огрызок, который скип бы увековечил.
-                tmp = target.with_name(target.name + ".tmp")
-                variant.save(tmp, "WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
-                os.replace(tmp, target)
+                # The bot sweep and publish hooks can rebuild the same photo concurrently.
+                tmp = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp", delete=False,
+                    ) as temporary:
+                        tmp = Path(temporary.name)
+                        variant.save(temporary, "WEBP", quality=WEBP_QUALITY, method=WEBP_METHOD)
+                    os.replace(tmp, target)
+                finally:
+                    if tmp is not None:
+                        tmp.unlink(missing_ok=True)
     except _BROKEN_IMAGE_ERRORS as e:
         logger.warning("skip broken photo %s: %s", orig, e)
         return None, generated, skipped
