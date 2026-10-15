@@ -34,7 +34,7 @@ def jobs(tmp_path, monkeypatch):
     local = threading.local()
     calls = []
     errors = []
-    finished = threading.Event()
+    finished = {tag: threading.Event() for tag in ("A", "B")}
 
     def tracked(*args, **kwargs):
         with guard:
@@ -46,15 +46,14 @@ def jobs(tmp_path, monkeypatch):
             errors.append(str(exc))
             raise
         finally:
-            if local.tag == "A":
-                finished.set()
+            finished[local.tag].set()
 
     monkeypatch.setattr(store, "ensure_clean", tracked)
     return original, tmp_path / "clean/same.jpg", local, errors, finished
 
 
 async def reached(event):
-    for _ in range(300):
+    for _ in range(800):
         if event.is_set():
             return
         await asyncio.sleep(.005)
@@ -80,26 +79,38 @@ async def test_late_worker_cannot_publish_an_obsolete_generation(jobs, monkeypat
         atomic_write(destination, f"derived {tag}".encode())
         if tag == "A":
             ready.set()
-            assert release.wait(10)
+            assert release.wait(20)
+        if tag == "B":
+            time.sleep(.12)  # Valid work can exceed the artificial timeout for A.
         return report(tag)
 
     monkeypatch.setattr(pipeline, "clean_file", fake_clean)
     first = asyncio.create_task(bot_delivery._clean_delivery_paths(701, [original]))
-    await reached(ready)
+    second_started = False
     try:
+        await reached(ready)
         assert await first == [original]
-        assert not finished.is_set() and not clean.exists()
+        assert not finished["A"].is_set() and not clean.exists()
+        # Only A needs the artificial short timeout. B tests publication ordering,
+        # not a 50 ms disk/executor latency budget under a loaded full test suite.
+        monkeypatch.setattr(bot_delivery, "DELIVERY_CLEAN_TIMEOUT_SECONDS", 5)
         if intervening == "second_job":
+            second_started = True
             assert await bot_delivery._clean_delivery_paths(702, [original]) == [clean]
             assert clean.read_bytes() == b"derived B"
         elif intervening == "discard":
             assert store.discard(original)
+            second_started = True
             assert await bot_delivery._clean_delivery_paths(702, [original]) == [original]
         else:
             original.write_bytes(b"new original from external source")
     finally:
         release.set()
-    await reached(finished)
+        # Join both real worker lifetimes even when an assertion fails. Restoring
+        # monkeypatch settings while a worker still runs can contaminate later tests.
+        await reached(finished["A"])
+        if second_started:
+            await reached(finished["B"])
     assert errors == ["watermark result superseded by a newer request or source"]
     if intervening == "second_job":
         assert clean.read_bytes() == b"derived B"
