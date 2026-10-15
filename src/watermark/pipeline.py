@@ -9,6 +9,7 @@ new image or write a new file.
 from __future__ import annotations
 
 import io
+import logging
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from src.watermark.files import atomic_write
 from src.watermark.inpaint import Inpainter, get_inpainter
 from src.watermark.remove import remove_inpaint, remove_reverse_blend
 from src.watermark.templates import WatermarkTemplate, load_templates
+
+logger = logging.getLogger(__name__)
 
 PLATFORM_TITLES = {"halooglasi": "Halo Oglasi", "4zida": "4zida", "cityexpert": "CityExpert"}
 DEFAULT_JPEG_QUALITY = 95
@@ -115,8 +118,18 @@ def find_marks(
 
 def removal_for(tpl: WatermarkTemplate) -> tuple[str, Inpainter | None]:
     """(method name, inpainter) for a template; honours lama_fallback when LaMa is missing."""
-    if tpl.id == "halo_corner" and get_settings().watermark_halo_corner_mode == "skip":
-        return "skip", None
+    if tpl.id == "halo_corner":
+        mode = get_settings().watermark_halo_corner_mode
+        if mode == "skip":
+            return "skip", None
+        if mode == "lama":
+            from src.watermark.lama_corner import get_lama_corner_inpainter
+
+            corner = get_lama_corner_inpainter()
+            if corner is None:
+                logger.warning("[watermark] corner LaMa unavailable; keeping corner (skip)")
+                return "skip", None
+            return "inpaint:lama", corner
     if tpl.strategy == "reverse_blend":
         return "reverse_blend", None
     inpainter = get_inpainter(tpl.inpaint_backend)

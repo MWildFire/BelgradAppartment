@@ -276,9 +276,10 @@ class Settings(BaseSettings):
     # LaMa for central Halo and 4zida logos (needs torch from the `clip` extra + model).
     watermark_lama_enabled: bool = True
     watermark_lama_model_path: Path = PROJECT_ROOT / "data" / "models" / "big-lama.pt"
-    # skip keeps Halo corner marks; telea uses the previous inpainting method.
+    # skip keeps Halo corners; telea is the old method; lama uses the shared LaMa model.
+    # If LaMa is unavailable, lama keeps the corner with a warning (method=skip).
     # R03: skip by default while Q1 for Dmitry remains open.
-    watermark_halo_corner_mode: Literal["skip", "telea"] = "skip"
+    watermark_halo_corner_mode: Literal["skip", "telea", "lama"] = "skip"
     # Deliver candidates to Darya already cleaned (off by default).
     watermark_clean_on_delivery: bool = False
     # The site serves clean copies instead of originals when they exist (off by default).
