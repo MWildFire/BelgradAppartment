@@ -213,7 +213,8 @@ def wm_clean_match(match_id: int, force: bool) -> None:
             click.echo(f"{stored}: file not on disk")
         elif result.clean is None:
             unchanged += 1
-            click.echo(f"{stored}: no marks")
+            state = "marks kept (original unchanged)" if result.report.get("marks") else "no marks"
+            click.echo(f"{stored}: {state}")
         else:
             reused += int(result.reused)
             cleaned += int(not result.reused)

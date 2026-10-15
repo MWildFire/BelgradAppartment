@@ -74,3 +74,36 @@ def test_real_lama_corner_pipeline_reports_the_requested_method(monkeypatch):
     out, report = pipeline.clean_array(img)
     assert [(m.template_id, m.method) for m in report.marks] == [("halo_corner", "inpaint:lama")]
     assert report.changed and not np.array_equal(out, img)
+
+
+@pytest.mark.parametrize("mode", ["skip", "lama"])
+def test_clean_match_reports_kept_marks_on_fresh_and_reused_results(monkeypatch, tmp_path, mode):
+    from unittest.mock import AsyncMock
+
+    from click.testing import CliRunner
+    from PIL import Image
+
+    from src.watermark import cli, store
+
+    inbound = tmp_path / "inbound"
+    inbound.mkdir()
+    settings = get_settings()
+    monkeypatch.setattr(settings, "inbound_photos_dir", inbound)
+    monkeypatch.setattr(settings, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(settings, "watermark_halo_corner_mode", mode)
+    monkeypatch.setattr(settings, "watermark_lama_enabled", False)
+    src = inbound / "corner.jpg"
+    Image.fromarray(apply_mark(make_background(1000, 750, seed=3),
+                              _templates()["halo_corner"])).save(src, "JPEG", quality=92)
+    original = src.read_bytes()
+    monkeypatch.setattr(cli, "_match_photo_paths", AsyncMock(return_value=[str(src)]))
+    for _ in range(2):
+        result = CliRunner().invoke(cli.wm_clean_match, ["42"])
+        assert result.exit_code == 0, result.output
+        assert "marks kept (original unchanged)" in result.output
+        assert "no marks" not in result.output
+        assert "unchanged=1, errors=0" in result.output
+        assert src.read_bytes() == original
+        stored = store.ensure_clean(str(src))
+        assert stored.reused and stored.clean is None
+        assert stored.report["marks"][0]["method"] == "skip"
