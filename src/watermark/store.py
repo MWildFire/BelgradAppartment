@@ -2,7 +2,8 @@
 
 Originals (InboundPost.photo_paths, data/inbound/...) are never modified. Next to each clean
 copy lives `<name>.wm.json` with the algorithm version, the source sha256 and the report. A
-repeated call with the same source and version recomputes nothing. When no marks are found,
+repeated call with the same source and version reuses the result unless an unavailable
+corner LaMa fallback can now be retried. When no marks are found,
 no clean copy is created (the sidecar says changed=false) and consumers use the original.
 
 Bump STORE_VERSION when templates or the algorithm change: everything is then recomputed.
@@ -11,6 +12,7 @@ Bump STORE_VERSION when templates or the algorithm change: everything is then re
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import logging
 from dataclasses import dataclass
@@ -116,6 +118,36 @@ def _matches_policy(meta: dict[str, object]) -> bool:
     )
 
 
+def _retry_available_corner(meta: dict[str, object]) -> bool:
+    """Retry an unavailable LaMa fallback after recovery; preserve intentional keeps.
+
+    This checks availability without importing OpenCV/torch or loading the model. It
+    does not affect display reads, default skip results or explicit individual reverts.
+    """
+    settings = get_settings()
+    if (
+        meta.get("discarded")
+        or settings.watermark_halo_corner_mode != "lama"
+        or not settings.watermark_lama_enabled
+    ):
+        return False
+    report = meta.get("report")
+    marks = report.get("marks") if isinstance(report, dict) else None
+    if not isinstance(marks, list) or not any(
+        isinstance(mark, dict)
+        and mark.get("template_id") == "halo_corner"
+        and mark.get("method") == "skip"
+        for mark in marks
+    ):
+        return False
+    if not Path(settings.watermark_lama_model_path).is_file():
+        return False
+    try:
+        return importlib.util.find_spec("torch") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def _write_sidecar(clean: Path, payload: dict[str, object]) -> None:
     path = sidecar_for(clean)
     atomic_write(path, json.dumps(payload, ensure_ascii=False, indent=1).encode("utf-8"))
@@ -141,6 +173,7 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
         not force
         and meta is not None
         and _matches_policy(meta)
+        and not _retry_available_corner(meta)
         and meta.get("sha256") == digest
         and (not meta.get("changed") or clean.is_file())
     ):
@@ -231,7 +264,7 @@ def is_current(original: Path) -> bool:
         if sidecar_for(clean).stat().st_mtime_ns < original.stat().st_mtime_ns:
             return False
         meta = read_sidecar(clean)
-        if meta is None or not _matches_policy(meta):
+        if meta is None or not _matches_policy(meta) or _retry_available_corner(meta):
             return False
         return not meta.get("changed") or clean.is_file()
     except RuntimeError as error:
