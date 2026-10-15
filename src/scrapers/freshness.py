@@ -427,34 +427,52 @@ async def run_fair_refresh(
         attempted_at = None
         source_code = "source_budget_exhausted"
         if source_budget > 0:
+            source_timeout = asyncio.timeout(source_budget)
+            source_failed = False
             try:
-                async with asyncio.timeout(source_budget), context_factory(platform) as context:
-                    for row in rows:
-                        in_flight, attempted_at = row, datetime.now(UTC)
-                        attempted_ids.add(row.id)
-                        try:
-                            async with asyncio.timeout(item_timeout_sec):
-                                result = await callback(row, context)
-                            if not isinstance(result, CallbackResult) or not isinstance(
-                                result.evidence, RefreshEvidence
-                            ):
-                                raise TypeError("callback must return CallbackResult with evidence")
-                            evidence, payload = result.evidence, result.payload
-                        except NoProxyAvailableError:
-                            # No route remains for this source context. Continuing would
-                            # record thousands of failed listings without another request
-                            # and unnecessarily put every remaining row into backoff.
-                            raise
-                        except Exception as error:
-                            evidence, payload = RefreshEvidence.failed(type(error).__name__), None
-                        items.append(
-                            RefreshExecution(
-                                row, True, evidence, attempted_at, datetime.now(UTC), payload
-                            )
-                        )
-                        in_flight = None
+                async with source_timeout:
+                    try:
+                        async with context_factory(platform) as context:
+                            for row in rows:
+                                in_flight, attempted_at = row, datetime.now(UTC)
+                                attempted_ids.add(row.id)
+                                try:
+                                    async with asyncio.timeout(item_timeout_sec):
+                                        result = await callback(row, context)
+                                    if not isinstance(result, CallbackResult) or not isinstance(
+                                        result.evidence, RefreshEvidence
+                                    ):
+                                        raise TypeError(
+                                            "callback must return CallbackResult with evidence"
+                                        )
+                                    evidence, payload = result.evidence, result.payload
+                                except NoProxyAvailableError:
+                                    # No route remains for this source context. Continuing would
+                                    # record thousands of failed listings without another request
+                                    # and unnecessarily put every remaining row into backoff.
+                                    raise
+                                except Exception as error:
+                                    evidence = RefreshEvidence.failed(type(error).__name__)
+                                    payload = None
+                                items.append(
+                                    RefreshExecution(
+                                        row, True, evidence, attempted_at,
+                                        datetime.now(UTC), payload,
+                                    )
+                                )
+                                in_flight = None
+                    except Exception:
+                        # Startup/teardown can fail while unwinding a budget cancellation.
+                        # Preserve that real failure, including a browser's own TimeoutError.
+                        source_failed = True
+                        raise
             except Exception as error:
-                source_code = type(error).__name__
+                source_code = (
+                    "source_budget_exhausted"
+                    if source_timeout.expired() and not source_failed
+                    and isinstance(error, TimeoutError)
+                    else type(error).__name__
+                )
                 source_errors[platform.value] = source_code
                 if in_flight is not None:
                     items.append(

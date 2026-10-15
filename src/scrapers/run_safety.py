@@ -5,6 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+# Partial-walk reasons (Q3.9). They block the sweep but alone do not fail a full-crawl night with
+# a positive integer site_total (even if denominator_trusted is false). Degraded incremental
+# crawls and sources without a positive total still fail (see cli._source_fails_night).
+COMPLETENESS_REASONS = frozenset({
+    "crawl_incomplete", "coverage_mismatch", "untrusted_denominator",
+    "skipped_pages", "failed_pages",
+})
+
 
 @dataclass(frozen=True)
 class SourceEvaluation:

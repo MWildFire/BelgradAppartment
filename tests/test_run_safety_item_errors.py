@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from src.cli import _nightly_unhealthy
+from src.db.models import Platform
+from src.scrapers.orchestrator import ScrapeResult
 from src.scrapers.run_safety import evaluate_source
 
 
@@ -39,7 +41,6 @@ def test_item_errors_do_not_fail_the_night_with_the_real_outcome():
     healthy = {
         "dead": [],
         "low_coverage": [],
-        "degraded": [],
         "parse_degraded": [],
         "sweep_reasons": [],
         "maintenance_failed": False,
@@ -74,11 +75,11 @@ def test_near_total_item_failure_fails_the_night():
     healthy = {
         "dead": [],
         "low_coverage": [],
-        "degraded": [],
         "parse_degraded": [],
         "sweep_reasons": [],
         "maintenance_failed": False,
     }
-    outcome = evaluate_source(_source(errors=99, fetched=1)).outcome
+    result = ScrapeResult(platform=Platform.NEKRETNINE, previewed=100, fetched=1, errors=99)
 
-    assert _nightly_unhealthy(**healthy, results=[SimpleNamespace(outcome=outcome, errors=99)])
+    assert result.outcome == "degraded"
+    assert _nightly_unhealthy(**healthy, results=[result])

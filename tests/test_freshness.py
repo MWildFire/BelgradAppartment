@@ -209,7 +209,7 @@ async def test_first_hanging_item_respects_other_sources_reserved_time():
     result = await run_fair_refresh(plan, callback, budget_sec=0.15, item_timeout_sec=10)
     assert result.attempted == 3 and result.succeeded == 2
     assert len(visited) == 3
-    assert result.items[0].evidence.reason == "TimeoutError"
+    assert result.items[0].evidence.reason == "source_budget_exhausted"
     assert result.elapsed_sec < 0.5
 
 

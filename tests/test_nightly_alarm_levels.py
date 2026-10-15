@@ -1,12 +1,15 @@
 """Nightly summary alarm levels.
 
-Item errors below half of the items a source processed, and budget skips, are warnings (⚠️).
-At least half of them make the source degraded, and a degraded source fails the night (PR #6,
-owner decision Q3.16). Source-level failures, skipped link checks and failed steps stay alarms (🚨).
+Item errors below half of the items a source processed, budget skips, and the expected rolling
+source limits (NoProxyAvailableError, source_budget_exhausted) are warnings (⚠️).
+At least half of the items failing makes the source degraded, and that fails the night (PR #6,
+owner decision Q3.16). Skipped pages and anti-bot coverage gaps do not (Q3.9). Unexpected
+source-level failures, mass removals, skipped link checks and failed steps stay alarms (🚨).
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -76,7 +79,7 @@ async def test_source_failures_and_skipped_link_checks_stay_alarms(db, heal_roll
         orchestrator.HealResult(selected=5, fixed=5, remaining=0, errors=0),
         orchestrator.RollingRefreshResult(
             selected=10, refreshed=10, errors=0, price_changes=[],
-            source_errors={"NEKRETNINE": "TimeoutError"},
+            source_errors={"NEKRETNINE": "RefreshError"},
         ),
         orchestrator.LinkVerifyStats(checked=2, skipped=3),
     )
@@ -192,10 +195,10 @@ def test_real_item_errors_degrade_the_source_and_fail_the_night():
     """Pins the item-error policy with real ScrapeResult objects, not SimpleNamespace fakes.
 
     Item errors at least half of the processed items make the source "degraded" (run_safety
-    evaluate_source, reason item_error_rate), and _nightly_unhealthy fails the night on "degraded".
+    evaluate_source, reason item_error_rate), and _nightly_unhealthy fails the night on that reason.
     """
     healthy = dict(
-        dead=[], low_coverage=[], degraded=[], parse_degraded=[], sweep_reasons=[],
+        dead=[], low_coverage=[], parse_degraded=[], sweep_reasons=[],
         maintenance_failed=False,
     )
     with_errors = orchestrator.ScrapeResult(
@@ -318,6 +321,170 @@ async def test_nightly_mass_removal_is_alarm_with_count(db, heal_rolling_links):
     assert not detail_line.startswith("🚨 ")
     assert "деактивировано (404/410): 1" in detail_line
     assert not any("🚨" in line for line in lines)
+
+
+# --- Q3.9: an expected anti-bot gap is a warning; real failures still fail the night ---
+
+
+def _ids(count):
+    return {str(number) for number in range(count)}
+
+
+def _source(**fields):
+    """A full-crawl ScrapeResult with a complete, trusted walk, unless a field says otherwise."""
+    previewed = fields.get("previewed", 100)
+    base = {
+        "platform": Platform.NEKRETNINE, "full_crawl": True, "crawl_complete": True,
+        "stop_reason": "complete", "pages_attempted": 10, "denominator_trusted": True,
+        "site_total": previewed, "previewed": previewed, "fetched": previewed,
+        "observed_ids": _ids(previewed),
+    }
+    return orchestrator.ScrapeResult(**{**base, **fields})
+
+
+def _night_13_10():
+    """The sources of the 13.10 night as the prod run record shows them (counts only)."""
+    return [
+        _source(platform=Platform.NEKRETNINE, previewed=3339, fetched=3335, errors=4,
+                site_total=3342, crawl_complete=False),
+        _source(platform=Platform.CETIRI_ZIDA, previewed=3312, site_total=3373,
+                crawl_complete=False, denominator_trusted=False, skipped_pages=1, pages_failed=1),
+        _source(platform=Platform.HALOOGLASI, previewed=2531, site_total=2604,
+                crawl_complete=False),
+        _source(platform=Platform.CITYEXPERT, previewed=581),
+    ]
+
+
+def _unhealthy(results, *, maintenance_failed=False, dead=(), low_coverage=(), parse_degraded=(),
+               sweep_reasons=()):
+    return cli_mod._nightly_unhealthy(
+        dead=list(dead), low_coverage=list(low_coverage),
+        parse_degraded=list(parse_degraded), sweep_reasons=list(sweep_reasons),
+        maintenance_failed=maintenance_failed, results=results,
+    )
+
+
+@pytest.mark.parametrize(
+    "source_error", ["NoProxyAvailableError", "source_budget_exhausted"],
+)
+async def test_night_with_expected_anti_bot_gaps_does_not_fail(db, heal_rolling_links, source_error):
+    lines = await _nightly_lines(
+        heal_rolling_links,
+        orchestrator.HealResult(selected=0, fixed=0, remaining=0, errors=0),
+        orchestrator.RollingRefreshResult(
+            selected=10, refreshed=9, errors=0, price_changes=[],
+            source_errors={"NEKRETNINE": source_error},
+        ),
+        orchestrator.LinkVerifyStats(),
+    )
+    detail_line = next(line for line in lines if "деталей обновлено" in line)
+    assert detail_line.startswith("⚠️ ") and f"NEKRETNINE: {source_error}" in detail_line
+    results = _night_13_10()
+    assert not _unhealthy(results, maintenance_failed=any("🚨" in line for line in lines))
+    assert not any(result.sweep_allowed for result in results[:3])
+
+
+def test_skipped_pages_alone_do_not_fail_the_night():
+    """Skipped pages are a partial walk (Q3.9): by themselves they do not fail the night.
+
+    The ⚠️ «Частичный обход» line is written by _nightly_refresh_impl and is not checked here.
+    """
+    assert not _unhealthy([_source(skipped_pages=1, pages_failed=1)])
+
+
+def test_partial_incremental_walk_fails_the_night():
+    result = orchestrator.ScrapeResult(
+        platform=Platform.HALOOGLASI, full_crawl=False, previewed=20, fetched=20,
+        site_total=2604, denominator_trusted=True, skipped_pages=9, pages_failed=9,
+        pages_attempted=10, stop_reason="complete",
+    )
+    assert result.outcome == "degraded" and not result.sweep_allowed
+    assert _unhealthy([result])
+
+
+@pytest.mark.parametrize("source", [
+    pytest.param({"previewed": 10, "fetched": 3, "errors": 7}, id="item_error_rate"),
+    pytest.param({"previewed": 100, "fetched": 90}, id="items_unprocessed"),
+    pytest.param({"denominator_trusted": False, "site_total": None}, id="no_denominator"),
+    pytest.param({"crawl_complete": False, "previewed": 5, "site_total": 0}, id="zero_denominator"),
+    pytest.param({"quality_reasons": ["parse_degraded"]}, id="other_quality_reason"),
+    pytest.param({"previewed": 10, "fetched": 0, "errors": 1}, id="failed"),
+    pytest.param({"denominator_trusted": False, "site_total": -1}, id="negative_denominator"),
+    pytest.param({"stop_reason": "item_limit"}, id="item_limit"),
+    pytest.param({"observed_ids": _ids(50)}, id="missing_presence_evidence"),
+    pytest.param({"pages_attempted": 0}, id="missing_page_evidence"),
+])
+def test_real_source_failures_fail_the_night(source):
+    assert _unhealthy([_source(**source)])
+
+
+def test_dead_low_coverage_parser_and_sweep_failures_fail_the_night():
+    clean = [_source()]
+    assert not _unhealthy(clean)
+    assert _unhealthy(clean, dead=["CITYEXPERT"])
+    assert _unhealthy(clean, low_coverage=["HALOOGLASI (1000/2604)"])
+    assert _unhealthy(clean, parse_degraded=["parse-rate 40% (2/5)"])
+    assert _unhealthy(clean, sweep_reasons=["probe_sweep_broken"])
+
+
+@pytest.mark.parametrize("source_errors", [
+    {"NEKRETNINE": "RefreshError"},
+    {"NEKRETNINE": "TargetClosedError"},
+    {"HALOOGLASI": "TimeoutError"},
+    {"NEKRETNINE": "TimeoutError", "CETIRI_ZIDA": "RefreshError"},
+])
+async def test_unexpected_source_error_is_alarm_and_fails_the_night(
+    db, heal_rolling_links, source_errors,
+):
+    lines = await _nightly_lines(
+        heal_rolling_links,
+        orchestrator.HealResult(selected=0, fixed=0, remaining=0, errors=0),
+        orchestrator.RollingRefreshResult(
+            selected=10, refreshed=9, errors=0, price_changes=[], source_errors=source_errors,
+        ),
+        orchestrator.LinkVerifyStats(),
+    )
+    detail_line = next(line for line in lines if "деталей обновлено" in line)
+    assert detail_line.startswith("🚨 ")
+    assert all(f"{platform}: {code}" in detail_line for platform, code in source_errors.items())
+    assert _unhealthy(_night_13_10(), maintenance_failed=any("🚨" in line for line in lines))
+
+
+async def test_nightly_mass_removal_fails_the_night(db, heal_rolling_links):
+    lines = await _nightly_lines(
+        heal_rolling_links,
+        orchestrator.HealResult(selected=0, fixed=0, remaining=0, errors=0),
+        orchestrator.RollingRefreshResult(
+            selected=10, refreshed=1, errors=0, price_changes=[], deactivated=9,
+        ),
+        orchestrator.LinkVerifyStats(),
+    )
+    assert _unhealthy(_night_13_10(), maintenance_failed=any("🚨" in line for line in lines))
+
+
+async def test_public_run_failure_fails_the_night(db, heal_rolling_links, monkeypatch):
+    monkeypatch.setattr(
+        removal_guard, "fresh_alarm",
+        lambda _state_dir, step, **_kwargs: (
+            (removal_guard.FAILED, datetime.now(UTC)) if step == "public" else None
+        ),
+    )
+    lines = await _nightly_lines(
+        heal_rolling_links,
+        orchestrator.HealResult(selected=0, fixed=0, remaining=0, errors=0),
+        orchestrator.RollingRefreshResult(selected=0, refreshed=0, errors=0, price_changes=[]),
+        orchestrator.LinkVerifyStats(),
+    )
+    assert any(line.startswith("🚨 публичный прогон") for line in lines)
+    assert _unhealthy([_source()], maintenance_failed=any("🚨" in line for line in lines))
+
+
+def test_expected_gap_keeps_the_outcome_and_the_sweep_blocked():
+    """Q3.9 changes only the exit: evaluate_source still degrades those sources and blocks sweeps."""
+    results = _night_13_10()
+    assert [(r.outcome, r.sweep_allowed) for r in results] == [
+        ("degraded", False), ("degraded", False), ("degraded", False), ("ok", True),
+    ]
 
 
 

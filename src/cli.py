@@ -21,7 +21,7 @@ from src.jobs.lifecycle import remaining_budget, run_budget, run_cooperatively
 from src.matching.llm_validator import LLM_DECISIONS_TS_FMT
 from src.scrapers import SCRAPERS, removal_guard
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
-from src.scrapers.run_safety import probe_sweep_broken, source_removal_alarm
+from src.scrapers.run_safety import COMPLETENESS_REASONS, probe_sweep_broken, source_removal_alarm
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
@@ -1612,15 +1612,40 @@ async def _nightly_refresh(
             finish_refresh(token, error=error)
 
 
-def _nightly_unhealthy(*, dead, low_coverage, degraded, parse_degraded, sweep_reasons,
-                       maintenance_failed, results) -> bool:
-    """Exit 1 only for real failures: dead platform, incomplete coverage, failed steps (🚨).
+# Source errors the night survives (Q3.9): the source's time budget ran out, or anti-bot blocks
+# used up the proxy pool. freshness.py labels an expired source budget explicitly; a TimeoutError
+# raised by browser startup or teardown is a real source failure and stays 🚨.
+_EXPECTED_SOURCE_LIMITS = frozenset({
+    "NoProxyAvailableError", "source_budget_exhausted",
+})
 
-    Item errors (⚠️ Ошибки: N) stay warnings in the summary. Partial crawls (skipped pages),
-    failed steps and dead or low-coverage platforms still fail the night.
+
+def _source_fails_night(result) -> bool:
+    """A failed source always fails the night. A degraded one fails it unless every blocking reason
+    is a partial-walk reason (COMPLETENESS_REASONS), the run is a full crawl, and the site total
+    is a positive integer. A degraded incremental crawl still fails: coverage is unproven.
+    Then the gap is an expected anti-bot gap (Q3.9); its sweep stays blocked all the same.
     """
-    return bool(dead or low_coverage or degraded or parse_degraded or sweep_reasons
-                or maintenance_failed or any(r.outcome in {"failed", "degraded"} for r in results))
+    if result.outcome == "failed":
+        return True
+    if result.outcome != "degraded":
+        return False
+    if not result.full_crawl:
+        return True
+    blocking = set(result.sweep_blocked_reasons) - {"not_full_crawl", "item_errors"}
+    known_total = isinstance(result.site_total, int) and result.site_total > 0
+    return bool(blocking - COMPLETENESS_REASONS) or not known_total
+
+
+def _nightly_unhealthy(*, dead, low_coverage, parse_degraded, sweep_reasons,
+                       maintenance_failed, results) -> bool:
+    """Exit 1 only for real failures (Q3.9): a dead platform, coverage under 70%, a broken parser,
+    a failed sweep, a 🚨 line (failed step, public run, mass removal, unexpected source error), or
+    a source that failed or degraded for a reason outside an expected gap (_source_fails_night).
+    Item errors (⚠️ Ошибки: N) and skipped pages stay warnings in the summary.
+    """
+    return bool(dead or low_coverage or parse_degraded or sweep_reasons or maintenance_failed
+                or any(_source_fails_night(r) for r in results))
 
 
 async def _nightly_refresh_impl(
@@ -1832,10 +1857,10 @@ async def _nightly_refresh_impl(
     if incremental:
         lines.append("ℹ️ Daily incremental run: stale sweep deferred to weekly full refresh")
     maintenance_failed = any("🚨" in line for line in [
-        *steps.summary_lines, liveness_line, analytics_line, dupes_line,
+        *steps.summary_lines, price_line or "", liveness_line, analytics_line, dupes_line,
     ])
     unhealthy = _nightly_unhealthy(
-        dead=dead, low_coverage=low_coverage, degraded=degraded, parse_degraded=parse_degraded,
+        dead=dead, low_coverage=low_coverage, parse_degraded=parse_degraded,
         sweep_reasons=sweep_reasons, maintenance_failed=maintenance_failed, results=results,
     )
     from src.jobs.run_history import record_refresh_result
@@ -2003,12 +2028,21 @@ async def _run_nightly_steps(*, notify: bool = True) -> NightlyStepsResult:
             )
             if mass_removal:
                 line += f", массовое снятие: {rolling.deactivated} из {attempted} попыток"
-            if (rolling.errors or rolling.skipped or getattr(rolling, "source_errors", {})
+            source_errors = getattr(rolling, "source_errors", {})
+            if (rolling.errors or rolling.skipped or source_errors
                     or mass_removal
                     or (settings.nightly_detail_refresh_all and rolling.retry_deferred)):
-                alarm = "🚨 " if getattr(rolling, "source_errors", {}) or mass_removal else "⚠️ "
+                # Source budget and proxy limits are expected (Q3.9): ⚠️; name the source.
+                unexpected = any(
+                    code not in _EXPECTED_SOURCE_LIMITS for code in source_errors.values()
+                )
+                alarm = "🚨 " if unexpected or mass_removal else "⚠️ "
+                named = ", ".join(
+                    f"{platform}: {code}" for platform, code in sorted(source_errors.items())
+                )
                 line = (f"{alarm}{line}, ошибок: {rolling.errors}; "
-                        f"ошибок источников: {len(getattr(rolling, 'source_errors', {}))}")
+                        f"ошибок источников: {len(source_errors)}"
+                        + (f" ({named})" if named else ""))
             lines.append(line)
         except Exception:
             log.exception("nightly step failed: detail-refresh")
