@@ -483,4 +483,3 @@ def test_deploy_packet_checks_waiver_locally_before_touching_the_server(packet_t
     with pytest.raises(packet_tool.tool.ReleaseError):
         run_tool(packet_tool, "--code-only-data-backup", "--owner-waiver", str(path))
     assert packet_tool.calls == []
-
