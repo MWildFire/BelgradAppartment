@@ -102,6 +102,37 @@ def test_model_is_loaded_once_and_only_on_first_use():
     assert len(runner.loads) == 1 and runner.loaded  # type: ignore[attr-defined]
 
 
+def test_page_cache_of_the_model_file_is_dropped_right_after_loading(monkeypatch, tmp_path):
+    """200 MiB of clean file cache otherwise stays charged to the unit's cgroup for good."""
+    from src.watermark import lama_model
+
+    model_file = tmp_path / "big-lama.pt"
+    model_file.write_bytes(b"x" * 4096)
+    advised: list[tuple[int, int, int, int]] = []
+
+    def fake_fadvise(fd, offset, length, advice):
+        advised.append((offset, length, advice, len(loads)))
+
+    loads: list[Path] = []
+
+    def loader(path):
+        loads.append(path)
+        return red_model
+
+    monkeypatch.setattr(lama_model.os, "posix_fadvise", fake_fadvise, raising=False)
+    monkeypatch.setattr(lama_model.os, "POSIX_FADV_DONTNEED", 4, raising=False)
+    runner = lama_model.ModelRunner(model_file, loader=loader)
+    runner.predict(rgb(), hole())
+    runner.predict(rgb(), hole())
+    assert advised == [(0, 0, 4, 1)]  # once, after the load
+
+
+def test_a_missing_model_file_does_not_break_the_cache_drop(tmp_path):
+    from src.watermark import lama_model
+
+    lama_model.drop_file_cache(tmp_path / "nope.pt")  # no exception
+
+
 def test_torch_threads_are_limited_when_the_model_is_loaded():
     import torch
 

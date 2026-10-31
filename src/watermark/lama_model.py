@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import gc
 import logging
+import os
 import sys
 import threading
 import time
@@ -44,6 +45,27 @@ def release_memory() -> None:
             ctypes.CDLL("libc.so.6").malloc_trim(0)
         except OSError:
             logger.debug("[watermark] malloc_trim unavailable")
+
+
+def drop_file_cache(path: Path) -> None:
+    """Tell the kernel the file's cached pages are no longer needed (Linux; a no-op elsewhere).
+
+    Loading big-lama leaves ~200 MiB of clean page cache that the unit's cgroup is charged for
+    until memory pressure evicts it; the weights are in the process by then.
+    """
+    advise = getattr(os, "posix_fadvise", None)
+    if advise is None:
+        return
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        advise(fd, 0, 0, getattr(os, "POSIX_FADV_DONTNEED", 4))
+    except OSError:
+        logger.debug("[watermark] posix_fadvise failed for %s", path)
+    finally:
+        os.close(fd)
 
 
 def _load_torchscript(path: Path) -> Any:
@@ -89,6 +111,7 @@ class ModelRunner:
 
             torch.set_num_threads(self.threads)
             self._model = self._loader(self.model_path)
+            drop_file_cache(self.model_path)
             logger.info("[watermark] LaMa model loaded from %s", self.model_path)
             self._start_watcher()
         return self._model
