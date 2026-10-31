@@ -15,8 +15,9 @@ from src.config import PROJECT_ROOT
     [
         "import src.telegram.wm_bot",
         "from src.config import get_settings; "
-        "s = get_settings(); s.watermark_bot_enabled = False; "
-        "s.subscription_bot_enabled = True; "
+        "from src.watermark.settings import get_watermark_settings; "
+        "get_watermark_settings().watermark_bot_enabled = False; "
+        "s = get_settings(); s.subscription_bot_enabled = True; "
         "from src.telegram.bot_daemon import build_dispatcher; build_dispatcher()",
     ],
 )

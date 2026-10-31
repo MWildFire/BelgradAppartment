@@ -16,6 +16,7 @@ from src.config import get_settings
 from src.telegram import bot_delivery
 from src.watermark import pipeline, store
 from src.watermark.files import atomic_write
+from src.watermark.settings import get_watermark_settings
 
 
 @pytest.fixture
@@ -25,9 +26,10 @@ def jobs(tmp_path, monkeypatch):
     original = inbound / "same.jpg"
     original.write_bytes(b"immutable original payload")
     settings = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(settings, "inbound_photos_dir", inbound)
-    monkeypatch.setattr(settings, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(settings, "watermark_halo_corner_mode", "skip")
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_halo_corner_mode", "skip")
     monkeypatch.setattr(bot_delivery, "DELIVERY_CLEAN_TIMEOUT_SECONDS", .05)
     actual = store.ensure_clean
     guard = threading.Lock()
@@ -130,9 +132,10 @@ def test_failed_pair_publication_falls_back_and_is_retryable(tmp_path, monkeypat
     original = inbound / "same.jpg"
     original.write_bytes(b"original")
     settings = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(settings, "inbound_photos_dir", inbound)
-    monkeypatch.setattr(settings, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(settings, "watermark_halo_corner_mode", "skip")
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_halo_corner_mode", "skip")
 
     def fake_clean(source, destination, **kwargs):
         destination.write_bytes(b"complete staged derivative")
@@ -166,8 +169,9 @@ def test_generation_lock_symlink_is_rejected_before_external_mutation(tmp_path, 
     original = inbound / "same.jpg"
     original.write_bytes(b"original")
     settings = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(settings, "inbound_photos_dir", inbound)
-    monkeypatch.setattr(settings, "watermark_clean_dir", clean)
+    monkeypatch.setattr(wm, "watermark_clean_dir", clean)
     target = tmp_path / "unrelated.txt"
     target.write_bytes(b"must remain intact")
     (clean / "same.jpg.wm.lock").symlink_to(target)
@@ -186,20 +190,22 @@ def test_generation_is_shared_with_an_independent_process(tmp_path, monkeypatch,
     original = inbound / "same.jpg"
     original.write_bytes(b"unchanged source")
     settings = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(settings, "inbound_photos_dir", inbound)
-    monkeypatch.setattr(settings, "watermark_clean_dir", clean_root)
-    monkeypatch.setattr(settings, "watermark_halo_corner_mode", "skip")
+    monkeypatch.setattr(wm, "watermark_clean_dir", clean_root)
+    monkeypatch.setattr(wm, "watermark_halo_corner_mode", "skip")
     ready, release = tmp_path / "ready", tmp_path / "release"
     worker = r'''
 import sys, time
 from pathlib import Path
 from types import SimpleNamespace
 from src.config import get_settings
+from src.watermark.settings import get_watermark_settings
 from src.watermark import pipeline, store
-root=Path(sys.argv[1]); settings=get_settings()
+root=Path(sys.argv[1]); settings=get_settings(); wm=get_watermark_settings()
 settings.inbound_photos_dir=root/'inbound'
-settings.watermark_clean_dir=root/'clean'
-settings.watermark_halo_corner_mode='skip'
+wm.watermark_clean_dir=root/'clean'
+wm.watermark_halo_corner_mode='skip'
 def clean(source, destination, **kwargs):
     destination.write_bytes(b'derived A')
     (root/'ready').touch()

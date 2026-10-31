@@ -30,6 +30,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from src.config import get_settings
+from src.watermark.settings import get_watermark_settings
 
 # A sized font is either a TrueType face (system path) or Pillow's scalable default. Both expose
 # the textbbox/draw API we use; the union keeps mypy --strict happy across the fallback.
@@ -155,7 +156,8 @@ def snapshot_photo(photos: list[str]) -> PhotoSnapshot:
         if path != original:
             from src.watermark import store
 
-            policy = ("clean", store.STORE_VERSION, settings.watermark_halo_corner_mode)
+            corner_mode = get_watermark_settings().watermark_halo_corner_mode
+            policy = ("clean", store.STORE_VERSION, corner_mode)
             try:
                 data = _read_contained(path, store.clean_root())
             except (OSError, ValueError, RuntimeError):

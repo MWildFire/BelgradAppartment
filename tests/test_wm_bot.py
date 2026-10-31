@@ -18,6 +18,7 @@ from src.db import get_session
 from src.db.models import InboundPost, Listing, Match, MatchDelivery, Platform, SourceChannel
 from src.telegram import wm_bot
 from src.watermark.pipeline import decode_image, find_marks
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
 
@@ -71,10 +72,11 @@ class FakeMessage:
 @pytest.fixture(autouse=True)
 def _settings(monkeypatch, tmp_path):
     s = get_settings()
-    monkeypatch.setattr(s, "watermark_lama_enabled", False)
+    wm = get_watermark_settings()
+    monkeypatch.setattr(wm, "watermark_lama_enabled", False)
     monkeypatch.setattr(s, "inbound_photos_dir", tmp_path / "inbound")
-    monkeypatch.setattr(s, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(s, "watermark_site_use_clean", False)
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_site_use_clean", False)
 
 
 def test_parse_chat_ids_ignores_garbage():
@@ -174,7 +176,7 @@ async def test_reply_to_delivered_album_cleans_that_match(db, tmp_path):
     await wm_bot.handle_clean_command(msg, None)
     assert len(msg.albums) == 1 and len(msg.albums[0]) == 2
     assert "4zida — 4" in msg.albums[0][0].caption
-    clean_copy = Path(get_settings().watermark_clean_dir) / "1" / "77" / "00.jpg"
+    clean_copy = Path(get_watermark_settings().watermark_clean_dir) / "1" / "77" / "00.jpg"
     assert _all_exist([str(clean_copy), *paths])  # clean copy written, originals kept
     again = FakeMessage(41)
     await wm_bot.handle_clean_command(again, str(match_id))

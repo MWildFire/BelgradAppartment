@@ -17,6 +17,7 @@ from src.site.media import _permitted_file
 from src.site.og_image import _photo_file
 from src.watermark.pipeline import decode_image, find_marks
 from src.watermark.published import clean_batch
+from src.watermark.settings import get_watermark_settings
 from src.watermark.store import ensure_clean
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
@@ -27,11 +28,12 @@ def root(tmp_path: Path, monkeypatch) -> Path:
     inbound = tmp_path / "inbound"
     inbound.mkdir()
     s = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(s, "inbound_photos_dir", inbound)
     monkeypatch.setattr(s, "site_photos_root", inbound)
-    monkeypatch.setattr(s, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(s, "watermark_lama_enabled", False)
-    monkeypatch.setattr(s, "watermark_site_use_clean", False)
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_lama_enabled", False)
+    monkeypatch.setattr(wm, "watermark_site_use_clean", False)
     photos.invalidate_manifest_cache()
     return inbound
 
@@ -55,7 +57,7 @@ def test_variants_come_from_clean_copy_only_with_flag(root, monkeypatch):
     photos.process_photo(orig, rel, root)
     assert _detail_has_marks(root, rel)  # flag off -> variants come from the original
     ensure_clean(str(orig))
-    monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_site_use_clean", True)
     _entry, generated, _skipped = photos.process_photo(orig, rel, root)
     assert generated == 2  # the clean copy is newer than the old variants
     assert not _detail_has_marks(root, rel)
@@ -69,7 +71,7 @@ def test_clean_copy_older_than_variants_is_rebuilt(root, monkeypatch):
     ensure_clean(str(orig))
     photos.process_photo(orig, rel, root)  # flag off: variants from the original, marks visible
     assert _detail_has_marks(root, rel)
-    monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_site_use_clean", True)
     assert published.rebuild_site_variants([str(orig)]) == 1  # clean copy is older than variants
     assert not _detail_has_marks(root, rel)
     assert published.rebuild_site_variants([str(orig)]) == 0
@@ -80,7 +82,7 @@ def test_original_url_serves_clean_copy_with_flag(root, monkeypatch):
     rel = orig.relative_to(root).as_posix()
     ensure_clean(str(orig))
     assert _permitted_file(rel, [str(orig)]) == orig
-    monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_site_use_clean", True)
     served = _permitted_file(rel, [str(orig)])
     assert served is not None and served != orig and not find_marks(decode_image(served.read_bytes()))
     assert _photo_file([f"/photos/{rel}"]) == served
@@ -90,12 +92,12 @@ def test_original_url_serves_clean_copy_with_flag(root, monkeypatch):
 def test_without_clean_copy_everything_stays_original(root, monkeypatch):
     orig = _marked_photo(root)
     rel = orig.relative_to(root).as_posix()
-    monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_site_use_clean", True)
     assert _permitted_file(rel, [str(orig)]) == orig
 
 
 def test_cleaned_then_reverted_apartment_on_the_site(root, monkeypatch):
-    monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_site_use_clean", True)
     orig = _marked_photo(root)
     rel = orig.relative_to(root).as_posix()
     assert clean_batch([str(orig)]) == (1, 0)  # what the bot's site sweep does

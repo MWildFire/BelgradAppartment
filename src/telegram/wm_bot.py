@@ -27,6 +27,7 @@ from sqlalchemy import select
 from src.config import get_settings
 from src.db import get_session
 from src.db.models import InboundPost, Match, MatchDelivery
+from src.watermark.settings import get_watermark_settings
 from src.watermark.store import StoredResult, ensure_clean
 
 if TYPE_CHECKING:
@@ -78,7 +79,9 @@ def parse_chat_ids(*raw_values: str) -> frozenset[int]:
 
 def allowed_chat_ids() -> frozenset[int]:
     settings = get_settings()
-    return parse_chat_ids(settings.tg_bot_recipients, settings.watermark_allowed_chat_ids)
+    return parse_chat_ids(
+        settings.tg_bot_recipients, get_watermark_settings().watermark_allowed_chat_ids
+    )
 
 
 def summarize(reports: Iterable[CleanReport]) -> str:
@@ -237,7 +240,7 @@ def clean_stored_paths(paths: list[str]) -> list[StoredResult]:
 
 
 async def _refresh_site_variants(paths: list[str]) -> None:
-    if not get_settings().watermark_site_use_clean:
+    if not get_watermark_settings().watermark_site_use_clean:
         return
     try:
         from src.watermark.published import rebuild_site_variants
