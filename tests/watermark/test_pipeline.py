@@ -73,12 +73,18 @@ def test_clean_background_has_no_marks(seed, size):
 
 @pytest.mark.parametrize(("tid", "size"), CASES)
 def test_cleaning_restores_background_under_the_mark(tid, size, monkeypatch):
-    if tid == "halo_center":
-        # Without LaMa this mark is kept (see test_kept_reason.py); a classic inpainter stands
+    if tid in {"halo_center", "zida_logo"}:
+        # Without LaMa these marks are kept (see test_kept_reason.py); a classic inpainter stands
         # in for LaMa here so that mask geometry and the removal path stay covered without torch.
         monkeypatch.setattr(pipeline, "get_inpainter", lambda preferred: TeleaInpainter())
     bg, img = _marked(tid, size)
     out, report = clean_array(img)
+    if tid == "halo_center" and size == (1000, 750):
+        # The full logo is 7 % of the frame: LaMa would invent scenery, so the mark is kept
+        # (self-check, see test_quality_levers.py) and the photo stays byte-identical.
+        assert [(m.method, m.kept_reason) for m in report.marks] == [("skip", "self_check")]
+        assert np.array_equal(out, img)
+        return
     assert report.changed
     assert find_marks(out) == []
     mask = mark_mask(_tpl(tid), *size)
@@ -140,7 +146,7 @@ def test_cityexpert_real_mark_is_still_removed():
 
 
 def test_lama_fallback_when_lama_is_missing():
-    assert removal_for(_tpl("zida_logo"))[0] == "reverse_blend"
+    assert removal_for(_tpl("zida_logo"))[0] == "skip"  # needs LaMa: kept, never reverse blend
     assert removal_for(_tpl("halo_center"))[0] == "skip"  # needs LaMa: kept, never silent Telea
     assert removal_for(_tpl("halo_corner"))[0] == "inpaint:telea"
     assert removal_for(_tpl("cityexpert_center"))[0] == "reverse_blend"
@@ -163,11 +169,11 @@ def test_clean_bytes_returns_same_bytes_when_nothing_found():
 
 
 def test_clean_bytes_returns_jpeg_without_mark():
-    _bg, img = _marked("zida_logo", (1440, 1080))
+    _bg, img = _marked("cityexpert_center", (1920, 1080))
     buf = io.BytesIO()
     Image.fromarray(img).save(buf, "JPEG", quality=92)
     out, report = clean_bytes(buf.getvalue())
-    assert report.changed and len(report.marks) == 2
+    assert report.changed and len(report.marks) == 1
     cleaned = decode_image(out)
     assert cleaned.shape == img.shape
     assert find_marks(cleaned) == []

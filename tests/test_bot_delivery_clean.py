@@ -51,7 +51,7 @@ def env(tmp_path: Path, monkeypatch):
 
 
 async def _seed(inbound: Path) -> tuple[int, list[str]]:
-    tpl = {t.id: t for t in load_templates()}["zida_logo"]
+    tpl = {t.id: t for t in load_templates()}["cityexpert_center"]
     paths = []
     for i in range(2):
         p = inbound / "1" / "88" / f"{i:02d}.jpg"

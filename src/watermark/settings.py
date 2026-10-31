@@ -46,6 +46,14 @@ class WatermarkSettings(BaseSettings):
     # The site serves clean copies instead of originals when they exist (off by default).
     watermark_site_use_clean: bool = False
     watermark_jpeg_quality: int = Field(default=95, ge=70, le=100)
+    # Kinds that are found but never removed (kept_reason="disabled"), comma-separated template
+    # ids: cityexpert_center, halo_center, halo_corner, zida_logo. Empty = every kind is handled.
+    watermark_disabled_kinds: str = ""
+
+    def disabled_kinds(self) -> frozenset[str]:
+        """`watermark_disabled_kinds` as a set of lower-case template ids."""
+        parts = (part.strip().lower() for part in self.watermark_disabled_kinds.split(","))
+        return frozenset(part for part in parts if part)
 
 
 @lru_cache(maxsize=1)

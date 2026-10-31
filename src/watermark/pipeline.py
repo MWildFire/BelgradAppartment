@@ -22,7 +22,9 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from src.watermark.detect import Detection, match_instance, score_at, to_gray
 from src.watermark.files import atomic_write
 from src.watermark.inpaint import Inpainter, get_inpainter
+from src.watermark.refine import remove_refined
 from src.watermark.remove import remove_inpaint, remove_reverse_blend
+from src.watermark.selfcheck import mask_too_large, removal_failed
 from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import WatermarkTemplate, load_templates
 
@@ -134,8 +136,11 @@ def plan_removal(tpl: WatermarkTemplate) -> Removal:
     A mark that needs LaMa while LaMa is missing is kept (``skip`` + ``lama_unavailable``);
     classic (Telea-style) filling happens only when the operator asks for it explicitly with
     ``WATERMARK_HALO_CORNER_MODE=telea``. A template that declares ``lama_fallback:
-    reverse_blend`` (4zida) keeps that deterministic fallback.
+    reverse_blend`` keeps that deterministic fallback. A kind listed in
+    ``WATERMARK_DISABLED_KINDS`` is found but never removed (``disabled``).
     """
+    if tpl.id in get_watermark_settings().disabled_kinds():
+        return Removal("skip", None, "disabled")
     if tpl.id == "halo_corner":
         mode = get_watermark_settings().watermark_halo_corner_mode
         if mode == "skip":
@@ -164,6 +169,36 @@ def removal_for(tpl: WatermarkTemplate) -> tuple[str, Inpainter | None]:
     return plan.method, plan.inpainter
 
 
+def _remove_mark(
+    out: np.ndarray, tpl: WatermarkTemplate, det: Detection, plan: Removal
+) -> tuple[np.ndarray, str, str | None, float] | None:
+    """Apply one planned removal: (image, method, kept_reason, residual) or None.
+
+    None means "not a real mark" (a reverse-blend fit that stops at its lower bound): the photo
+    and the report stay as they are. A mark the self-checks reject (LaMa mask too large, or the
+    template still correlates after removal) is kept: the input image comes back unchanged.
+    """
+    if plan.method == "skip":
+        return out, "skip", plan.kept_reason, score_at(to_gray(out), tpl, det)
+    if plan.inpainter is None:
+        remover = remove_refined if tpl.refine else remove_reverse_blend
+        candidate, k = remover(out, tpl, det)
+        if k <= MIN_PLAUSIBLE_K:
+            return None
+    else:
+        grow = tpl.mask_grow_px(det.scale)
+        if mask_too_large(tpl, det, out.shape[:2], grow):
+            return out, "skip", "self_check", score_at(to_gray(out), tpl, det)
+        candidate = remove_inpaint(
+            out, tpl, det, plan.inpainter, grow_px=grow,
+            extra_grow_px=tpl.mask_extra_grow_px(det.scale),
+        )
+    residual = score_at(to_gray(candidate), tpl, det)
+    if removal_failed(tpl, residual):
+        return out, "skip", "self_check", score_at(to_gray(out), tpl, det)
+    return candidate, plan.method, None, residual
+
+
 def clean_array(
     img_rgb: np.ndarray, templates: tuple[WatermarkTemplate, ...] | None = None
 ) -> tuple[np.ndarray, CleanReport]:
@@ -172,17 +207,10 @@ def clean_array(
     report = CleanReport(width=w, height=h)
     out = img_rgb
     for tpl, det in find_marks(img_rgb, templates):
-        method, inpainter, kept_reason = plan_removal(tpl)
-        if method == "skip":
-            pass  # retain the detection in reports without changing any pixels
-        elif inpainter is None:
-            candidate, k = remove_reverse_blend(out, tpl, det)
-            if k <= MIN_PLAUSIBLE_K:
-                continue  # not a real mark: leave the photo and the report as they are
-            out = candidate
-        else:
-            out = remove_inpaint(out, tpl, det, inpainter)
-        residual = score_at(to_gray(out), tpl, det)
+        removed = _remove_mark(out, tpl, det, plan_removal(tpl))
+        if removed is None:
+            continue  # not a real mark: leave the photo and the report as they are
+        out, method, kept_reason, residual = removed
         report.marks.append(
             MarkResult(
                 template_id=tpl.id,

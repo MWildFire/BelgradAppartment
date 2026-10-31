@@ -73,6 +73,8 @@ def test_telea_matches_previous_algorithm_exactly(policy, monkeypatch):
 
 def test_logo_is_cleaned_while_corner_is_kept(policy, monkeypatch):
     monkeypatch.setattr(policy, "watermark_halo_corner_mode", "skip")
+    # 4zida needs LaMa; a classic inpainter stands in for it (no torch in CI).
+    monkeypatch.setattr(pipeline, "get_inpainter", lambda preferred: TeleaInpainter())
     templates = _templates()
     img = make_background(1000, 750, seed=3)
     img = jpeg_roundtrip(apply_mark(apply_mark(img, templates["zida_logo"]),
@@ -80,7 +82,7 @@ def test_logo_is_cleaned_while_corner_is_kept(policy, monkeypatch):
     out, report = pipeline.clean_array(img)
     assert report.changed
     assert [(m.template_id, m.method) for m in report.marks].count(("halo_corner", "skip")) == 1
-    assert sum(m.template_id == "zida_logo" and m.method == "reverse_blend"
+    assert sum(m.template_id == "zida_logo" and m.method == "inpaint:telea"
                for m in report.marks) == 2
     corner = mark_mask(templates["halo_corner"], 1000, 750, dilate=12)
     assert np.array_equal(out[corner], img[corner])

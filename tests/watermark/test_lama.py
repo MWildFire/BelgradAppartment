@@ -97,7 +97,9 @@ def test_lama_changes_only_masked_pixels():
 def test_pipeline_uses_lama_for_halo_center(monkeypatch):
     monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", True)
     tpl = {t.id: t for t in load_templates()}["halo_center"]
-    img = jpeg_roundtrip(apply_mark(make_background(1000, 750, seed=2), tpl))
+    # 562 px wide: the logo is ~4 % of the frame, below the self-check limit of the template
+    # (a 1000 px photo carries 7 %: kept, see test_quality_levers.py)
+    img = jpeg_roundtrip(apply_mark(make_background(562, 750, seed=2), tpl))
     _out, report = clean_array(img)
     assert [m.method for m in report.marks] == ["inpaint:lama"]
 

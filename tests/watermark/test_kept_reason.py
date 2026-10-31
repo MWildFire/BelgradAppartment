@@ -14,7 +14,13 @@ import numpy as np
 import pytest
 
 from src.watermark import inpaint, store
-from src.watermark.pipeline import CleanReport, MarkResult, clean_array, removal_for
+from src.watermark.pipeline import (
+    CleanReport,
+    MarkResult,
+    clean_array,
+    plan_removal,
+    removal_for,
+)
 from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, jpeg_roundtrip, make_background
@@ -92,9 +98,10 @@ def test_removed_marks_have_no_kept_reason():
     assert {m.kept_reason for m in report.marks} == {None}
 
 
-def test_declared_reverse_blend_fallback_of_zida_is_unchanged_and_not_kept():
-    """zida_logo declares lama_fallback=reverse_blend: it is a deterministic non-Telea method."""
-    assert removal_for(_tpl("zida_logo"))[0] == "reverse_blend"
+def test_zida_needs_lama_and_is_kept_without_it():
+    """zida_logo no longer declares a reverse-blend fallback (WM05 decision 5)."""
+    assert removal_for(_tpl("zida_logo"))[0] == "skip"
+    assert plan_removal(_tpl("zida_logo")).kept_reason == "lama_unavailable"
 
 
 def test_get_inpainter_says_none_when_lama_is_missing_and_never_telea():

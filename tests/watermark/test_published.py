@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from PIL import Image
 
 import src.watermark.cli as wm_cli
+import src.watermark.pipeline as pipeline
 from src.cli import cli
 from src.config import get_settings
 from src.db import get_session
@@ -22,6 +23,7 @@ from src.db.models import (
     SourceChannel,
 )
 from src.watermark import published, store
+from src.watermark.inpaint import TeleaInpainter
 from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
@@ -37,6 +39,8 @@ def inbound(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(s, "site_photos_root", root)
     monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
     monkeypatch.setattr(wm, "watermark_lama_enabled", False)
+    # 4zida needs LaMa; a classic inpainter stands in so the sweep is covered without torch.
+    monkeypatch.setattr(pipeline, "get_inpainter", lambda preferred: TeleaInpainter())
     monkeypatch.setattr(wm, "watermark_site_use_clean", False)
     return root
 

@@ -28,7 +28,7 @@ CHAT = 1003207518
 def _jpeg(marked: bool, seed: int = 1) -> bytes:
     img = make_background(1440, 1080, seed=seed)
     if marked:
-        img = apply_mark(img, {t.id: t for t in load_templates()}["zida_logo"])
+        img = apply_mark(img, {t.id: t for t in load_templates()}["cityexpert_center"])
     buf = io.BytesIO()
     Image.fromarray(img).save(buf, "JPEG", quality=92)
     return buf.getvalue()
@@ -89,7 +89,7 @@ async def test_single_photo_comes_back_clean():
     await wm_bot.process_photo_messages([msg])
     assert len(msg.photos) == 1
     data, caption = msg.photos[0]
-    assert "4zida — 2" in (caption or "")
+    assert "CityExpert — 1" in (caption or "")
     assert find_marks(decode_image(data)) == []
 
 
@@ -175,7 +175,7 @@ async def test_reply_to_delivered_album_cleans_that_match(db, tmp_path):
     msg = FakeMessage(40, reply=SimpleNamespace(message_id=502, photo=None, document=None))
     await wm_bot.handle_clean_command(msg, None)
     assert len(msg.albums) == 1 and len(msg.albums[0]) == 2
-    assert "4zida — 4" in msg.albums[0][0].caption
+    assert "CityExpert — 2" in msg.albums[0][0].caption
     clean_copy = Path(get_watermark_settings().watermark_clean_dir) / "1" / "77" / "00.jpg"
     assert _all_exist([str(clean_copy), *paths])  # clean copy written, originals kept
     again = FakeMessage(41)

@@ -190,6 +190,12 @@ def remove_reverse_blend(
     return BAND_INPAINTER.inpaint(restored, edge_band(alpha)), k_center
 
 
+# The extra mask ring (small photos) covers only neutral pixels: a white mark of opacity <= 0.4
+# can desaturate a pixel but never makes it saturated, so a saturated pixel beside the mark is
+# scene content (a phone number, a toy) that filling would damage.
+EXTRA_RING_MAX_CHROMA = 45  # max(R, G, B) - min(R, G, B)
+
+
 def remove_inpaint(
     img_rgb: np.ndarray,
     tpl: WatermarkTemplate,
@@ -197,8 +203,20 @@ def remove_inpaint(
     inpainter: Inpainter,
     *,
     dilate_px: int = 3,
+    grow_px: int | None = None,
+    extra_grow_px: int = 0,
 ) -> np.ndarray:
+    """Fill the support of the mark grown by `grow_px` (default: round(dilate_px * scale)).
+
+    With `extra_grow_px` larger than the growth, the mask also covers the ring up to that
+    distance, but only on neutral (low-chroma) pixels.
+    """
     alpha = alpha_map(tpl, det, img_rgb.shape[:2])
-    grow = max(1, round(dilate_px * max(det.scale, 0.5)))
+    grow = grow_px if grow_px is not None else max(1, round(dilate_px * max(det.scale, 0.5)))
     mask = support_mask(alpha, threshold=0.02, dilate_px=grow)
+    if extra_grow_px > grow:
+        wide = support_mask(alpha, threshold=0.02, dilate_px=extra_grow_px)
+        chroma = img_rgb.max(axis=2).astype(np.int16) - img_rgb.min(axis=2).astype(np.int16)
+        ring = (wide > 0) & (mask == 0) & (chroma < EXTRA_RING_MAX_CHROMA)
+        mask = np.where(ring, np.uint8(1), mask).astype(mask.dtype)
     return inpainter.inpaint(img_rgb, mask)

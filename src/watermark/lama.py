@@ -22,9 +22,15 @@ from typing import Any
 import numpy as np
 
 from src.watermark import imgops
+from src.watermark.lama_crop import plan_crop
 from src.watermark.settings import get_watermark_settings
 
 logger = logging.getLogger(__name__)
+
+# Crop budget: model memory grows ~2.6 KB per crop pixel (Linux, measured in WM05); 105k px keeps
+# the whole bot process near 1 GiB. Small crops (most 4zida marks) are untouched by it.
+DEFAULT_MAX_PIXELS = 105_000
+DEFAULT_MIN_MARGIN = 16
 
 MODEL_URL = "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"
 MODEL_SHA256 = "344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9"
@@ -41,10 +47,20 @@ def _pad_to_multiple(arr: np.ndarray, mod: int = 8) -> np.ndarray:
 class LamaInpainter:
     name = "lama"
 
-    def __init__(self, model_path: Path, *, margin: int = 96, max_side: int = 1024) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        *,
+        margin: int = 96,
+        max_side: int = 1024,
+        max_pixels: int = DEFAULT_MAX_PIXELS,
+        min_margin: int = DEFAULT_MIN_MARGIN,
+    ) -> None:
         self.model_path = model_path
         self.margin = margin
         self.max_side = max_side
+        self.max_pixels = max_pixels  # crop area budget (model memory ~2.6 KB/px); 0 = off
+        self.min_margin = min_margin
         self._model: Any = None
         self._lock = threading.Lock()
 
@@ -66,13 +82,19 @@ class LamaInpainter:
         if not sel.any():
             return img_rgb.copy()
         ys, xs = np.nonzero(sel)
-        H, W = sel.shape
-        y0, y1 = max(0, int(ys.min()) - self.margin), min(H, int(ys.max()) + self.margin + 1)
-        x0, x1 = max(0, int(xs.min()) - self.margin), min(W, int(xs.max()) + self.margin + 1)
+        plan = plan_crop(
+            (int(ys.min()), int(ys.max()), int(xs.min()), int(xs.max())),
+            sel.shape,
+            margin=self.margin,
+            min_margin=self.min_margin,
+            max_pixels=self.max_pixels,
+            max_side=self.max_side,
+        )
+        y0, y1, x0, x1 = plan.box
         crop = img_rgb[y0:y1, x0:x1]
         crop_mask = sel[y0:y1, x0:x1].astype(np.uint8)
         ch, cw = crop.shape[:2]
-        factor = min(1.0, self.max_side / float(max(ch, cw)))
+        factor = plan.scale
         if factor < 1.0:
             size = (round(cw * factor), round(ch * factor))
             work = imgops.resize(crop, size, "area")

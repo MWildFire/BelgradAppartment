@@ -2,8 +2,9 @@
 
 Originals (InboundPost.photo_paths, data/inbound/...) are never modified. Next to each clean
 copy lives `<name>.wm.json` with the algorithm version, the source sha256 and the report. A
-repeated call with the same source and version reuses the result unless an unavailable
-corner LaMa fallback can now be retried. When no marks are found,
+repeated call with the same source, version and policy (WATERMARK_HALO_CORNER_MODE,
+WATERMARK_DISABLED_KINDS) reuses the result unless an unavailable corner LaMa fallback can now
+be retried; a switch of the policy makes the stored copy stale. When no marks are found,
 no clean copy is created (the sidecar says changed=false) and consumers use the original.
 
 Bump STORE_VERSION when templates or the algorithm change: everything is then recomputed.
@@ -29,7 +30,7 @@ from src.watermark.settings import get_watermark_settings
 
 logger = logging.getLogger(__name__)
 
-STORE_VERSION = 2
+STORE_VERSION = 3
 SIDECAR_SUFFIX = ".wm.json"
 SITE_MARKER_SUFFIX = ".site"
 
@@ -115,11 +116,19 @@ def read_sidecar(clean: Path) -> dict[str, object] | None:
     return data if isinstance(data, dict) else None
 
 
+def _disabled_signature() -> str:
+    """WATERMARK_DISABLED_KINDS as a stable string stored in the sidecar."""
+    return ",".join(sorted(get_watermark_settings().disabled_kinds()))
+
+
 def _matches_policy(meta: dict[str, object]) -> bool:
-    """Mode switches invalidate copies; an explicit discard remains in effect."""
+    """Mode and kind switches invalidate copies; an explicit discard remains in effect."""
     return meta.get("version") == STORE_VERSION and (
         bool(meta.get("discarded"))
-        or meta.get("halo_corner_mode") == get_watermark_settings().watermark_halo_corner_mode
+        or (
+            meta.get("halo_corner_mode") == get_watermark_settings().watermark_halo_corner_mode
+            and meta.get("disabled_kinds", "") == _disabled_signature()
+        )
     )
 
 
@@ -211,6 +220,7 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
         replace_token(stream, token)
         version = STORE_VERSION
         mode = get_watermark_settings().watermark_halo_corner_mode
+        disabled = _disabled_signature()
         quality = get_watermark_settings().watermark_jpeg_quality
 
     # lazy: keeps OpenCV out of the site and admin imports
@@ -228,6 +238,7 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
                 or _sha256(original) != digest
                 or version != STORE_VERSION
                 or mode != get_watermark_settings().watermark_halo_corner_mode
+                or disabled != _disabled_signature()
             ):
                 raise RuntimeError("watermark result superseded by a newer request or source")
             if report.changed and (not staged.is_file() or not staged.stat().st_size):
@@ -235,16 +246,16 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
             # A crash/failure between the two atomic replacements leaves a retryable,
             # unselected pending record, never an accepted image with another report.
             _write_sidecar(clean, {
-                "version": version, "halo_corner_mode": mode, "sha256": digest,
-                "changed": False, "publishing": True, "report": {},
+                "version": version, "halo_corner_mode": mode, "disabled_kinds": disabled,
+                "sha256": digest, "changed": False, "publishing": True, "report": {},
             })
             if report.changed:
                 os.replace(staged, _checked_clean_path(clean))
             elif clean.exists():
                 clean.unlink()  # stale derivative, never the original
             _write_sidecar(clean, {
-                "version": version, "halo_corner_mode": mode, "sha256": digest,
-                "changed": report.changed,
+                "version": version, "halo_corner_mode": mode, "disabled_kinds": disabled,
+                "sha256": digest, "changed": report.changed,
                 "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
                 "source": str(original), "report": report.to_dict(),
             })
@@ -273,6 +284,7 @@ def discard(original: Path) -> bool:
         _write_sidecar(clean, {
             "version": STORE_VERSION,
             "halo_corner_mode": get_watermark_settings().watermark_halo_corner_mode,
+            "disabled_kinds": _disabled_signature(),
             "sha256": digest,
             "changed": False,
             "discarded": True,

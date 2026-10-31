@@ -34,18 +34,37 @@
 | `WATERMARK_LAMA_ENABLED` | `true` само по себе не включает ни один продуктовый путь |
 | `WATERMARK_LAMA_MODEL_PATH` | Путь к уже предоставленной проверенной модели; наличие на production не подтверждено |
 | `WATERMARK_ALLOWED_CHAT_IDS` | Дополнительный явный allow-list к `TG_BOT_RECIPIENTS`; только личные чаты |
+| `WATERMARK_DISABLED_KINDS` | пусто. Виды знаков, которые находятся, но не удаляются (`cityexpert_center`, `halo_center`, `halo_corner`, `zida_logo`, через запятую): `skip` + `kept_reason=disabled`. Действует и на уже сохранённые копии (виды входят в политику sidecar, `STORE_VERSION=3`) |
 
 Модель: **205669692 байта**, SHA256
 `344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9`.
 В R04 использовалась существующая локальная копия; новая модель не загружалась.
 Без модели/torch (или при `WATERMARK_LAMA_ENABLED=0`) знак, которому нужна LaMa (центр Halo,
 угол в режиме `lama`), **оставляется**: `method=skip`, `kept_reason=lama_unavailable`; Telea
-молча не подставляется (WM05). 4zida использует заявленный в шаблоне запасной reverse blend.
+молча не подставляется (WM05). Это относится и к 4zida: запасного reverse blend у него больше нет.
 Классическое заполнение (гармоническое, `imgops.classic_inpaint`, без OpenCV) срабатывает
-только в явном режиме углов `telea` и для краевой полосы CityExpert.
+только в явном режиме углов `telea`. CityExpert не нуждается в LaMa: он удаляется reverse
+blend с покомпонентной подгонкой ([refine.py](../../src/watermark/refine.py)), без заполнения
+полосы вдоль контура.
 
 Причины «оставлен» (`MarkResult.kept_reason`, попадает в `.wm.json`): `corner_mode` (угол Halo
-в режиме `skip`), `lama_unavailable`; `disabled` и `self_check` добавляют другие потоки WM05.
+в режиме `skip`), `lama_unavailable`, `disabled` (вид выключен `WATERMARK_DISABLED_KINDS`),
+`self_check` (самопроверка, ниже).
+
+### Самопроверка (WM05 Q1)
+
+Два правила, пороги — в JSON шаблонов (`src/watermark/assets/*.json`),
+код — [selfcheck.py](../../src/watermark/selfcheck.py):
+
+- **Доля маски LaMa** больше `lama_max_mask_fraction` шаблона (сейчас только `halo_center`:
+  5,5 % кадра) — знак оставляется до запуска LaMa: на большой маске LaMa придумывает предметы.
+  **Halo-центр: порог доли маски 5,5 % на практике ≈ «ландшафтное фото → знак оставляется»
+  (`kept_reason=self_check`); на проде долю таких kept смотреть в первые дни; уточнение шаблона
+  Halo — задача следующего раунда.** Ширина фото Halo с сайта 1000 px даёт маску ~52 тыс. px
+  (7–11 % кадра), поэтому на портретных кадрах (≈ 3–4 %) знак удаляется, на ландшафтных — нет.
+- **Остаточная корреляция** шаблона на прежнем месте после удаления не меньше `max_residual`
+  (CityExpert 0,08; Halo-центр и 4zida 0,15; угол 0,30; у хороших удалений измерено ≤ 0,087) —
+  результат отбрасывается, фото остаётся как было. В выборке R04 не срабатывала.
 
 Выбор метода — `plan_removal` в [pipeline.py](../../src/watermark/pipeline.py) (`removal_for` —
 обёртка). Настройки Watermark читает [settings.py](../../src/watermark/settings.py)
@@ -190,6 +209,10 @@ OpenCV не нужен). Сам выпуск **ничего не включае�
    `systemctl restart otz-subscription-bot`. Подписки (если включены) продолжают работать,
    `/clean` исчезает; чистые копии лежат в `data/clean` и ничего не ломают, оригиналы не
    менялись. Откат кода — по [releases](releases.md).
+   Точечный рычаг без выкатки: `WATERMARK_DISABLED_KINDS=cityexpert_center` (или другой вид)
+   и тот же `restart` — вид находится, но оставляется (`kept_reason=disabled`); уже созданные
+   копии этого вида перестают использоваться и пересчитываются, после снятия рычага знак
+   удаляется снова.
 
 Что видит оператор после включения: `/clean` отвечает только тем, кому разрешено; знак, который
 нельзя удалить чисто или для которого нет LaMa, остаётся на месте (`kept_reason` в `.wm.json`).

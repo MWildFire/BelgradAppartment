@@ -9,7 +9,9 @@
   ],
   "strategy": "inpaint",
   "inpaint_backend": "lama",
-  "lama_fallback": "reverse_blend",
+  "mask_grow_min_px": 4,
+  "mask_grow_min_below_scale": 0.5,
+  "max_residual": 0.15,
   "ref_width": 1440,
   "scale_mode": "width",
   "instances": [
