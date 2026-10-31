@@ -118,33 +118,76 @@ def test_self_check_reverts_a_removal_that_left_the_mark(monkeypatch):
 # --- mask growth floor for small photos --------------------------------------------------------
 
 
-def test_zida_mask_grows_at_least_four_px_on_small_photos():
+def test_zida_extra_mask_growth_applies_on_very_small_photos_only():
+    """Measured on the 9 sample photos: it cleans 562 px and 675 px wide photos, does nothing
+    for 810 px and damages the 1000 px one (a bright light strip), so the limit is scale 0.5."""
     tpl = _tpl("zida_logo")
-    assert tpl.mask_grow_px(0.466) == 4  # 675 px wide
-    assert tpl.mask_grow_px(0.5625) == 4  # 810 px wide
-    assert tpl.mask_grow_px(0.694) == 4  # 1000 px wide
-    assert tpl.mask_grow_px(1.0) == 3  # 1440 px wide: unchanged
-    assert tpl.mask_grow_px(1.33) == 4  # 1918 px wide: unchanged rule round(3 * scale)
+    assert tpl.mask_grow_px(0.466) == 2  # the R04 rule stays the base
+    assert tpl.mask_extra_grow_px(0.466) == 4  # 675 px wide: up to 4 px, on neutral pixels
+    assert tpl.mask_extra_grow_px(0.388) == 4  # 562 px wide
+    assert tpl.mask_extra_grow_px(0.5625) == 0  # 810 px wide
+    assert tpl.mask_extra_grow_px(0.694) == 0  # 1000 px wide
+    assert tpl.mask_extra_grow_px(1.0) == 0  # 1440 px wide: unchanged
 
 
-def test_other_kinds_keep_the_old_mask_growth():
+def test_other_kinds_have_no_extra_growth():
     halo = _tpl("halo_center")
     assert halo.mask_grow_px(1.0) == 3
     assert halo.mask_grow_px(0.56) == 2  # round(3 * max(scale, 0.5))
+    assert halo.mask_extra_grow_px(0.56) == 0
+
+
+def test_extra_growth_spares_saturated_scene_pixels():
+    """Text/objects next to the logo (a yellow phone number) must not be filled by the extra ring."""
+    from src.watermark.remove import remove_inpaint
+
+    tpl, size = _tpl("zida_logo"), (675, 900)
+    bg = np.full((size[1], size[0], 3), 200, np.uint8)
+    img = apply_mark(bg, tpl)
+    det = find_marks(img)[0][1]
+    # paint a saturated yellow bar and a neutral grey bar 3 px outside the 2 px base mask
+    from src.watermark.remove import alpha_map, support_mask
+
+    base = support_mask(alpha_map(tpl, det, img.shape[:2]), threshold=0.02, dilate_px=2) > 0
+    ring = support_mask(alpha_map(tpl, det, img.shape[:2]), threshold=0.02, dilate_px=4) > 0
+    extra = ring & ~base
+    half = int(np.median(np.nonzero(extra)[1]))
+    yellow = extra & (np.arange(size[0])[None, :] < half)
+    grey = extra & ~yellow
+    img = img.copy()
+    img[yellow] = (255, 230, 0)
+    img[grey] = (120, 120, 120)
+
+    class Recorder:
+        name = "recorder"
+
+        def inpaint(self, image, mask):
+            self.mask = mask > 0
+            return image
+
+    rec = Recorder()
+    remove_inpaint(img, tpl, det, rec, grow_px=2, extra_grow_px=4)
+    assert not rec.mask[yellow].any()  # saturated pixels stay
+    assert rec.mask[grey].mean() > 0.95  # neutral pixels are covered
+    assert rec.mask[base].all()  # the base mask is always covered
 
 
 def test_pipeline_passes_the_template_growth_to_the_inpainter(monkeypatch):
     seen = []
 
     def fake_inpaint(img, tpl, det, inpainter, **kw):
-        seen.append(kw.get("grow_px"))
+        seen.append((kw.get("grow_px"), kw.get("extra_grow_px")))
         return img
 
     monkeypatch.setattr(pipeline, "get_inpainter", lambda preferred: TeleaInpainter())
     monkeypatch.setattr(pipeline, "remove_inpaint", fake_inpaint)
+    _bg, img = _marked("zida_logo", (675, 900))
+    clean_array(img)
+    assert seen and set(seen) == {(2, 4)}
+    seen.clear()
     _bg, img = _marked("zida_logo", (810, 1080))
     clean_array(img)
-    assert seen and set(seen) == {4}
+    assert seen and set(seen) == {(2, 0)}
 
 
 # --- CityExpert: no band, lines of the scene survive --------------------------------------------

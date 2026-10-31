@@ -83,9 +83,10 @@ class WatermarkTemplate:
     # LaMa marks: when the inpainting mask covers more than this fraction of the photo, LaMa
     # invents scenery instead of filling, so the mark is kept (kept_reason="self_check").
     lama_max_mask_fraction: float | None = None
-    # Inpainting mask = mark support grown by round(base * max(scale, 0.5)) px, but at least
-    # mask_grow_min_px when the photo is smaller than mask_grow_min_below_scale (JPEG blur of the
-    # edges does not shrink with the photo).
+    # Inpainting mask = mark support grown by round(base * max(scale, 0.5)) px (R04 rule). On
+    # photos smaller than mask_grow_min_below_scale the edges of the mark are softer than that
+    # (JPEG blur does not shrink with the photo), so the mask may grow up to mask_grow_min_px
+    # on neutral pixels (`mask_extra_grow_px`): saturated scene pixels beside the mark stay.
     mask_grow_base_px: int = 3
     mask_grow_min_px: int = 0
     mask_grow_min_below_scale: float = 0.0
@@ -94,11 +95,15 @@ class WatermarkTemplate:
     max_residual: float = 0.15
 
     def mask_grow_px(self, scale: float) -> int:
-        """Growth of the inpainting mask for a mark detected at `scale`."""
-        grow = max(1, round(self.mask_grow_base_px * max(scale, 0.5)))
-        if self.mask_grow_min_px and scale < self.mask_grow_min_below_scale:
-            grow = max(grow, self.mask_grow_min_px)
-        return grow
+        """Growth of the inpainting mask for a mark detected at `scale` (always covered)."""
+        return max(1, round(self.mask_grow_base_px * max(scale, 0.5)))
+
+    def mask_extra_grow_px(self, scale: float) -> int:
+        """Extra growth (neutral pixels only) for small photos; 0 when it does not apply."""
+        small = bool(self.mask_grow_min_px) and scale < self.mask_grow_min_below_scale
+        if small and self.mask_grow_min_px > self.mask_grow_px(scale):
+            return self.mask_grow_min_px
+        return 0
 
     @property
     def height(self) -> int:

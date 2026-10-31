@@ -189,7 +189,10 @@ def _remove_mark(
         grow = tpl.mask_grow_px(det.scale)
         if mask_too_large(tpl, det, out.shape[:2], grow):
             return out, "skip", "self_check", score_at(to_gray(out), tpl, det)
-        candidate = remove_inpaint(out, tpl, det, plan.inpainter, grow_px=grow)
+        candidate = remove_inpaint(
+            out, tpl, det, plan.inpainter, grow_px=grow,
+            extra_grow_px=tpl.mask_extra_grow_px(det.scale),
+        )
     residual = score_at(to_gray(candidate), tpl, det)
     if removal_failed(tpl, residual):
         return out, "skip", "self_check", score_at(to_gray(out), tpl, det)
