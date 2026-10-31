@@ -87,6 +87,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--corner-mode", choices=["skip", "telea", "lama"], default="skip")
     parser.add_argument("--only", default="", help="substring filter on the photo path")
     parser.add_argument(
+        "--kinds", default="", help="comma-separated template ids: write pairs only for these"
+    )
+    parser.add_argument(
         "--save-cleaned", action="store_true", help="also write cleaned full frames (PNG)"
     )
     args = parser.parse_args(argv)
@@ -106,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         p for p in folder.rglob("*") if p.suffix.lower() in IMAGE_SUFFIXES and args.only in str(p)
     )
     rows: list[list[str]] = []
+    kinds = {k.strip() for k in args.kinds.split(",") if k.strip()}
     for src in files:
         rel = src.relative_to(folder).as_posix()
         try:
@@ -118,9 +122,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.save_cleaned:
             (out_dir / "cleaned").mkdir(exist_ok=True)
             Image.fromarray(cleaned).save(out_dir / "cleaned" / f"{stem}.png")
-        if not report.marks:
+        if not report.marks and not kinds:
             rows.append([rel, "", "", "", "", "", "", "", f"{report.seconds:.2f}"])
         for m in report.marks:
+            if kinds and m.template_id not in kinds:
+                continue
             name = f"{stem}__{m.template_id}#{m.instance}.png"
             box = _mark_box(sizes[m.template_id], m, img.shape[:2])
             build_pair(img, cleaned, box).save(out_dir / name)
