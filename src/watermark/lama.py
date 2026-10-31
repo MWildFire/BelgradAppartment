@@ -19,9 +19,9 @@ import threading
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 
+from src.watermark import imgops
 from src.watermark.lama_crop import plan_crop
 from src.watermark.settings import get_watermark_settings
 
@@ -97,8 +97,8 @@ class LamaInpainter:
         factor = plan.scale
         if factor < 1.0:
             size = (round(cw * factor), round(ch * factor))
-            work = cv2.resize(crop, size, interpolation=cv2.INTER_AREA)
-            work_mask = cv2.resize(crop_mask, size, interpolation=cv2.INTER_NEAREST)
+            work = imgops.resize(crop, size, "area")
+            work_mask = imgops.resize(crop_mask, size, "nearest")
         else:
             work, work_mask = crop, crop_mask
         hh, ww = work.shape[:2]
@@ -111,7 +111,7 @@ class LamaInpainter:
             result = model(image, mask_t)
         res = (result[0].permute(1, 2, 0).numpy() * 255.0).clip(0, 255).astype(np.uint8)[:hh, :ww]
         if factor < 1.0:
-            res = cv2.resize(res, (cw, ch), interpolation=cv2.INTER_CUBIC)
+            res = imgops.resize(res, (cw, ch), "cubic")
         out = img_rgb.copy()
         region = out[y0:y1, x0:x1]
         keep = crop_mask > 0

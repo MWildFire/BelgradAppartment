@@ -38,17 +38,26 @@
 Модель: **205669692 байта**, SHA256
 `344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9`.
 В R04 использовалась существующая локальная копия; новая модель не загружалась.
-Без модели/torch центр Halo использует Telea, 4zida — reverse blend; угловой режим `lama`
-сохраняет знак с методом `skip`. Режим `telea` остаётся отдельной явной альтернативой.
+Без модели/torch (или при `WATERMARK_LAMA_ENABLED=0`) знак, которому нужна LaMa (центр Halo,
+угол в режиме `lama`), **оставляется**: `method=skip`, `kept_reason=lama_unavailable`; Telea
+молча не подставляется (WM05). 4zida использует заявленный в шаблоне запасной reverse blend.
+Классическое заполнение (гармоническое, `imgops.classic_inpaint`, без OpenCV) срабатывает
+только в явном режиме углов `telea` и для краевой полосы CityExpert.
 
-Источник выбора метода — [removal_for](../../src/watermark/pipeline.py#L119), строка 119
-точной проверенной ревизии выше; не прежний ошибочный указатель 118.
-Настройки: [config.py](../../src/config.py), [.env.example](../../.env.example).
+Причины «оставлен» (`MarkResult.kept_reason`, попадает в `.wm.json`): `corner_mode` (угол Halo
+в режиме `skip`), `lama_unavailable`; `disabled` и `self_check` добавляют другие потоки WM05.
+
+Выбор метода — `plan_removal` в [pipeline.py](../../src/watermark/pipeline.py) (`removal_for` —
+обёртка). Настройки Watermark читает [settings.py](../../src/watermark/settings.py)
+(`get_watermark_settings()`, тот же `.env`, те же имена `WATERMARK_*`); `src/config.py`
+их не содержит. Образец — [.env.example](../../.env.example).
 
 ## Повтор, индивидуальный отказ и поздний worker
 
-При явном режиме `lama` сохранённый fallback угла `skip` становится доступным для обычного
-повтора после появления модели и torch, если LaMa включена. `force` для этого не требуется.
+Знак, оставленный из-за отсутствия LaMa (`kept_reason=lama_unavailable`; для sidecar R04 — угол
+в режиме `lama`), становится доступным для обычного повтора после появления модели и torch,
+если LaMa включена. `force` для этого не требуется. Намеренно оставленные знаки
+(`corner_mode` и т. п.) повторно не пересчитываются.
 Сохранённый индивидуальный отказ остаётся в силе; default `skip` не превращается в LaMa.
 Смена режима инвалидирует обычный кэш, но не снимает индивидуальный отказ.
 
@@ -70,8 +79,10 @@
 
 Ручной бот принимает разрешённые личные фото/альбомы до 10 и команды `/clean`, `/clean <id>`,
 ответ `/clean` на связанный альбом. В R04 проверялись только offline Dispatcher и fake transport;
-реальных сообщений или запуска polling не было. Код имеет один polling entrypoint, но реальное
-число запущенных poller-процессов нужно проверять отдельно перед будущей активацией.
+реальных сообщений или запуска polling не было. С WM05 единственный polling entrypoint —
+`otz subscription-bot` (синоним `otz bot`, unit `otz-subscription-bot`): `/clean` и привязка
+подписок живут в одном Dispatcher. Число запущенных poller-процессов проверяется на проде
+(см. «Включение на проде»).
 
 Текущий текст бота ещё неточен: only-kept может называться отсутствием знаков, а смешанный
 случай 3 найдено /2 обработано /1 сохранён —3 удалёнными. Правдивые счётчики и варианты текста
@@ -121,3 +132,64 @@ ETag и тело относятся к нему же. Замена clean или 
 Никаких серверных команд удаления, глобального force или автоматического включения здесь нет.
 Перед любым будущим выпуском применим [чек-лист](watermark-release-checklist.md): качество,
 ресурсы и восстановление принимаются отдельно. Появление этой документации не разрешает выпуск.
+
+## Включение на проде (WM05, маршрут «только код»)
+
+Выпуск идёт обычным маршрутом `scripts/release.py` без защищённой копии: `pyproject.toml`,
+`uv.lock`, `src/config.py`, `deploy/` и остальные файлы выпуска неизменны, зависимостей нет
+(numpy, scipy — транзитивно через `imagehash` —, Pillow и torch на сервере уже есть;
+OpenCV не нужен). Сам выпуск **ничего не включает**: после него `WATERMARK_BOT_ENABLED` остаётся
+выключенным, поведение бота и подписок не меняется. Дальше — отдельные шаги, только по `P-GO`.
+
+1. **Предусловия (чтение).** `systemctl is-enabled otz-subscription-bot` / `is-active`;
+   `grep -E '^(WATERMARK_|SUBSCRIPTION_BOT_ENABLED)' /opt/otz/.env` (значения токенов не
+   выводить); `/opt/otz/release.json` содержит ожидаемую ревизию.
+2. **Модель.** `/opt/otz/data/models/big-lama.pt`, 205669692 байта, sha256
+   `344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9`
+   (`sha256sum`); нет файла — `otz wm-fetch-model` (скачает и проверит sha256) либо копия с
+   проверкой той же суммы. torch — из `clip` extra в `.venv`.
+3. **Флаги в `/opt/otz/.env`** (сайт и доставка остаются выключенными):
+
+   ```
+   WATERMARK_BOT_ENABLED=1
+   WATERMARK_LAMA_ENABLED=1
+   WATERMARK_LAMA_MODEL_PATH=/opt/otz/data/models/big-lama.pt
+   WATERMARK_HALO_CORNER_MODE=skip        # lama — только если принято ревью качества (RC.md)
+   # WATERMARK_ALLOWED_CHAT_IDS=          # кроме TG_BOT_RECIPIENTS, только личные чаты
+   WATERMARK_CLEAN_ON_DELIVERY=0
+   WATERMARK_SITE_USE_CLEAN=0
+   ```
+
+   Доступ к `/clean` — `TG_BOT_RECIPIENTS` + `WATERMARK_ALLOWED_CHAT_IDS`; без них роутер
+   `/clean` не подключается (предупреждение в журнале).
+4. **Лимиты systemd** (файл вне репозитория, `deploy/` не меняется):
+   `/etc/systemd/system/otz-subscription-bot.service.d/limits.conf`
+
+   ```
+   [Service]
+   MemoryHigh=1280M
+   MemoryMax=1536M
+   Nice=10
+   OOMScoreAdjust=500
+   ```
+
+   затем `systemctl daemon-reload`. Размер кропа и число потоков torch задаёт код (отчёт W3).
+5. **Запуск.** Unit `otz-subscription-bot` создаёт `scripts/vps_install.sh`, по умолчанию он не
+   включён. Не включён — `systemctl enable --now otz-subscription-bot`; уже работает (подписки) —
+   `systemctl restart otz-subscription-bot`.
+6. **Один опрос на токен.** Telegram отдаёт `getUpdates` ровно одному потребителю: второй
+   процесс получает `TelegramConflictError`. Поэтому `/clean` и привязка подписок
+   (`/start sub_<token>`) живут в одном демоне. Проверка: `pgrep -fc 'src.cli (subscription-bot|bot)'`
+   равно 1; в `/var/log/otz/subscription-bot.log` есть `[bot] long-polling started` и нет
+   `TelegramConflictError`. `otz bot` — синоним для разработки; одновременно с unit его не
+   запускать. `deploy/otz-bot.service` **удалён и не используется с WM05**; если он где-то
+   установлен — `systemctl disable --now otz-bot`.
+7. **Оба флага выключены** (`WATERMARK_BOT_ENABLED=0` и `SUBSCRIPTION_BOT_ENABLED=0`): демон пишет
+   `[bot] nothing enabled …` и завершается с кодом 0; `Restart=on-failure` его не перезапускает.
+8. **Откат** — выключить флаг и перезапустить: `WATERMARK_BOT_ENABLED=0` в `/opt/otz/.env`,
+   `systemctl restart otz-subscription-bot`. Подписки (если включены) продолжают работать,
+   `/clean` исчезает; чистые копии лежат в `data/clean` и ничего не ломают, оригиналы не
+   менялись. Откат кода — по [releases](releases.md).
+
+Что видит оператор после включения: `/clean` отвечает только тем, кому разрешено; знак, который
+нельзя удалить чисто или для которого нет LaMa, остаётся на месте (`kept_reason` в `.wm.json`).

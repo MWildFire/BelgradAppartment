@@ -1,6 +1,6 @@
 """`otz wm-*` commands; registered on the main `otz` group in src/cli.py.
 
-Heavy imports (numpy/cv2/torch) stay inside the commands so other `otz` commands start fast.
+Heavy imports (numpy/scipy/torch) stay inside the commands so other `otz` commands start fast.
 """
 
 from __future__ import annotations

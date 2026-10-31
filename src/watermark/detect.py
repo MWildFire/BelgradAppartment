@@ -1,9 +1,10 @@
 """Find a mark instance near its predicted place: NCC of gradient fields + refinement.
 
 Marks are white and semi-transparent, so their edges are the most reliable signal. The image
-and template gradient fields (gx, gy) are compared with normalized correlation
-(TM_CCORR_NORMED over two channels). The search runs only inside a +/- pos_tol*W window around
-the prediction and over a few scales: platform geometry is strict (checked on ~1300 photos).
+and template gradient fields (gx, gy) are compared with normalized cross-correlation summed
+over the two channels (imgops.match_template_ccorr_normed). The search runs only inside a
++/- pos_tol*W window around the prediction and over a few scales: platform geometry is strict
+(checked on ~1300 photos).
 
 Two stages: coarse on a downscaled copy (long side <= WORK_MAX), then refinement at full
 resolution in a +/- (2/f + 2) px window with 0.5 % scale steps and a sub-pixel parabola fit.
@@ -14,9 +15,9 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-import cv2
 import numpy as np
 
+from src.watermark import imgops
 from src.watermark.templates import Placement, WatermarkTemplate
 
 WORK_MAX = 900
@@ -36,21 +37,18 @@ class Detection:
 
 
 def to_gray(img_rgb: np.ndarray) -> np.ndarray:
-    return cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    return imgops.rgb_to_gray(img_rgb).astype(np.float32)
 
 
 def gradient_field(gray: np.ndarray) -> np.ndarray:
-    g = cv2.GaussianBlur(gray, (0, 0), 1.0)
-    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
-    return cv2.merge([gx, gy])
+    """Blurred Sobel (gx, gy) as an HxWx2 float32 field."""
+    return imgops.gradient_field(gray)
 
 
 def scaled_coverage(tpl: WatermarkTemplate, scale: float) -> np.ndarray:
     w = max(2, round(tpl.width * scale))
     h = max(2, round(tpl.height * scale))
-    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
-    return cv2.resize(tpl.coverage, (w, h), interpolation=interp)
+    return imgops.resize(tpl.coverage, (w, h), "area" if scale < 1.0 else "linear")
 
 
 def _best_in_window(
@@ -64,8 +62,9 @@ def _best_in_window(
     if x1 < x0 or y1 < y0:
         return None
     sub = gray[y0 : y1 + th, x0 : x1 + tw]
-    res = cv2.matchTemplate(gradient_field(sub), gradient_field(cov * 255.0), cv2.TM_CCORR_NORMED)
-    _, score, _, (px, py) = cv2.minMaxLoc(res)
+    res = imgops.match_template_ccorr_normed(gradient_field(sub), gradient_field(cov * 255.0))
+    py, px = (int(v) for v in np.unravel_index(np.argmax(res), res.shape))
+    score = float(res[py, px])
     fx, fy = 0.0, 0.0
     if 0 < px < res.shape[1] - 1:
         left, mid, right = res[py, px - 1], res[py, px], res[py, px + 1]
@@ -85,9 +84,7 @@ def match_instance(
     """Best match of one instance near its prediction (score may be below the threshold)."""
     H, W = gray.shape
     f = min(1.0, work_max / float(max(H, W)))
-    small = gray if f >= 1.0 else cv2.resize(
-        gray, (round(W * f), round(H * f)), interpolation=cv2.INTER_AREA
-    )
+    small = gray if f >= 1.0 else imgops.resize(gray, (round(W * f), round(H * f)), "area")
     radius_full = int(tpl.pos_tol * W) + 4
     radius_small = max(3, int(radius_full * f) + 2)
     coarse: tuple[float, float, float, float] | None = None  # score, scale, x, y (full res)
