@@ -61,6 +61,29 @@ def _linux_rss(pid: int) -> int:
     return 0
 
 
+def tree_pss_bytes() -> int | None:
+    """Sum of PSS (shared pages split between their users) over this process and its children.
+
+    RSS counts a library mapped by both the bot and its worker twice; PSS counts it once, so it
+    is what the unit's cgroup is really charged (Linux only).
+    """
+    if not LINUX:
+        return None
+    tree = _linux_children()
+    stack, total = [os.getpid()], 0
+    while stack:
+        pid = stack.pop()
+        try:
+            for line in Path(f"/proc/{pid}/smaps_rollup").read_text().splitlines():
+                if line.startswith("Pss:"):
+                    total += int(line.split()[1]) * 1024
+                    break
+        except OSError:
+            pass
+        stack.extend(tree.get(pid, []))
+    return total
+
+
 def tree_rss_bytes() -> tuple[int, int]:
     """(RSS of this process, RSS of this process plus all its descendants), in bytes."""
     me = os.getpid()
@@ -117,6 +140,7 @@ class Sampler(threading.Thread):
         self.period = period
         self.peak_tree = 0
         self.peak_parent = 0
+        self.peak_pss = 0
         self._stop_event = threading.Event()
 
     def run(self) -> None:
@@ -124,6 +148,9 @@ class Sampler(threading.Thread):
             parent, tree = tree_rss_bytes()
             self.peak_parent = max(self.peak_parent, parent)
             self.peak_tree = max(self.peak_tree, tree)
+            pss = tree_pss_bytes()
+            if pss is not None:
+                self.peak_pss = max(self.peak_pss, pss)
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -228,6 +255,7 @@ def main() -> None:
         "rss_tree_after_imports_mib": mib(rss_imports),
         "peak_rss_tree_mib": mib(sampler.peak_tree),
         "peak_rss_parent_mib": mib(max(sampler.peak_parent, parent_peak_bytes())),
+        "peak_pss_tree_mib": mib(sampler.peak_pss) if sampler.peak_pss else None,
         "peak_cgroup_mib": None if peak_cgroup is None else mib(peak_cgroup),
         "rss_parent_after_batch_mib": mib(rss_parent_idle),
         "rss_tree_after_batch_mib": mib(rss_tree_idle),

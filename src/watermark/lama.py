@@ -28,9 +28,10 @@ from src.watermark.settings import get_watermark_settings
 
 logger = logging.getLogger(__name__)
 
-# Crop budget: model memory grows ~2.6 KB per crop pixel (Linux, measured in WM05); 105k px keeps
-# the whole bot process near 1 GiB. Small crops (most 4zida marks) are untouched by it.
-DEFAULT_MAX_PIXELS = 105_000
+# Crop budget: model memory grows ~2.6 KB per crop pixel (Linux, measured in WM05). 75k px keeps
+# the bot + LaMa worker at 0.96-1.0 GiB (sum of RSS) on an album of ten; 105k gave 1.02-1.07 GiB.
+# Crops inside the budget are processed exactly as in R04.
+DEFAULT_MAX_PIXELS = 75_000
 DEFAULT_MIN_MARGIN = 16
 
 MODEL_URL = "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"

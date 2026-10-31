@@ -70,7 +70,7 @@ def halo_center_image(seed: int = 2) -> np.ndarray:
 
 def test_limits_have_safe_defaults_in_the_watermark_settings():
     s = type(get_watermark_settings())()
-    assert (s.watermark_lama_max_side, s.watermark_lama_max_pixels) == (1024, 105_000)
+    assert (s.watermark_lama_max_side, s.watermark_lama_max_pixels) == (1024, 75_000)
     assert (s.watermark_lama_min_margin, s.watermark_torch_threads) == (16, 2)
     assert s.watermark_lama_idle_unload_seconds == 600
     assert s.watermark_lama_isolation == "process" and s.watermark_lama_timeout_seconds == 180
@@ -83,7 +83,7 @@ def test_factory_returns_an_inpainter_backed_by_the_worker(isolated, monkeypatch
     monkeypatch.setattr(lama_proc, "build_worker_command", fake_worker_command("lambda o, i, m: i"))
     inpainter = lama.get_lama_inpainter()
     assert inpainter is not None and isinstance(inpainter._runner, lama_proc.WorkerRunner)
-    assert inpainter.max_pixels == 105_000 and inpainter.max_side == 1024
+    assert inpainter.max_pixels == 75_000 and inpainter.max_side == 1024
 
 
 def test_factory_passes_the_configured_limits(isolated, monkeypatch):

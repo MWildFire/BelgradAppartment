@@ -54,7 +54,7 @@ class WatermarkSettings(BaseSettings):
     watermark_lama_max_side: int = Field(default=1024, ge=64, le=4096)
     # Crop area budget in pixels; 0 = off. Over the budget the margin shrinks first
     # (down to watermark_lama_min_margin), a downscale is the last resort.
-    watermark_lama_max_pixels: int = Field(default=105_000, ge=0)
+    watermark_lama_max_pixels: int = Field(default=75_000, ge=0)
     watermark_lama_min_margin: int = Field(default=16, ge=0, le=96)
     # torch threads of the LaMa process (the server has 2 vCPU shared with the monitor).
     watermark_torch_threads: int = Field(default=2, ge=1, le=16)
