@@ -22,6 +22,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from src.watermark.detect import Detection, match_instance, score_at, to_gray
 from src.watermark.files import atomic_write
 from src.watermark.inpaint import Inpainter, get_inpainter
+from src.watermark.lama_model import LamaError
 from src.watermark.refine import remove_refined
 from src.watermark.remove import remove_inpaint, remove_reverse_blend
 from src.watermark.selfcheck import mask_too_large, removal_failed
@@ -189,10 +190,15 @@ def _remove_mark(
         grow = tpl.mask_grow_px(det.scale)
         if mask_too_large(tpl, det, out.shape[:2], grow):
             return out, "skip", "self_check", score_at(to_gray(out), tpl, det)
-        candidate = remove_inpaint(
-            out, tpl, det, plan.inpainter, grow_px=grow,
-            extra_grow_px=tpl.mask_extra_grow_px(det.scale),
-        )
+        try:
+            candidate = remove_inpaint(
+                out, tpl, det, plan.inpainter, grow_px=grow,
+                extra_grow_px=tpl.mask_extra_grow_px(det.scale),
+            )
+        except LamaError as error:
+            # The LaMa worker died, timed out or failed: the mark stays as it is, pixels untouched.
+            logger.warning("[watermark] LaMa failed, keeping %s: %s", tpl.id, error)
+            return out, "skip", "lama_unavailable", score_at(to_gray(out), tpl, det)
     residual = score_at(to_gray(candidate), tpl, det)
     if removal_failed(tpl, residual):
         return out, "skip", "self_check", score_at(to_gray(out), tpl, det)

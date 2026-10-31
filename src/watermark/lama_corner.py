@@ -53,17 +53,9 @@ class LamaCornerInpainter:
         self.lama = lama
 
     def _predict_rgb(self, crop: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        import torch
-
+        """Same model, lock, thread limit, worker process and idle unload as the centre marks."""
         h, w = mask.shape
-        image = torch.from_numpy(_reflect_to_multiple(crop)).permute(2, 0, 1)
-        image = image.unsqueeze(0).float() / 255.0
-        mask_t = torch.from_numpy((_reflect_to_multiple(mask) > 0).astype(np.float32))
-        mask_t = mask_t.unsqueeze(0).unsqueeze(0)
-        model = self.lama._load()
-        with self.lama._lock, torch.inference_mode():
-            result = model(image, mask_t)
-        return (result[0].permute(1, 2, 0).numpy() * 255.0).clip(0, 255).astype(np.uint8)[:h, :w]
+        return self.lama.predict(_reflect_to_multiple(crop), _reflect_to_multiple(mask))[:h, :w]
 
     def inpaint(self, img_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
         if not np.any(mask):

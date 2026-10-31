@@ -1,0 +1,33 @@
+{
+ "comment": "Real CleanReport.to_dict shapes saved by R04 N08 (halo_000 only-kept, zida_043 mixed, zida_001 removed); no_marks is synthetic.",
+ "cases": {
+  "only_kept_halo_000": {
+   "width": 1000, "height": 750, "seconds": 0.099,
+   "marks": [
+    {"template_id": "halo_corner", "platform": "halooglasi", "instance": 0, "score": 0.9115,
+     "x": 758.94, "y": 725.0, "scale": 1.0, "method": "skip", "residual": 0.9126}
+   ]
+  },
+  "mixed_zida_043": {
+   "width": 1000, "height": 750, "seconds": 0.794,
+   "marks": [
+    {"template_id": "halo_corner", "platform": "halooglasi", "instance": 0, "score": 0.9909,
+     "x": 759.0, "y": 725.0, "scale": 1.0, "method": "skip", "residual": 0.9909},
+    {"template_id": "zida_logo", "platform": "4zida", "instance": 0, "score": 0.4607,
+     "x": 69.22, "y": 69.66, "scale": 0.69444, "method": "inpaint:lama", "residual": 0.0194},
+    {"template_id": "zida_logo", "platform": "4zida", "instance": 1, "score": 0.5841,
+     "x": 736.17, "y": 486.6, "scale": 0.69444, "method": "inpaint:lama", "residual": 0.0024}
+   ]
+  },
+  "removed_zida_001": {
+   "width": 1440, "height": 1080, "seconds": 1.634,
+   "marks": [
+    {"template_id": "zida_logo", "platform": "4zida", "instance": 0, "score": 0.7881,
+     "x": 98.93, "y": 99.9, "scale": 1.0, "method": "inpaint:lama", "residual": -0.0127},
+    {"template_id": "zida_logo", "platform": "4zida", "instance": 1, "score": 0.2915,
+     "x": 1059.21, "y": 700.05, "scale": 1.0, "method": "inpaint:lama", "residual": 0.0246}
+   ]
+  },
+  "no_marks": {"width": 800, "height": 600, "seconds": 0, "marks": []}
+ }
+}

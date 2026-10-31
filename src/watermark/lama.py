@@ -17,24 +17,32 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
 from src.watermark import imgops
 from src.watermark.lama_crop import plan_crop
+from src.watermark.lama_model import LamaError, ModelRunner
 from src.watermark.settings import get_watermark_settings
 
 logger = logging.getLogger(__name__)
 
-# Crop budget: model memory grows ~2.6 KB per crop pixel (Linux, measured in WM05); 105k px keeps
-# the whole bot process near 1 GiB. Small crops (most 4zida marks) are untouched by it.
-DEFAULT_MAX_PIXELS = 105_000
+# Crop budget: model memory grows ~2.6 KB per crop pixel (Linux, measured in WM05). 75k px keeps
+# the bot + LaMa worker at 0.96-1.0 GiB (sum of RSS) on an album of ten; 105k gave 1.02-1.07 GiB.
+# Crops inside the budget are processed exactly as in R04.
+DEFAULT_MAX_PIXELS = 75_000
 DEFAULT_MIN_MARGIN = 16
 
 MODEL_URL = "https://github.com/Sanster/models/releases/download/add_big_lama/big-lama.pt"
 MODEL_SHA256 = "344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9"
 MODEL_BYTES = 205_669_692
+
+
+class Runner(Protocol):
+    """Where the model runs: `ModelRunner` (this process) or `WorkerRunner` (a worker process)."""
+
+    def predict(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray: ...
 
 
 def _pad_to_multiple(arr: np.ndarray, mod: int = 8) -> np.ndarray:
@@ -55,29 +63,49 @@ class LamaInpainter:
         max_side: int = 1024,
         max_pixels: int = DEFAULT_MAX_PIXELS,
         min_margin: int = DEFAULT_MIN_MARGIN,
+        runner: Runner | None = None,
     ) -> None:
         self.model_path = model_path
         self.margin = margin
         self.max_side = max_side
         self.max_pixels = max_pixels  # crop area budget (model memory ~2.6 KB/px); 0 = off
         self.min_margin = min_margin
-        self._model: Any = None
-        self._lock = threading.Lock()
+        # The model lives in a runner: in this process (ModelRunner) or in a worker process
+        # (WorkerRunner). `inpaint` and the corner adapter both go through `predict`.
+        self._runner: Runner = runner if runner is not None else ModelRunner(
+            model_path, threads=get_watermark_settings().watermark_torch_threads
+        )
+
+    # The in-process model and its lock, for tests and diagnostics (not used with a worker).
+    @property
+    def _model(self) -> Any:
+        return self._runner._model  # type: ignore[attr-defined]
+
+    @_model.setter
+    def _model(self, value: Any) -> None:
+        self._runner._model = value  # type: ignore[attr-defined]
+
+    @property
+    def _lock(self) -> threading.Lock:
+        return self._runner._lock  # type: ignore[attr-defined]
 
     def _load(self) -> Any:
         with self._lock:
-            if self._model is None:
-                import torch
+            return self._runner._ensure_loaded()  # type: ignore[attr-defined]
 
-                model = torch.jit.load(str(self.model_path), map_location="cpu")
-                model.eval()
-                self._model = model
-                logger.info("[watermark] LaMa model loaded from %s", self.model_path)
-            return self._model
+    def predict(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Run the model on a padded RGB crop (uint8, H and W multiples of 8). Only entry point.
+
+        Any failure (load error, inference error, dead or slow worker) is a `LamaError`.
+        """
+        try:
+            return self._runner.predict(image, mask)
+        except LamaError:
+            raise
+        except Exception as error:
+            raise LamaError(f"{type(error).__name__}: {error}") from error
 
     def inpaint(self, img_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        import torch
-
         sel = mask > 0
         if not sel.any():
             return img_rgb.copy()
@@ -102,14 +130,7 @@ class LamaInpainter:
         else:
             work, work_mask = crop, crop_mask
         hh, ww = work.shape[:2]
-        image = torch.from_numpy(_pad_to_multiple(work)).permute(2, 0, 1).unsqueeze(0).float()
-        image = image / 255.0
-        mask_t = torch.from_numpy((_pad_to_multiple(work_mask) > 0).astype(np.float32))
-        mask_t = mask_t.unsqueeze(0).unsqueeze(0)
-        model = self._load()
-        with self._lock, torch.inference_mode():
-            result = model(image, mask_t)
-        res = (result[0].permute(1, 2, 0).numpy() * 255.0).clip(0, 255).astype(np.uint8)[:hh, :ww]
+        res = self.predict(_pad_to_multiple(work), _pad_to_multiple(work_mask))[:hh, :ww]
         if factor < 1.0:
             res = imgops.resize(res, (cw, ch), "cubic")
         out = img_rgb.copy()
@@ -120,6 +141,7 @@ class LamaInpainter:
 
 
 _instance: LamaInpainter | None = None
+_instance_key: tuple[object, ...] | None = None
 _instance_lock = threading.Lock()
 
 
@@ -127,19 +149,75 @@ def torch_available() -> bool:
     return importlib.util.find_spec("torch") is not None
 
 
+def _build_inpainter(model_path: Path) -> LamaInpainter:
+    """LaMa with the limits from the settings: in a worker process (default) or in this one."""
+    settings = get_watermark_settings()
+    threads = settings.watermark_torch_threads
+    idle = settings.watermark_lama_idle_unload_seconds
+    runner: Runner
+    if settings.watermark_lama_isolation == "process":
+        from src.watermark.lama_proc import WorkerRunner, shared_worker
+
+        runner = WorkerRunner(
+            shared_worker(
+                model_path,
+                threads=threads,
+                timeout=float(settings.watermark_lama_timeout_seconds),
+                idle_seconds=float(idle),
+            )
+        )
+    else:
+        runner = ModelRunner(model_path, threads=threads, auto_unload_seconds=idle)
+    return LamaInpainter(
+        model_path,
+        max_side=settings.watermark_lama_max_side,
+        max_pixels=settings.watermark_lama_max_pixels,
+        min_margin=settings.watermark_lama_min_margin,
+        runner=runner,
+    )
+
+
 def get_lama_inpainter() -> LamaInpainter | None:
-    """LaMa singleton, or None (disabled by flag / no torch / no model file)."""
-    global _instance
+    """LaMa singleton, or None (disabled by flag / no torch / no model file).
+
+    With the default `process` isolation the model never enters this process: `torch` is only
+    imported by the worker, and `import torch` costs ~220 MiB the bot would keep for good.
+    """
+    global _instance, _instance_key
     settings = get_watermark_settings()
     if not settings.watermark_lama_enabled:
         return None
     model_path = Path(settings.watermark_lama_model_path)
     if not model_path.is_file() or not torch_available():
         return None
+    key = (
+        model_path, settings.watermark_lama_isolation, settings.watermark_torch_threads,
+        settings.watermark_lama_idle_unload_seconds, settings.watermark_lama_timeout_seconds,
+        settings.watermark_lama_max_side, settings.watermark_lama_max_pixels,
+        settings.watermark_lama_min_margin,
+    )
     with _instance_lock:
-        if _instance is None or _instance.model_path != model_path:
-            _instance = LamaInpainter(model_path)
+        if _instance is None or _instance_key != key:
+            _close_runner(_instance)
+            _instance, _instance_key = _build_inpainter(model_path), key
         return _instance
+
+
+def _close_runner(inpainter: LamaInpainter | None) -> None:
+    close = getattr(inpainter._runner, "close", None) if inpainter is not None else None
+    if close is not None:
+        close()
+
+
+def reset_lama_inpainter() -> None:
+    """Forget the singleton and stop its model / worker (tests, configuration reload)."""
+    global _instance, _instance_key
+    from src.watermark import lama_proc
+
+    with _instance_lock:
+        old, _instance, _instance_key = _instance, None, None
+    _close_runner(old)
+    lama_proc.close_all_workers()
 
 
 def sha256_of(path: Path) -> str:

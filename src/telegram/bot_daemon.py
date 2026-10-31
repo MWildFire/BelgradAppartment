@@ -44,7 +44,8 @@ def build_dispatcher() -> Any:
 
 
 async def run_bot_daemon() -> None:
-    """Blocks until stopped. Does nothing when both features are disabled."""
+    """Blocks until stopped. Does nothing (no Bot, no polling) when there is nothing to serve:
+    both features disabled, or /clean enabled without any allowed chat and subscriptions off."""
     from aiogram import Bot
 
     settings = get_settings()
@@ -55,6 +56,11 @@ async def run_bot_daemon() -> None:
     if not settings.tg_bot_token:
         raise RuntimeError("TG_BOT_TOKEN not set - cannot run the bot daemon")
     dp = build_dispatcher()
+    if not dp.sub_routers:  # e.g. /clean on, but no allowed chats, and subscriptions off
+        logger.warning(
+            "[bot] nothing to serve: no allowed chats for /clean and subscriptions off"
+        )
+        return
     bot = Bot(token=settings.tg_bot_token)
     sweep: asyncio.Task[None] | None = None
     if wm.watermark_bot_enabled and wm.watermark_site_use_clean:
