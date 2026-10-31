@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import io
 
-import cv2
 import numpy as np
 from PIL import Image
 
+from src.watermark import imgops
 from src.watermark.templates import WatermarkTemplate
 
 
@@ -23,7 +23,7 @@ def make_background(width: int, height: int, seed: int = 0) -> np.ndarray:
     bottom = rng.uniform(60, 140, 3).astype(np.float32)
     img = (top * (1 - ys[..., None]) + bottom * ys[..., None]) * np.ones((1, width, 1), np.float32)
     low = rng.normal(0, 25, (max(2, height // 40), max(2, width // 40), 3)).astype(np.float32)
-    img += cv2.resize(low, (width, height), interpolation=cv2.INTER_CUBIC)
+    img += imgops.resize(low, (width, height), "cubic")
     for _ in range(12):  # "furniture": rectangles with sharp edges
         x0, y0 = int(rng.integers(0, width - 20)), int(rng.integers(0, height - 20))
         x1 = min(width, x0 + int(rng.integers(20, max(21, width // 3))))
@@ -45,7 +45,7 @@ def apply_mark(img: np.ndarray, tpl: WatermarkTemplate, *, opacity_scale: float 
     h, w = img.shape[:2]
     for p in tpl.predicted(w, h):
         tw, th = max(2, round(tpl.width * p.scale)), max(2, round(tpl.height * p.scale))
-        cov = cv2.resize(tpl.coverage, (tw, th), interpolation=cv2.INTER_AREA)
+        cov = imgops.resize(tpl.coverage, (tw, th), "area")
         x0, y0 = round(p.x), round(p.y)
         xs0, ys0 = max(0, x0), max(0, y0)
         xs1, ys1 = min(w, x0 + tw), min(h, y0 + th)
@@ -62,10 +62,10 @@ def mark_mask(tpl: WatermarkTemplate, width: int, height: int, *, dilate: int = 
     mask = np.zeros((height, width), np.uint8)
     for p in tpl.predicted(width, height):
         tw, th = max(2, round(tpl.width * p.scale)), max(2, round(tpl.height * p.scale))
-        cov = cv2.resize(tpl.coverage, (tw, th), interpolation=cv2.INTER_AREA)
+        cov = imgops.resize(tpl.coverage, (tw, th), "area")
         x0, y0 = round(p.x), round(p.y)
         xs0, ys0, xs1, ys1 = max(0, x0), max(0, y0), min(width, x0 + tw), min(height, y0 + th)
         mask[ys0:ys1, xs0:xs1] |= (cov[ys0 - y0 : ys1 - y0, xs0 - x0 : xs1 - x0] > 0.05).astype(np.uint8)
     if dilate:
-        mask = cv2.dilate(mask, np.ones((2 * dilate + 1, 2 * dilate + 1), np.uint8))
+        mask = imgops.dilate_square(mask, 2 * dilate + 1)
     return mask > 0
