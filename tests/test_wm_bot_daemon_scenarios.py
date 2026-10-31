@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import sys
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -35,6 +36,7 @@ class FakeTelegram(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[dict[str, Any]] = []
+        self.files: dict[str, bytes] = {}  # file_id -> bytes served instead of RAW<file_id>
 
     async def close(self) -> None:
         pass
@@ -70,7 +72,8 @@ class FakeTelegram(BaseSession):
         return message
 
     async def stream_content(self, url, *args, **kwargs):
-        yield b"RAW" + url.rsplit("/", 1)[-1].encode()
+        file_id = url.rsplit("/", 1)[-1]
+        yield self.files.get(file_id, b"RAW" + file_id.encode())
 
 
 @pytest.fixture
@@ -248,3 +251,131 @@ async def test_clean_is_not_served_when_only_subscriptions_are_on(monkeypatch):
     dp = bot_daemon.build_dispatcher()
     await dp.feed_update(Bot(token="42:TEST", session=session), _text_message("/clean"))
     assert session.calls == [] and [r.name for r in dp.sub_routers] == ["subscription"]
+
+
+# ---- both features on: /clean must not take the subscription links away (ANSWERS A1) ----------
+
+
+@pytest.fixture
+def daemon_both(monkeypatch):
+    """Dispatcher with /clean (chat 5 allowed) AND subscriptions; /start is recorded."""
+    from src.telegram import subscription_bot
+
+    settings = get_settings()
+    monkeypatch.setattr(get_watermark_settings(), "watermark_bot_enabled", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_allowed_chat_ids", "")
+    monkeypatch.setattr(get_watermark_settings(), "watermark_site_use_clean", False)
+    monkeypatch.setattr(settings, "subscription_bot_enabled", True)
+    monkeypatch.setattr(settings, "tg_bot_recipients", str(ALLOWED_CHAT))
+    started: list[tuple[int, str]] = []
+
+    async def fake_handle_start(message, **_kw):
+        started.append((message.chat.id, message.text))
+        return True
+
+    monkeypatch.setattr(subscription_bot, "handle_start", fake_handle_start)
+    monkeypatch.setattr(wm_bot.AlbumCollector.__init__, "__defaults__", (0.02,))
+    session = FakeTelegram()
+    return bot_daemon.build_dispatcher(), Bot(token="42:TEST", session=session), session, started
+
+
+@pytest.mark.parametrize("chat_id", [6, ALLOWED_CHAT])
+async def test_start_with_a_subscription_token_reaches_handle_start_from_any_chat(
+    daemon_both, chat_id
+):
+    dp, bot, session, started = daemon_both
+    await dp.feed_update(bot, _text_message("/start sub_abc123", chat_id=chat_id))
+    assert started == [(chat_id, "/start sub_abc123")]
+    assert session.calls == []  # the /clean router did not answer it
+
+
+@pytest.mark.parametrize("chat_id", [6, ALLOWED_CHAT])
+async def test_plain_start_still_reaches_the_subscription_handler(daemon_both, chat_id):
+    dp, bot, _session, started = daemon_both
+    await dp.feed_update(bot, _text_message("/start", chat_id=chat_id))
+    assert started == [(chat_id, "/start")]
+
+
+async def test_clean_and_photos_from_a_foreign_chat_are_not_processed_with_both_on(
+    daemon_both, monkeypatch
+):
+    dp, bot, session, started = daemon_both
+    engine = _engine(monkeypatch, "removed_zida_001")
+    await dp.feed_update(bot, _text_message("/clean", chat_id=6))
+    await dp.feed_update(bot, _photo_message(900, chat_id=6))
+    await _settle()
+    assert session.calls == [] and engine.calls == 0 and started == []
+
+
+async def test_clean_still_works_in_the_allowed_chat_with_both_on(daemon_both, monkeypatch):
+    dp, bot, session, started = daemon_both
+    _engine(monkeypatch, "removed_zida_001")
+    await dp.feed_update(bot, _photo_message(901))
+    await _settle()
+    assert session.calls[-1]["method"] == "sendPhoto" and started == []
+
+
+# ---- LaMa worker failure seen from the chat: honest text, daemon keeps serving --------------
+
+
+def _halo_center_jpeg(seed: int = 2) -> bytes:
+    import io
+
+    from PIL import Image
+
+    from src.watermark.templates import load_templates
+    from tests.watermark.synth import apply_mark, make_background
+
+    tpl = {t.id: t for t in load_templates()}["halo_center"]
+    buf = io.BytesIO()
+    Image.fromarray(apply_mark(make_background(1000, 750, seed=seed), tpl)).save(
+        buf, "JPEG", quality=92
+    )
+    return buf.getvalue()
+
+
+def _fake_worker(handler: str):
+    code = (
+        "import os, numpy as np\nfrom src.watermark.lama_proc import serve\n"
+        f"serve({handler})\n"
+    )
+    return lambda _model, _threads: [sys.executable, "-c", code]
+
+
+async def test_lama_worker_failure_is_told_honestly_and_the_next_photo_still_works(
+    daemon, monkeypatch, tmp_path
+):
+    from src.watermark import lama, lama_proc
+
+    dp, bot, session = daemon
+    session.files = {"f1000": _halo_center_jpeg(2), "f1001": _halo_center_jpeg(3)}
+    model = tmp_path / "big-lama.pt"
+    model.write_bytes(b"fake")
+    wm_settings = get_watermark_settings()
+    monkeypatch.setattr(wm_settings, "watermark_lama_enabled", True)
+    monkeypatch.setattr(wm_settings, "watermark_lama_model_path", model)
+    monkeypatch.setattr(wm_settings, "watermark_lama_isolation", "process")
+    monkeypatch.setattr(wm_settings, "watermark_lama_timeout_seconds", 20)
+    monkeypatch.setattr(lama, "torch_available", lambda: True)
+    lama.reset_lama_inpainter()
+    try:  # the real engine runs; only the LaMa worker is a fake (first it dies, then it works)
+        monkeypatch.setattr(
+            lama_proc, "build_worker_command", _fake_worker("lambda o, i, m: os.kill(os.getpid(), 9)")
+        )
+        await dp.feed_update(bot, _photo_message(1000))
+        await _settle()
+        assert session.calls[-1]["method"] == "sendMessage"
+        assert session.calls[-1]["text"].startswith(KEPT_SENTENCE)
+        assert not any(c["method"] == "sendPhoto" for c in session.calls)
+
+        lama.reset_lama_inpainter()
+        monkeypatch.setattr(
+            lama_proc, "build_worker_command",
+            _fake_worker("lambda o, i, m: np.full(i.shape, (7, 7, 7), np.uint8)"),
+        )
+        await dp.feed_update(bot, _photo_message(1001))
+        await _settle()
+        assert session.calls[-1]["method"] == "sendPhoto"
+        assert "Удалено: Halo Oglasi — 1" in session.calls[-1]["caption"]
+    finally:
+        lama.reset_lama_inpainter()
