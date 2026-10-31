@@ -90,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
         "--kinds", default="", help="comma-separated template ids: write pairs only for these"
     )
     parser.add_argument(
+        "--torch-threads", type=int, default=0, help="torch.set_num_threads (0 = leave as is)"
+    )
+    parser.add_argument(
         "--save-cleaned", action="store_true", help="also write cleaned full frames (PNG)"
     )
     args = parser.parse_args(argv)
@@ -97,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
     if out_dir.is_relative_to(folder):
         parser.error("out_dir must lie outside the input folder")
     os.environ["WATERMARK_HALO_CORNER_MODE"] = args.corner_mode
+    if args.torch_threads:
+        import torch
+
+        torch.set_num_threads(args.torch_threads)
 
     from PIL import Image
 
