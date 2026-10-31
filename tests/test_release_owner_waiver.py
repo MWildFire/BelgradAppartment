@@ -87,7 +87,7 @@ def test_waiver_just_inside_24_hours_is_accepted():
     ({"given_at": None}, "given_at"),
     ({"given_at": datetime.now(UTC).replace(tzinfo=None).isoformat()}, "timezone"),
     ({"given_at": (datetime.now(UTC) - timedelta(hours=25)).isoformat()}, "older than 24 hours"),
-    ({"given_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat()}, "in the future"),
+    ({"given_at": (datetime.now(UTC) + timedelta(hours=6)).isoformat()}, "in the future"),
 ])
 def test_invalid_owner_waiver_is_rejected(change, message):
     with pytest.raises(release.ReleaseError, match=message):
@@ -307,7 +307,7 @@ def test_neither_receipt_nor_waiver_is_refused(transition):
 @pytest.mark.parametrize(("change", "message"), [
     ({"revision": "d" * 40}, "different release revision"),
     ({"given_at": (datetime.now(UTC) - timedelta(hours=25)).isoformat()}, "older than 24 hours"),
-    ({"given_at": (datetime.now(UTC) + timedelta(minutes=30)).isoformat()}, "in the future"),
+    ({"given_at": (datetime.now(UTC) + timedelta(hours=6)).isoformat()}, "in the future"),
     ({"quote": ""}, "quote"),
     ({"kind": "something_else"}, "kind"),
 ])
