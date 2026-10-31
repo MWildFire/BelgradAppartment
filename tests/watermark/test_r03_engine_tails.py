@@ -11,6 +11,7 @@ from click.testing import CliRunner
 from src.config import get_settings
 from src.watermark import cli, store
 from src.watermark.pipeline import NotAnImageError
+from src.watermark.settings import get_watermark_settings
 
 
 @pytest.mark.parametrize("failure", [NotAnImageError("bad image"), OSError("unreadable")])
@@ -73,7 +74,7 @@ def test_qa_rejects_output_within_input_before_writing(tmp_path, kind):
 def test_is_current_warns_once_per_call_without_retrying(monkeypatch, tmp_path, caplog):
     inbound = tmp_path / "inbound"
     monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
-    monkeypatch.setattr(get_settings(), "watermark_clean_dir", inbound / "clean")
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_dir", inbound / "clean")
     # Alembic migration tests disable existing loggers through fileConfig.
     # Restore this test logger explicitly so caplog exercises the warning itself.
     monkeypatch.setattr(store.logger, "disabled", False)

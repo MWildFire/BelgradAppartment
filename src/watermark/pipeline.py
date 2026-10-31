@@ -14,15 +14,16 @@ import time
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from src.config import get_settings
 from src.watermark.detect import Detection, match_instance, score_at, to_gray
 from src.watermark.files import atomic_write
 from src.watermark.inpaint import Inpainter, get_inpainter
 from src.watermark.remove import remove_inpaint, remove_reverse_blend
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import WatermarkTemplate, load_templates
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,9 @@ class MarkResult:
     scale: float
     method: str  # "reverse_blend" | "inpaint:lama" | "inpaint:telea" | "skip"
     residual: float  # correlation at the same place after removal
+    # Only for method == "skip" (mark found, pixels untouched): corner_mode | disabled |
+    # self_check | lama_unavailable. None for removed marks and for sidecars written before WM05.
+    kept_reason: str | None = None
 
 
 @dataclass
@@ -116,26 +120,48 @@ def find_marks(
     return found
 
 
-def removal_for(tpl: WatermarkTemplate) -> tuple[str, Inpainter | None]:
-    """(method name, inpainter) for a template; honours lama_fallback when LaMa is missing."""
+class Removal(NamedTuple):
+    """How one found mark is treated: a method, its inpainter and, for a kept mark, why."""
+
+    method: str
+    inpainter: Inpainter | None
+    kept_reason: str | None = None
+
+
+def plan_removal(tpl: WatermarkTemplate) -> Removal:
+    """Decide the treatment of a template.
+
+    A mark that needs LaMa while LaMa is missing is kept (``skip`` + ``lama_unavailable``);
+    classic (Telea-style) filling happens only when the operator asks for it explicitly with
+    ``WATERMARK_HALO_CORNER_MODE=telea``. A template that declares ``lama_fallback:
+    reverse_blend`` (4zida) keeps that deterministic fallback.
+    """
     if tpl.id == "halo_corner":
-        mode = get_settings().watermark_halo_corner_mode
+        mode = get_watermark_settings().watermark_halo_corner_mode
         if mode == "skip":
-            return "skip", None
+            return Removal("skip", None, "corner_mode")
         if mode == "lama":
             from src.watermark.lama_corner import get_lama_corner_inpainter
 
             corner = get_lama_corner_inpainter()
             if corner is None:
                 logger.warning("[watermark] corner LaMa unavailable; keeping corner (skip)")
-                return "skip", None
-            return "inpaint:lama", corner
+                return Removal("skip", None, "lama_unavailable")
+            return Removal("inpaint:lama", corner)
     if tpl.strategy == "reverse_blend":
-        return "reverse_blend", None
+        return Removal("reverse_blend", None)
     inpainter = get_inpainter(tpl.inpaint_backend)
-    if inpainter.name != tpl.inpaint_backend and tpl.lama_fallback == "reverse_blend":
-        return "reverse_blend", None
-    return f"inpaint:{inpainter.name}", inpainter
+    if inpainter is None:
+        if tpl.lama_fallback == "reverse_blend":
+            return Removal("reverse_blend", None)
+        return Removal("skip", None, "lama_unavailable")
+    return Removal(f"inpaint:{inpainter.name}", inpainter)
+
+
+def removal_for(tpl: WatermarkTemplate) -> tuple[str, Inpainter | None]:
+    """(method name, inpainter) for a template; see `plan_removal` for the kept reason."""
+    plan = plan_removal(tpl)
+    return plan.method, plan.inpainter
 
 
 def clean_array(
@@ -146,7 +172,7 @@ def clean_array(
     report = CleanReport(width=w, height=h)
     out = img_rgb
     for tpl, det in find_marks(img_rgb, templates):
-        method, inpainter = removal_for(tpl)
+        method, inpainter, kept_reason = plan_removal(tpl)
         if method == "skip":
             pass  # retain the detection in reports without changing any pixels
         elif inpainter is None:
@@ -168,6 +194,7 @@ def clean_array(
                 scale=round(det.scale, 5),
                 method=method,
                 residual=round(residual, 4),
+                kept_reason=kept_reason,
             )
         )
     report.seconds = time.monotonic() - started

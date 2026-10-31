@@ -15,8 +15,8 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from src.config import get_settings
 from src.watermark.pipeline import NotAnImageError
+from src.watermark.settings import get_watermark_settings
 from src.watermark.store import (
     clean_or_original,
     clean_path_for,
@@ -148,7 +148,7 @@ def rebuild_site_variants(paths: list[str]) -> int:
     """
     from src.site.photos import generate_for_stored_paths
 
-    if not get_settings().watermark_site_use_clean:
+    if not get_watermark_settings().watermark_site_use_clean:
         return 0
     todo = [stored for stored in paths if needs_site_variants(stored)]
     for stored in todo:
@@ -176,7 +176,7 @@ async def sweep_once(run: Runner | None = None) -> int:
     todo = await asyncio.to_thread(pending, paths)
     for start in range(0, len(todo), SWEEP_BATCH):
         await runner(clean_batch, todo[start : start + SWEEP_BATCH])
-    if get_settings().watermark_site_use_clean:
+    if get_watermark_settings().watermark_site_use_clean:
         for start in range(0, len(paths), SITE_VARIANT_BATCH):
             await runner(rebuild_site_variants, paths[start : start + SITE_VARIANT_BATCH])
     return len(todo)

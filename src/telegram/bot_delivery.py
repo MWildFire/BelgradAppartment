@@ -24,6 +24,7 @@ from sqlalchemy.orm import selectinload
 
 from src.admin.publish import auto_publish_site_listing
 from src.config import get_settings
+from src.watermark.settings import get_watermark_settings
 from src.db import (
     InboundPost,
     Listing,
@@ -270,7 +271,7 @@ async def send_match_via_bot(
             frozen = await claimed_payload(match_id, chat_id, token)
             full_caption = frozen["caption"]
             photo_paths = [Path(p) for p in frozen["photo_paths"]]
-            if get_settings().watermark_clean_on_delivery:
+            if get_watermark_settings().watermark_clean_on_delivery:
                 photo_paths = await _clean_delivery_paths(match_id, photo_paths)
             if any(not p.is_file() for p in photo_paths):
                 await finish_recipient(match_id, chat_id, token,

@@ -12,6 +12,7 @@ import pytest
 
 from src.config import get_settings
 from src.watermark import pipeline, published, store
+from src.watermark.settings import get_watermark_settings
 
 
 @pytest.fixture
@@ -20,7 +21,7 @@ def dirs(tmp_path, monkeypatch):
     inbound.mkdir()
     clean.mkdir()
     monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
-    monkeypatch.setattr(get_settings(), "watermark_clean_dir", clean)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_dir", clean)
     monkeypatch.setattr(get_settings(), "site_photos_root", inbound)
     return inbound, clean
 
@@ -57,7 +58,7 @@ def test_display_does_not_read_a_foreign_copy_via_symlink(dirs, tmp_path):
     dst.write_bytes(b"private photo")
     (clean / "7").symlink_to(private, target_is_directory=True)
     meta = {"version": store.STORE_VERSION, "changed": True,
-            "halo_corner_mode": getattr(get_settings(), "watermark_halo_corner_mode", "telea")}
+            "halo_corner_mode": get_watermark_settings().watermark_halo_corner_mode}
     (private / "00.jpg.wm.json").write_text(json.dumps(meta))
     assert store.clean_or_original(src) == src
 
@@ -133,9 +134,9 @@ def _cached_clean(dirs, monkeypatch):
     src.write_bytes(b"original")
     dst.write_bytes(b"broken derived image")
     meta = {"version": store.STORE_VERSION, "changed": True,
-            "halo_corner_mode": getattr(get_settings(), "watermark_halo_corner_mode", "telea")}
+            "halo_corner_mode": get_watermark_settings().watermark_halo_corner_mode}
     store.sidecar_for(dst).write_text(json.dumps(meta))
-    monkeypatch.setattr(get_settings(), "watermark_site_use_clean", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_site_use_clean", True)
     return src, dst
 
 
@@ -163,7 +164,7 @@ def test_sidecar_symlink_is_rejected_before_any_mutation(dirs, tmp_path, operati
     dst.write_bytes(b"old clean")
     foreign = tmp_path / "foreign.json"
     foreign.write_text(json.dumps({"version": store.STORE_VERSION, "changed": True,
-                                  "halo_corner_mode": get_settings().watermark_halo_corner_mode}))
+                                  "halo_corner_mode": get_watermark_settings().watermark_halo_corner_mode}))
     before = foreign.read_bytes()
     (clean / "00.jpg.wm.json").symlink_to(foreign)
     if operation in ("discard", "ensure"):

@@ -25,6 +25,7 @@ from pathlib import Path
 from src.config import PROJECT_ROOT, get_settings
 from src.watermark.files import atomic_write
 from src.watermark.generations import locked_token, read_token, replace_token
+from src.watermark.settings import get_watermark_settings
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ def resolve_stored(stored: str) -> Path | None:
 
 def clean_root() -> Path:
     """Clean copies must not be written inside inbound (originals stay untouched)."""
-    root = Path(get_settings().watermark_clean_dir).resolve()
+    root = Path(get_watermark_settings().watermark_clean_dir).resolve()
     inbound = Path(get_settings().inbound_photos_dir).resolve()
     if root.is_relative_to(inbound):  # equal to inbound or inside it
         raise RuntimeError(f"WATERMARK_CLEAN_DIR {root} must lie outside {inbound}")
@@ -118,31 +119,36 @@ def _matches_policy(meta: dict[str, object]) -> bool:
     """Mode switches invalidate copies; an explicit discard remains in effect."""
     return meta.get("version") == STORE_VERSION and (
         bool(meta.get("discarded"))
-        or meta.get("halo_corner_mode") == get_settings().watermark_halo_corner_mode
+        or meta.get("halo_corner_mode") == get_watermark_settings().watermark_halo_corner_mode
     )
 
 
-def _retry_available_corner(meta: dict[str, object]) -> bool:
-    """Retry an unavailable LaMa fallback after recovery; preserve intentional keeps.
+def _kept_for_missing_lama(mark: object, corner_mode: str) -> bool:
+    """A kept mark that only waits for LaMa (not an intentional keep such as corner_mode)."""
+    if not isinstance(mark, dict) or mark.get("method") != "skip":
+        return False
+    reason = mark.get("kept_reason")
+    if reason is not None:
+        return reason == "lama_unavailable"
+    # Sidecars written before WM05 have no reason: a skipped corner in lama mode meant "no LaMa".
+    return mark.get("template_id") == "halo_corner" and corner_mode == "lama"
+
+
+def _retry_available_lama(meta: dict[str, object]) -> bool:
+    """Retry marks kept for lack of LaMa once the model and torch appear; keep intentional keeps.
 
     This checks availability without importing OpenCV/torch or loading the model. It
     does not affect display reads, default skip results or explicit individual reverts.
     """
-    settings = get_settings()
-    if (
-        meta.get("discarded")
-        or settings.watermark_halo_corner_mode != "lama"
-        or not settings.watermark_lama_enabled
-    ):
+    settings = get_watermark_settings()
+    if meta.get("discarded") or not settings.watermark_lama_enabled:
         return False
     report = meta.get("report")
     marks = report.get("marks") if isinstance(report, dict) else None
-    if not isinstance(marks, list) or not any(
-        isinstance(mark, dict)
-        and mark.get("template_id") == "halo_corner"
-        and mark.get("method") == "skip"
-        for mark in marks
-    ):
+    corner_mode = settings.watermark_halo_corner_mode
+    if not isinstance(marks, list):
+        return False
+    if not any(_kept_for_missing_lama(mark, corner_mode) for mark in marks):
         return False
     if not Path(settings.watermark_lama_model_path).is_file():
         return False
@@ -196,7 +202,7 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
             and meta is not None
             and not meta.get("publishing")
             and _matches_policy(meta)
-            and not _retry_available_corner(meta)
+            and not _retry_available_lama(meta)
             and meta.get("sha256") == digest
             and (not meta.get("changed") or clean.is_file())
         ):
@@ -204,8 +210,8 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
         token = uuid.uuid4().hex.encode("ascii")
         replace_token(stream, token)
         version = STORE_VERSION
-        mode = get_settings().watermark_halo_corner_mode
-        quality = get_settings().watermark_jpeg_quality
+        mode = get_watermark_settings().watermark_halo_corner_mode
+        quality = get_watermark_settings().watermark_jpeg_quality
 
     # lazy: keeps OpenCV out of the site and admin imports
     from src.watermark.pipeline import clean_file
@@ -221,7 +227,7 @@ def ensure_clean(stored: str, *, force: bool = False) -> StoredResult | None:
                 read_token(stream) != token
                 or _sha256(original) != digest
                 or version != STORE_VERSION
-                or mode != get_settings().watermark_halo_corner_mode
+                or mode != get_watermark_settings().watermark_halo_corner_mode
             ):
                 raise RuntimeError("watermark result superseded by a newer request or source")
             if report.changed and (not staged.is_file() or not staged.stat().st_size):
@@ -266,7 +272,7 @@ def discard(original: Path) -> bool:
         # Persist opt-out before removing derivatives, so even a failed unlink is safe.
         _write_sidecar(clean, {
             "version": STORE_VERSION,
-            "halo_corner_mode": get_settings().watermark_halo_corner_mode,
+            "halo_corner_mode": get_watermark_settings().watermark_halo_corner_mode,
             "sha256": digest,
             "changed": False,
             "discarded": True,
@@ -305,7 +311,7 @@ def is_current(original: Path) -> bool:
         meta = read_sidecar(clean)
         if (
             meta is None or meta.get("publishing")
-            or not _matches_policy(meta) or _retry_available_corner(meta)
+            or not _matches_policy(meta) or _retry_available_lama(meta)
         ):
             return False
         return not meta.get("changed") or clean.is_file()
@@ -319,6 +325,6 @@ def is_current(original: Path) -> bool:
 
 def site_source(original: Path) -> Path:
     """What the site shows instead of the original: the clean copy if WATERMARK_SITE_USE_CLEAN=1."""
-    if not get_settings().watermark_site_use_clean:
+    if not get_watermark_settings().watermark_site_use_clean:
         return original
     return clean_or_original(original)

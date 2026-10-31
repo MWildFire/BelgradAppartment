@@ -12,6 +12,7 @@ from PIL import Image
 
 import src.watermark.store as store
 from src.config import PROJECT_ROOT, get_settings
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
 
@@ -21,8 +22,8 @@ def dirs(tmp_path: Path, monkeypatch):
     inbound, clean = tmp_path / "inbound", tmp_path / "clean"
     inbound.mkdir()
     monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
-    monkeypatch.setattr(get_settings(), "watermark_clean_dir", clean)
-    monkeypatch.setattr(get_settings(), "watermark_lama_enabled", False)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_dir", clean)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", False)
     return inbound, clean
 
 
@@ -110,7 +111,7 @@ def test_store_and_site_imports_do_not_load_opencv():
 @pytest.mark.parametrize("sub", [".", "clean"])
 def test_clean_dir_inside_inbound_is_refused(dirs, monkeypatch, sub):
     inbound, _clean = dirs
-    monkeypatch.setattr(get_settings(), "watermark_clean_dir", inbound / sub)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_dir", inbound / sub)
     src = _photo(inbound / "5" / "5" / "00.jpg", marked=True)
     with pytest.raises(RuntimeError):
         store.clean_root()

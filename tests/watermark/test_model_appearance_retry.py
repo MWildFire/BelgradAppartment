@@ -8,6 +8,7 @@ import pytest
 
 from src.config import get_settings
 from src.watermark import pipeline, store
+from src.watermark.settings import get_watermark_settings
 
 
 @pytest.fixture
@@ -17,12 +18,13 @@ def saved_fallback(tmp_path, monkeypatch):
     original = inbound / "photo.jpg"
     original.write_bytes(b"frozen original fixture")
     settings = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(settings, "inbound_photos_dir", inbound)
-    monkeypatch.setattr(settings, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(settings, "watermark_halo_corner_mode", "lama")
-    monkeypatch.setattr(settings, "watermark_lama_enabled", True)
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_halo_corner_mode", "lama")
+    monkeypatch.setattr(wm, "watermark_lama_enabled", True)
     model = tmp_path / "appearing-model.pt"
-    monkeypatch.setattr(settings, "watermark_lama_model_path", model)
+    monkeypatch.setattr(wm, "watermark_lama_model_path", model)
     monkeypatch.setattr("importlib.util.find_spec", lambda name: object())
     clean = store.clean_path_for(original)
     assert clean is not None
@@ -77,15 +79,15 @@ def test_retry_is_limited_to_available_explicit_lama_corner_fallback(
 ):
     original, model, calls = saved_fallback
     model.write_bytes(b"available")
-    settings = get_settings()
+    wm = get_watermark_settings()
     clean = store.clean_path_for(original)
     meta = store.read_sidecar(clean)
     if reason == "disabled":
-        monkeypatch.setattr(settings, "watermark_lama_enabled", False)
+        monkeypatch.setattr(wm, "watermark_lama_enabled", False)
     elif reason == "no_torch":
         monkeypatch.setattr("importlib.util.find_spec", lambda name: None)
     elif reason == "default_skip":
-        monkeypatch.setattr(settings, "watermark_halo_corner_mode", "skip")
+        monkeypatch.setattr(wm, "watermark_halo_corner_mode", "skip")
         meta["halo_corner_mode"] = "skip"
     else:
         meta["report"] = {"marks": []}

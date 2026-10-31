@@ -22,6 +22,7 @@ from aiogram.types import Chat, File, Message, PhotoSize, Update, User
 from src.config import get_settings
 from src.telegram import bot_daemon, wm_bot
 from src.watermark import pipeline
+from src.watermark.settings import get_watermark_settings
 from tests.test_wm_bot_results import ScriptedEngine
 
 ALLOWED_CHAT = 5
@@ -75,12 +76,12 @@ class FakeTelegram(BaseSession):
 @pytest.fixture
 def daemon(monkeypatch):
     """(dispatcher, bot, fake telegram) of the unified daemon with /clean on for chat 5."""
-    settings = get_settings()
-    monkeypatch.setattr(settings, "watermark_bot_enabled", True)
+    settings, wm_settings = get_settings(), get_watermark_settings()
+    monkeypatch.setattr(wm_settings, "watermark_bot_enabled", True)
     monkeypatch.setattr(settings, "subscription_bot_enabled", False)
     monkeypatch.setattr(settings, "tg_bot_recipients", str(ALLOWED_CHAT))
-    monkeypatch.setattr(settings, "watermark_allowed_chat_ids", "")
-    monkeypatch.setattr(settings, "watermark_site_use_clean", False)
+    monkeypatch.setattr(wm_settings, "watermark_allowed_chat_ids", "")
+    monkeypatch.setattr(wm_settings, "watermark_site_use_clean", False)
 
     def no_network(*_args, **_kwargs):
         raise AssertionError("network transport is forbidden in offline scenarios")
@@ -225,7 +226,7 @@ async def test_current_policy_old_photos_are_skipped_but_old_commands_are_not(da
 
 async def test_both_flags_off_the_daemon_never_polls_telegram(monkeypatch):
     settings = get_settings()
-    monkeypatch.setattr(settings, "watermark_bot_enabled", False)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_bot_enabled", False)
     monkeypatch.setattr(settings, "subscription_bot_enabled", False)
     monkeypatch.setattr(settings, "tg_bot_token", "42:TEST")
 
@@ -240,7 +241,7 @@ async def test_both_flags_off_the_daemon_never_polls_telegram(monkeypatch):
 
 async def test_clean_is_not_served_when_only_subscriptions_are_on(monkeypatch):
     settings = get_settings()
-    monkeypatch.setattr(settings, "watermark_bot_enabled", False)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_bot_enabled", False)
     monkeypatch.setattr(settings, "subscription_bot_enabled", True)
     monkeypatch.setattr(settings, "tg_bot_recipients", str(ALLOWED_CHAT))
     session = FakeTelegram()

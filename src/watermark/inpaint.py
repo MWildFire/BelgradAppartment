@@ -1,8 +1,10 @@
 """Inpainters fill the masked pixels with plausible content.
 
 TeleaInpainter uses OpenCV (cv2.INPAINT_TELEA): fast, no extra dependencies, good for small
-text and thin bands. LaMa (neural network, optional, needs torch) lives in
-`src/watermark/lama.py`; `get_inpainter("lama")` falls back to Telea when LaMa is unavailable.
+text and thin bands; it runs only when the operator asks for it (Halo corner mode ``telea``).
+LaMa (neural network, optional, needs torch) lives in `src/watermark/lama.py`;
+`get_inpainter("lama")` returns None when LaMa is unavailable, and the pipeline then KEEPS the
+mark instead of silently switching to a worse method.
 """
 
 from __future__ import annotations
@@ -42,18 +44,20 @@ _TELEA = TeleaInpainter(radius=5)
 _lama_warned = False
 
 
-def get_inpainter(preferred: str) -> Inpainter:
-    """LaMa when enabled and available, otherwise Telea (logs one warning)."""
+def get_inpainter(preferred: str) -> Inpainter | None:
+    """The requested inpainter; None when ``lama`` is requested and LaMa is unavailable.
+
+    Logs one warning per process in that case. Never falls back to Telea by itself.
+    """
     global _lama_warned
-    if preferred == "lama":
-        try:
-            from src.watermark.lama import get_lama_inpainter
-        except ImportError:
-            get_lama_inpainter = None  # type: ignore[assignment]
-        lama = get_lama_inpainter() if get_lama_inpainter is not None else None
-        if lama is not None:
-            return lama
-        if not _lama_warned:
-            logger.warning("[watermark] LaMa unavailable — falling back to Telea inpainting")
-            _lama_warned = True
-    return _TELEA
+    if preferred != "lama":
+        return _TELEA
+    try:
+        from src.watermark.lama import get_lama_inpainter
+    except ImportError:
+        get_lama_inpainter = None  # type: ignore[assignment]
+    lama = get_lama_inpainter() if get_lama_inpainter is not None else None
+    if lama is None and not _lama_warned:
+        logger.warning("[watermark] LaMa unavailable - marks that need it are kept as they are")
+        _lama_warned = True
+    return lama

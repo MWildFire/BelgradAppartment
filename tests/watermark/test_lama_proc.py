@@ -15,9 +15,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.config import get_settings
 from src.watermark import lama_proc
 from src.watermark.lama_proc import LamaWorkerClient, LamaWorkerError
+from src.watermark.settings import get_watermark_settings
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -197,7 +197,7 @@ def test_the_calling_process_never_imports_torch():
     assert out.stdout.strip() == "False"
 
 
-MODEL = Path(get_settings().watermark_lama_model_path)
+MODEL = Path(get_watermark_settings().watermark_lama_model_path)
 HAS_LAMA = importlib.util.find_spec("torch") is not None and MODEL.is_file()
 
 
