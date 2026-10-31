@@ -1,6 +1,6 @@
 """`otz wm-*` commands; registered on the main `otz` group in src/cli.py.
 
-Heavy imports (numpy/cv2/torch) stay inside the commands so other `otz` commands start fast.
+Heavy imports (numpy/scipy/torch) stay inside the commands so other `otz` commands start fast.
 """
 
 from __future__ import annotations
@@ -261,10 +261,10 @@ def wm_revert(match_id: int) -> None:
 @click.option("--dest", type=click.Path(dir_okay=False, path_type=Path), default=None)
 def wm_fetch_model(dest: Path | None) -> None:
     """Download the LaMa model (~206 MB) and verify its sha256."""
-    from src.config import get_settings
     from src.watermark.lama import MODEL_SHA256, download_model
+    from src.watermark.settings import get_watermark_settings
 
-    target = dest or Path(get_settings().watermark_lama_model_path)
+    target = dest or Path(get_watermark_settings().watermark_lama_model_path)
     path = download_model(target)
     size = path.stat().st_size
     click.echo(f"LaMa: {path} ({size} bytes, sha256 {MODEL_SHA256[:12]}...)")
@@ -281,13 +281,13 @@ def wm_clean_published(limit: int | None, force: bool, dry_run: bool) -> None:
     clean copies). The bot daemon repeats this every 10 minutes for new publications; run it
     by hand once after enabling the flag. Reruns only process new or changed photos.
     """
-    from src.config import get_settings
     from src.watermark.published import (
         clean_batch,
         pending,
         published_photo_paths,
         rebuild_site_variants,
     )
+    from src.watermark.settings import get_watermark_settings
 
     published = asyncio.run(published_photo_paths())
     paths = pending(published) if not force else published
@@ -301,7 +301,7 @@ def wm_clean_published(limit: int | None, force: bool, dry_run: bool) -> None:
         batch_changed, batch_missing = clean_batch(paths[start : start + 50], force=force)
         changed, missing = changed + batch_changed, missing + batch_missing
         click.echo(f"  ... {min(start + 50, len(paths))}/{len(paths)}")
-    if get_settings().watermark_site_use_clean:
+    if get_watermark_settings().watermark_site_use_clean:
         rebuilt = rebuild_site_variants(published)
         click.echo(f"  site variants rebuilt for {rebuilt} photos")
     else:

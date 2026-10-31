@@ -16,6 +16,7 @@ from src.db import get_session
 from src.db.models import InboundPost, Listing, Match, MatchDelivery, Platform, SourceChannel
 from src.telegram import bot_delivery
 from src.watermark import store
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
 
@@ -37,10 +38,11 @@ class AlbumBot:
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch):
     s = get_settings()
+    wm = get_watermark_settings()
     inbound = tmp_path / "inbound"
     monkeypatch.setattr(s, "inbound_photos_dir", inbound)
-    monkeypatch.setattr(s, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(s, "watermark_lama_enabled", False)
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_lama_enabled", False)
     monkeypatch.setattr(s, "tg_bot_recipients", "555")
     monkeypatch.setattr(s, "auto_publish_on_send", False)
     bot = AlbumBot()
@@ -92,17 +94,17 @@ def _all_exist(paths: list[str]) -> bool:
 
 async def test_flag_on_sends_clean_copies(db, env, monkeypatch):
     inbound, bot = env
-    monkeypatch.setattr(get_settings(), "watermark_clean_on_delivery", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_on_delivery", True)
     match_id, paths = await _seed(inbound)
     await bot_delivery.send_match_via_bot(match_id)
-    assert _all_under(bot.albums[0], Path(get_settings().watermark_clean_dir))
+    assert _all_under(bot.albums[0], Path(get_watermark_settings().watermark_clean_dir))
     assert await _frozen_paths(match_id) == paths
     assert _all_exist(paths)  # originals are still there
 
 
 async def test_cleaning_failure_falls_back_to_originals(db, env, monkeypatch):
     inbound, bot = env
-    monkeypatch.setattr(get_settings(), "watermark_clean_on_delivery", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_on_delivery", True)
 
     def boom(_stored, **_kw):
         raise RuntimeError("cv2 exploded")
@@ -119,7 +121,7 @@ def _sizes(paths: list[str]) -> list[int]:
 
 async def test_clean_copy_over_the_bot_limit_falls_back_to_the_original(db, env, monkeypatch):
     inbound, bot = env
-    monkeypatch.setattr(get_settings(), "watermark_clean_on_delivery", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_on_delivery", True)
     match_id, paths = await _seed(inbound)
     clean = [str(store.ensure_clean(p).best) for p in paths]  # type: ignore[union-attr]
     limit = min(_sizes(clean)) - 1
@@ -131,7 +133,7 @@ async def test_clean_copy_over_the_bot_limit_falls_back_to_the_original(db, env,
 
 async def test_cleaning_timeout_sends_originals(db, env, monkeypatch):
     inbound, bot = env
-    monkeypatch.setattr(get_settings(), "watermark_clean_on_delivery", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_clean_on_delivery", True)
     monkeypatch.setattr(bot_delivery, "DELIVERY_CLEAN_TIMEOUT_SECONDS", 0.05)
     real = store.ensure_clean
 

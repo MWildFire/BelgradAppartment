@@ -13,6 +13,7 @@ from src.config import get_settings
 from src.site import og_image, routes
 from src.site.app import create_app
 from src.watermark import store
+from src.watermark.settings import get_watermark_settings
 from tests.site.test_og_image import _view
 
 
@@ -30,11 +31,12 @@ def scene(tmp_path, monkeypatch):
     original = root / "album" / "room.jpg"
     original.write_bytes(png((180, 70, 35)))
     settings = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(settings, "site_photos_root", str(root))
     monkeypatch.setattr(settings, "inbound_photos_dir", root)
-    monkeypatch.setattr(settings, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(settings, "watermark_site_use_clean", False)
-    monkeypatch.setattr(settings, "watermark_halo_corner_mode", "skip")
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_site_use_clean", False)
+    monkeypatch.setattr(wm, "watermark_halo_corner_mode", "skip")
     clean = store.clean_path_for(original)
     clean.parent.mkdir(parents=True)
     clean.write_bytes(png((35, 120, 175)))
@@ -48,7 +50,7 @@ def scene(tmp_path, monkeypatch):
 
     monkeypatch.setattr(routes.readmodel, "get_public", public)
     with TestClient(create_app()) as client:
-        yield client, original, clean, settings, view
+        yield client, original, clean, wm, view
 
 
 def get(client, etag=None):

@@ -6,11 +6,10 @@ import importlib.util
 from pathlib import Path
 from unittest.mock import Mock
 
-import cv2
 import numpy as np
 import pytest
 
-from src.config import get_settings
+from src.watermark import imgops
 from src.watermark.lama import LamaInpainter
 from src.watermark.lama_corner import (
     LamaCornerInpainter,
@@ -19,6 +18,7 @@ from src.watermark.lama_corner import (
     _reflect_to_multiple,
     get_lama_corner_inpainter,
 )
+from src.watermark.settings import get_watermark_settings
 
 
 def test_corner_crop_keeps_native_pixels_and_reflects_image_and_mask():
@@ -84,7 +84,7 @@ def test_corner_composites_only_expanded_mask_and_does_not_fade_at_frame_edge(mo
 
     monkeypatch.setattr(corner, "_predict_rgb", fake_predict)
     out = corner.inpaint(image, mask)
-    expanded = cv2.dilate(mask, np.ones((5, 5), np.uint8))
+    expanded = imgops.dilate_square(mask, 5)
     assert seen and seen[0][0][:2] == seen[0][1]
     assert np.array_equal(out[expanded == 0], image[expanded == 0])
     assert np.array_equal(out[-1, -1], [210, 210, 210])
@@ -153,7 +153,7 @@ def test_model_receives_rgb_float_unit_range_binary_mask_and_multiple_of_eight()
     assert np.all(out == [255, 0, 0])
 
 
-MODEL = Path(get_settings().watermark_lama_model_path)
+MODEL = Path(get_watermark_settings().watermark_lama_model_path)
 HAS_LAMA = importlib.util.find_spec("torch") is not None and MODEL.is_file()
 
 
@@ -166,6 +166,6 @@ def test_real_corner_model_preserves_pixels_outside_expanded_mask():
     mask[-20:, -100:] = 1
     corner = LamaCornerInpainter(LamaInpainter(MODEL))
     out = corner.inpaint(image, mask)
-    expanded = cv2.dilate(mask, np.ones((5, 5), np.uint8))
+    expanded = imgops.dilate_square(mask, 5)
     assert np.array_equal(out[expanded == 0], image[expanded == 0])
     assert not np.array_equal(out[mask > 0], image[mask > 0])

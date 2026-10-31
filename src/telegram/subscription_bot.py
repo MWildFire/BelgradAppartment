@@ -122,11 +122,12 @@ def build_subscription_router():
 
 
 async def run_subscription_bot() -> None:
-    """Compatibility for the old `otz subscription-bot` command: it starts no poller any more.
+    """Entry point of the old `otz subscription-bot` command: runs the single bot daemon.
 
-    A bot token allows only one poller: /start subscription linking lives in
-    src/telegram/bot_daemon.py (`otz bot`) together with /clean. A leftover unit must not
-    become a second poller, so this only logs a warning.
+    A bot token allows only one poller, so /start subscription linking shares the daemon of
+    src/telegram/bot_daemon.py with /clean. Gated by SUBSCRIPTION_BOT_ENABLED (links) and
+    WATERMARK_BOT_ENABLED (/clean); with both off the daemon logs a warning and returns.
     """
-    logger.warning("[subscription-bot] replaced by otz bot (otz-bot.service), not starting")
-    return
+    from src.telegram import bot_daemon
+
+    await bot_daemon.run_bot_daemon()

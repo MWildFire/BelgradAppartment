@@ -1,5 +1,7 @@
 # Водяные знаки площадок: команда `/clean` в RentFinderBot — план реализации
 
+> Заменено WM05: единый демон `otz subscription-bot` (unit `otz-subscription-bot`), `otz-bot.service` не используется.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
 > В этом проекте задачи выполняют отдельные сессии Claude Code на Haiku 5.5 (раздел «Сессии и запуск»). Код и тесты в задачах проверены заранее: переносить их дословно, а не переписывать.

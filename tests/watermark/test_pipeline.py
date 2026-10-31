@@ -10,8 +10,8 @@ import pytest
 from PIL import Image
 
 import src.watermark.pipeline as pipeline
-from src.config import get_settings
 from src.watermark.detect import match_instance, to_gray
+from src.watermark.inpaint import TeleaInpainter
 from src.watermark.pipeline import (
     NotAnImageError,
     clean_array,
@@ -21,6 +21,7 @@ from src.watermark.pipeline import (
     find_marks,
     removal_for,
 )
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, jpeg_roundtrip, make_background, mark_mask
 
@@ -39,8 +40,8 @@ CASES = [
 @pytest.fixture(autouse=True)
 def _telea_only(monkeypatch):
     """CI has no torch: test the Telea path (LaMa has its own skippable tests)."""
-    monkeypatch.setattr(get_settings(), "watermark_lama_enabled", False)
-    monkeypatch.setattr(get_settings(), "watermark_halo_corner_mode", "telea")
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", False)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_halo_corner_mode", "telea")
 
 
 def _tpl(tid):
@@ -71,7 +72,11 @@ def test_clean_background_has_no_marks(seed, size):
 
 
 @pytest.mark.parametrize(("tid", "size"), CASES)
-def test_cleaning_restores_background_under_the_mark(tid, size):
+def test_cleaning_restores_background_under_the_mark(tid, size, monkeypatch):
+    if tid == "halo_center":
+        # Without LaMa this mark is kept (see test_kept_reason.py); a classic inpainter stands
+        # in for LaMa here so that mask geometry and the removal path stay covered without torch.
+        monkeypatch.setattr(pipeline, "get_inpainter", lambda preferred: TeleaInpainter())
     bg, img = _marked(tid, size)
     out, report = clean_array(img)
     assert report.changed
@@ -136,7 +141,7 @@ def test_cityexpert_real_mark_is_still_removed():
 
 def test_lama_fallback_when_lama_is_missing():
     assert removal_for(_tpl("zida_logo"))[0] == "reverse_blend"
-    assert removal_for(_tpl("halo_center"))[0] == "inpaint:telea"
+    assert removal_for(_tpl("halo_center"))[0] == "skip"  # needs LaMa: kept, never silent Telea
     assert removal_for(_tpl("halo_corner"))[0] == "inpaint:telea"
     assert removal_for(_tpl("cityexpert_center"))[0] == "reverse_blend"
 

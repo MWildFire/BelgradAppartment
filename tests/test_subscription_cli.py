@@ -8,20 +8,19 @@ from src.cli import cli
 
 
 def test_subscription_bot_disabled_by_default_does_not_run(monkeypatch):
-    """With subscription_bot_enabled False (default), the command refuses to start the poller."""
+    """With every bot flag off (default) the command exits at once and never polls Telegram."""
+    import aiogram
+
     from src.config import get_settings
+    from src.watermark.settings import get_watermark_settings
 
     monkeypatch.setattr(get_settings(), "subscription_bot_enabled", False)
-    started = {"n": 0}
+    monkeypatch.setattr(get_watermark_settings(), "watermark_bot_enabled", False)
 
-    async def fake_run():
-        started["n"] += 1
+    def explode(*_args, **_kwargs):
+        raise AssertionError("the daemon must not create a Telegram bot when everything is off")
 
-    # If run_subscription_bot were invoked it would bump the counter; the gate is INSIDE
-    # run_subscription_bot, so we assert the command exits cleanly without raising.
-    import src.telegram.subscription_bot as bot_mod
-
-    monkeypatch.setattr(bot_mod, "run_subscription_bot", fake_run)
+    monkeypatch.setattr(aiogram, "Bot", explode)
     runner = CliRunner()
     result = runner.invoke(cli, ["subscription-bot"])
     assert result.exit_code == 0

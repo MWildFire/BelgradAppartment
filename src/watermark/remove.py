@@ -5,17 +5,18 @@ O = (J - k*a*255) / (1 - k*a). Keeps the real pixels under the mark (best for th
 CityExpert logo). The multiplier k is chosen per connected part of the mark (each letter, each
 icon bar) so the restored pixels match the brightness of nearby unmarked pixels: platforms draw
 parts of their logo with slightly different opacity. A thin band along the mark contour is then
-filled with Telea.
+filled with the classic inpainter (a harmonic fill, see imgops.classic_inpaint).
 
-inpaint: the mark mask (dilated by a few pixels) is filled by an inpainter (LaMa or Telea).
+inpaint: the mark mask (dilated by a few pixels) is filled by an inpainter (LaMa, or the classic
+one when the operator asks for it).
 Used for thin or uneven marks (Halo Oglasi, 4zida) where subtraction leaves outlines.
 """
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
 
+from src.watermark import imgops
 from src.watermark.detect import Detection, scaled_coverage
 from src.watermark.inpaint import Inpainter, TeleaInpainter
 from src.watermark.templates import WatermarkTemplate
@@ -35,10 +36,7 @@ def alpha_map(tpl: WatermarkTemplate, det: Detection, shape_hw: tuple[int, int])
     """Mark alpha for the whole image: HxWx3 float32 (per channel R, G, B)."""
     H, W = shape_hw
     cov = scaled_coverage(tpl, det.scale)
-    m = np.float32([[1, 0, det.x], [0, 1, det.y]])
-    placed = cv2.warpAffine(
-        cov, m, (W, H), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0
-    )
+    placed = imgops.translate_bilinear(cov, det.x, det.y, (H, W))
     opacity = np.asarray(tpl.opacity, dtype=np.float32)
     return placed[..., None] * opacity[None, None, :]
 
@@ -78,9 +76,9 @@ def _best_k(
     y0, y1, x0, x1 = window
     local = lum[y0:y1, x0:x1]
     size = 2 * OUTSIDE_MARGIN + 1
-    support = cv2.dilate((local >= 0.005).astype(np.uint8), np.ones((size, size), np.uint8))
+    support = imgops.dilate_square((local >= 0.005).astype(np.uint8), size)
     outside = (support == 0).astype(np.float32)
-    den = cv2.GaussianBlur(outside, (0, 0), BACKGROUND_SIGMA)
+    den = imgops.gaussian_blur(outside, BACKGROUND_SIGMA)
     peak = float(local[part].max()) if part.any() else 0.0
     valid = part & (local >= PLATEAU * peak) & (den > 0.03)
     count = int(valid.sum())
@@ -88,14 +86,14 @@ def _best_k(
         return None
     sub = img_rgb[y0:y1, x0:x1]
     gray = sub.astype(np.float32).mean(axis=2)
-    background = cv2.GaussianBlur(gray * outside, (0, 0), BACKGROUND_SIGMA) / np.maximum(den, 1e-6)
+    background = imgops.gaussian_blur(gray * outside, BACKGROUND_SIGMA) / np.maximum(den, 1e-6)
     if float(np.median(background[valid])) > BRIGHT_BACKGROUND:
         return None
     al = alpha[y0:y1, x0:x1]
     best_k, best_err = 1.0, float("inf")
     for k in K_GRID:
         r = reverse_blend(sub, al, k).mean(axis=2).astype(np.float32)
-        bg = cv2.GaussianBlur(r * outside, (0, 0), BACKGROUND_SIGMA) / np.maximum(den, 1e-6)
+        bg = imgops.gaussian_blur(r * outside, BACKGROUND_SIGMA) / np.maximum(den, 1e-6)
         err = abs(float(np.median((r - bg)[valid])))
         if err < best_err:
             best_k, best_err = k, err
@@ -141,7 +139,7 @@ def opacity_map(img_rgb: np.ndarray, alpha: np.ndarray) -> tuple[np.ndarray, flo
     if peak <= 0.0:
         return np.ones(lum.shape, np.float32), 1.0
     core = (lum > 0.5 * peak).astype(np.uint8)
-    n, labels, stats, _centroids = cv2.connectedComponentsWithStats(core, connectivity=8)
+    n, labels, stats = imgops.connected_components_stats(core)
     measured: dict[int, tuple[float, int]] = {}
     for i in range(1, n):
         x, y, w, h = (int(v) for v in stats[i, :4])
@@ -157,8 +155,8 @@ def opacity_map(img_rgb: np.ndarray, alpha: np.ndarray) -> tuple[np.ndarray, flo
     for i, (k, _weight) in measured.items():
         values[i] = min(max(k, center - K_PART_LIMIT), center + K_PART_LIMIT)
     known = (labels > 0).astype(np.float32)
-    num = cv2.GaussianBlur(values[labels] * known, (0, 0), 3.0)
-    den = cv2.GaussianBlur(known, (0, 0), 3.0)
+    num = imgops.gaussian_blur(values[labels] * known, 3.0)
+    den = imgops.gaussian_blur(known, 3.0)
     kmap = np.full(lum.shape, center, np.float32)
     near = den > 1e-3
     kmap[near] = num[near] / den[near]
@@ -169,16 +167,16 @@ def support_mask(alpha: np.ndarray, *, threshold: float = 0.02, dilate_px: int =
     mask = (alpha.mean(axis=2) > threshold).astype(np.uint8)
     if dilate_px > 0:
         size = 2 * dilate_px + 1
-        mask = cv2.dilate(mask, np.ones((size, size), np.uint8))
+        mask = imgops.dilate_square(mask, size)
     return mask
 
 
 def edge_band(alpha: np.ndarray, *, band_px: int = 2) -> np.ndarray:
     support = support_mask(alpha, threshold=0.01)
-    band = cv2.morphologyEx(support, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8))
+    band = imgops.morph_gradient(support, 3)
     if band_px > 0:
         size = 2 * band_px + 1
-        band = cv2.dilate(band, np.ones((size, size), np.uint8))
+        band = imgops.dilate_square(band, size)
     return band
 
 
