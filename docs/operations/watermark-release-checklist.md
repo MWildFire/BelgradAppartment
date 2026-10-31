@@ -61,9 +61,11 @@ rebase/force push, remote integration, ready/merge PR14 и deployment не вы�
 - [ ] Владелец принял измеренный бюджет и архитектуру; необходимая реализация независимо проверена.
 
 Исторический Mac peak5396348928bytes (5.026GiB) — один процесс, не Linux-замер.
-Удвоение одиночного пика не измеряет пару. В snapshot [bot unit](../../deploy/otz-bot.service)
-имеет MemoryMax=2G; у [monitor unit](../../deploy/otz-monitor.service) лимит не задан.
-Это не подтверждение effective production limits или конкретного OOM.
+Удвоение одиночного пика не измеряет пару. В R04 отдельный `deploy/otz-bot.service` имел
+MemoryMax=2G; с WM05 этого unit нет (`otz-bot` не используется), бот живёт в
+`otz-subscription-bot`, а лимиты вешаются systemd drop-in вне репозитория (см. «Включение на
+проде» в [runbook](watermark-remover.md)). У [monitor unit](../../deploy/otz-monitor.service)
+лимит не задан. Это не подтверждение effective production limits или конкретного OOM.
 
 Engine-пакет имеет независимое LOCAL PREPARATION OK после RR01–RR04. Его synthetic receipts
 не заменяют перечисленные измерения. Lock публикации из [store](../../src/watermark/store.py)
@@ -72,9 +74,22 @@ Engine-пакет имеет независимое LOCAL PREPARATION OK пос�
 
 ## M2: совместимое восстановление и выпуск
 
-Actual `validate_data_only_release` отвергает этот scope: относительно зафиксированного main
-различаются `pyproject.toml`, `uv.lock`, `src/config.py`, `deploy/otz-bot.service`.
-Все 43 guarded/validator файла кандидата равны независимо проверенному feature-контракту;
+**WM05 (31.10.2026):** ветка R04 отвергалась обычным маршрутом «только код», потому что
+`validate_data_only_release` видел различия в `pyproject.toml`, `uv.lock`, `src/config.py`,
+`deploy/otz-bot.service` (и R04 менял `scripts/release.py`, `scripts/vps_install.sh`). W1 убрал
+причины: OpenCV заменён на `src/watermark/imgops.py`, настройки вынесены в
+`src/watermark/settings.py`, новый unit не нужен (бот — единый демон `otz subscription-bot`), и
+все эти файлы побайтно равны коду прода / `65f94a5`. Проверка (оба кода 0):
+
+```
+git diff --quiet 0819a897f446a3850ced8b49ca1a776049183003 <RC> -- pyproject.toml uv.lock alembic.ini \
+  src/config.py src/db/models.py scripts/runtime_contract.json data/districts.yaml alembic deploy
+git diff --quiet 65f94a5 <RC> -- scripts/release.py scripts/vps_install.sh
+grep -rnw cv2 src scripts pyproject.toml uv.lock || echo "no cv2"
+```
+
+Ниже — исторический текст R04 (до WM05): «Actual `validate_data_only_release` отвергает этот scope»;
+все 43 guarded/validator файла кандидата равны независимо проверенному feature-контракту;
 OFF флаги не отменяют проверку байтов. Синтетические 8 проверок и 29 release/rollback tests —
 локальные контракты, не реальные backup/restore receipts. См. [release helper](../../scripts/release.py),
 [releases](releases.md), [offhost backup](offhost-backup.md).
@@ -86,8 +101,9 @@ OFF флаги не отменяют проверку байтов. Синтет
 - [ ] Для выбранного маршрута подтверждены same-generation offhost/protected proof, шифрование/права,
   isolated application restore, DB/FK/schema и фотография: HTTP200, decode и визуальная проверка.
 - [ ] Проверен совместимый откат кода/runtime/units при additive schema и сохранён нужный материал отката.
-- [ ] Проверены effective units/timers, конкурирующие writers и ровно один реальный poller между
-  `otz-subscription-bot` и `otz-bot`; список имён SERVICES не является такой проверкой.
+- [ ] Проверены effective units/timers, конкурирующие writers и ровно один реальный poller
+  (`otz-subscription-bot`; unit `otz-bot` с WM05 не используется и не ставится); список имён
+  SERVICES не является такой проверкой.
 - [ ] Проверены full-size, превью и OG при полном визуальном откате. Флаг OFF возвращает original
   full-size и OG, но не обязательно уже созданные clean-превью; нужен revert/rebuild и readback.
 - [ ] Для отдельно разрешённой активации готовы health/DB-ready/media проверки и конкретный оператор.

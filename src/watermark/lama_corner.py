@@ -9,9 +9,9 @@ model. The caller decides what to do when the factory returns None.
 
 from __future__ import annotations
 
-import cv2
 import numpy as np
 
+from src.watermark import imgops
 from src.watermark.lama import LamaInpainter, get_lama_inpainter
 
 Box = tuple[int, int, int, int]  # y0, y1, x0, x1; upper bounds exclusive
@@ -40,9 +40,7 @@ def _corner_crop(image: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.nd
 
 def _feather_alpha(mask: np.ndarray) -> np.ndarray:
     """Feather only inside support; caller includes reflected frame context."""
-    distance = cv2.distanceTransform(
-        np.pad((mask > 0).astype(np.uint8), 1), cv2.DIST_L2, cv2.DIST_MASK_PRECISE
-    )[1:-1, 1:-1]
+    distance = imgops.distance_transform_l2(np.pad((mask > 0).astype(np.uint8), 1))[1:-1, 1:-1]
     return np.clip(distance / 3.0, 0, 1)
 
 
@@ -62,7 +60,7 @@ class LamaCornerInpainter:
     def inpaint(self, img_rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
         if not np.any(mask):
             return img_rgb.copy()
-        support = cv2.dilate((mask > 0).astype(np.uint8), np.ones((5, 5), np.uint8))
+        support = imgops.dilate_square((mask > 0).astype(np.uint8), 5)
         crop, cm, (y0, y1, x0, x1), pads = _corner_crop(img_rgb, support)
         prediction = self._predict_rgb(crop, cm)
         top, left = pads[0][0], pads[1][0]
