@@ -76,6 +76,29 @@ class WatermarkTemplate:
     min_score: float
     # What to do when inpaint_backend is "lama" but LaMa is unavailable (no torch/model).
     lama_fallback: LamaFallback = "telea"
+    # Quality levers (WM05). All optional in the JSON; the defaults keep the R04 behaviour.
+    # reverse_blend only: fit every part of the mark (shift, size, edge blur, opacity) and skip
+    # the Telea band along the contour (src/watermark/refine.py).
+    refine: bool = False
+    # LaMa marks: when the inpainting mask covers more than this fraction of the photo, LaMa
+    # invents scenery instead of filling, so the mark is kept (kept_reason="self_check").
+    lama_max_mask_fraction: float | None = None
+    # Inpainting mask = mark support grown by round(base * max(scale, 0.5)) px, but at least
+    # mask_grow_min_px when the photo is smaller than mask_grow_min_below_scale (JPEG blur of the
+    # edges does not shrink with the photo).
+    mask_grow_base_px: int = 3
+    mask_grow_min_px: int = 0
+    mask_grow_min_below_scale: float = 0.0
+    # Self-check: the template correlating this strongly at its place after removal means the
+    # removal failed (good removals measured <= 0.09), so the photo is left as it was.
+    max_residual: float = 0.15
+
+    def mask_grow_px(self, scale: float) -> int:
+        """Growth of the inpainting mask for a mark detected at `scale`."""
+        grow = max(1, round(self.mask_grow_base_px * max(scale, 0.5)))
+        if self.mask_grow_min_px and scale < self.mask_grow_min_below_scale:
+            grow = max(grow, self.mask_grow_min_px)
+        return grow
 
     @property
     def height(self) -> int:
@@ -135,6 +158,12 @@ def load_template(json_path: Path) -> WatermarkTemplate:
     lama_fallback = str(meta.get("lama_fallback", "telea"))
     if lama_fallback not in _LAMA_FALLBACKS:
         raise TemplateError(f"{json_path.name}: bad lama_fallback {lama_fallback!r}")
+    max_fraction = meta.get("lama_max_mask_fraction")
+    if max_fraction is not None and not 0.0 < float(max_fraction) < 1.0:  # type: ignore[arg-type]
+        raise TemplateError(f"{json_path.name}: lama_max_mask_fraction must be in (0, 1)")
+    max_residual = float(meta.get("max_residual", 0.15))  # type: ignore[arg-type]
+    if not 0.0 < max_residual <= 1.0:
+        raise TemplateError(f"{json_path.name}: max_residual must be in (0, 1]")
     raw_instances = _require(meta, "instances", json_path)
     if not isinstance(raw_instances, list) or not raw_instances:
         raise TemplateError(f"{json_path.name}: instances must be a non-empty list")
@@ -159,6 +188,12 @@ def load_template(json_path: Path) -> WatermarkTemplate:
         pos_tol=float(_require(meta, "pos_tol", json_path)),  # type: ignore[arg-type]
         min_score=float(_require(meta, "min_score", json_path)),  # type: ignore[arg-type]
         lama_fallback=lama_fallback,  # type: ignore[arg-type]
+        refine=bool(meta.get("refine", False)),
+        lama_max_mask_fraction=None if max_fraction is None else float(max_fraction),  # type: ignore[arg-type]
+        mask_grow_base_px=int(meta.get("mask_grow_base_px", 3)),  # type: ignore[call-overload]
+        mask_grow_min_px=int(meta.get("mask_grow_min_px", 0)),  # type: ignore[call-overload]
+        mask_grow_min_below_scale=float(meta.get("mask_grow_min_below_scale", 0.0)),  # type: ignore[arg-type]
+        max_residual=max_residual,
     )
 
 

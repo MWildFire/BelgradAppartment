@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+import src.watermark.pipeline as pipeline
 import src.watermark.store as store
 from src.config import PROJECT_ROOT, get_settings
+from src.watermark.inpaint import TeleaInpainter
 from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
@@ -24,6 +26,8 @@ def dirs(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
     monkeypatch.setattr(get_watermark_settings(), "watermark_clean_dir", clean)
     monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", False)
+    # 4zida needs LaMa; a classic inpainter stands in so the storage logic is covered without torch.
+    monkeypatch.setattr(pipeline, "get_inpainter", lambda preferred: TeleaInpainter())
     return inbound, clean
 
 

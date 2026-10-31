@@ -10,6 +10,7 @@
   "strategy": "inpaint",
   "inpaint_backend": "telea",
   "lama_fallback": "telea",
+  "max_residual": 0.3,
   "ref_width": 1000,
   "scale_mode": "fixed",
   "instances": [

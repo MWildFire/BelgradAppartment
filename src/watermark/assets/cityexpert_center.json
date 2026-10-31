@@ -10,6 +10,8 @@
   "strategy": "reverse_blend",
   "inpaint_backend": "telea",
   "lama_fallback": "telea",
+  "refine": true,
+  "max_residual": 0.08,
   "ref_width": 1920,
   "scale_mode": "width",
   "instances": [

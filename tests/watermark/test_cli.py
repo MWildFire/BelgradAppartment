@@ -8,8 +8,10 @@ import pytest
 from click.testing import CliRunner
 from PIL import Image
 
+import src.watermark.pipeline as pipeline
 from src.cli import cli
 from src.config import get_settings
+from src.watermark.inpaint import TeleaInpainter
 from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
@@ -18,6 +20,8 @@ from tests.watermark.synth import apply_mark, make_background
 @pytest.fixture
 def samples(tmp_path: Path, monkeypatch) -> Path:
     monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", False)
+    # 4zida needs LaMa; a classic inpainter stands in so the CLI plumbing is covered without torch.
+    monkeypatch.setattr(pipeline, "get_inpainter", lambda preferred: TeleaInpainter())
     folder = tmp_path / "samples"
     (folder / "zida").mkdir(parents=True)
     tpl = {t.id: t for t in load_templates()}["zida_logo"]

@@ -163,6 +163,30 @@ def test_opacity_is_not_biased_low_by_scene_structure(case) -> None:
     assert min(big) >= 0.85, big
 
 
+def test_mark_partly_outside_the_photo_does_not_crash(case) -> None:
+    """A detection near the border (template corner outside the image) must still work."""
+    tpl, scale, truth = case
+    cov = scaled_coverage(tpl, scale)
+    img = _apply(truth, tpl, scale=scale)
+    for x, y in ((-40.0, float(Y0)), (float(X0), -25.5), (float(WIDTH - 300), float(Y0) + 0.5)):
+        refined = refine_alpha(img, cov, x=x, y=y, opacity=tpl.opacity[0])
+        assert refined.cov_k.shape == img.shape[:2]
+        assert np.isfinite(refined.cov_k).all()
+        assert float(refined.cov_k.max()) <= 1.6  # coverage * k stays plausible
+
+
+def test_tiny_photo_returns_a_plain_template_map() -> None:
+    """Too little image to measure anything: the nominal template (k = 1) comes back."""
+    tpl = _template()
+    rng = np.random.default_rng(2)
+    img = rng.integers(60, 200, (40, 90, 3), dtype=np.uint8)
+    cov = scaled_coverage(tpl, 90 / float(tpl.ref_width))
+    refined = refine_alpha(img, cov, x=2.0, y=3.0, opacity=tpl.opacity[0])
+    assert refined.cov_k.shape == (40, 90)
+    assert refined.k_center == pytest.approx(1.0, abs=0.5)
+    assert np.isfinite(refined.cov_k).all()
+
+
 def test_refinement_leaves_pixels_outside_the_mark_untouched(case) -> None:
     tpl, scale, truth = case
     img = _apply(truth, tpl, scale=scale, shift=(0.4, 0.4), blur=0.6)

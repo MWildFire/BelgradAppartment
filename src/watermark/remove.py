@@ -199,8 +199,10 @@ def remove_inpaint(
     inpainter: Inpainter,
     *,
     dilate_px: int = 3,
+    grow_px: int | None = None,
 ) -> np.ndarray:
+    """Fill the support of the mark grown by `grow_px` (default: round(dilate_px * scale))."""
     alpha = alpha_map(tpl, det, img_rgb.shape[:2])
-    grow = max(1, round(dilate_px * max(det.scale, 0.5)))
+    grow = grow_px if grow_px is not None else max(1, round(dilate_px * max(det.scale, 0.5)))
     mask = support_mask(alpha, threshold=0.02, dilate_px=grow)
     return inpainter.inpaint(img_rgb, mask)

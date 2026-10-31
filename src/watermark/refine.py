@@ -29,6 +29,10 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import ndimage as ndi
 
+from src.watermark.detect import Detection, scaled_coverage
+from src.watermark.remove import alpha_map, opacity_map
+from src.watermark.templates import WatermarkTemplate
+
 CORE_FRACTION = 0.5  # a part core is where coverage >= this fraction of the template peak
 MIN_PART_AREA = 24  # core pixels; smaller parts are grouped with their neighbours
 GROUP_GAP_PX = 5  # small parts closer than this form one group
@@ -48,7 +52,10 @@ IMPROVEMENT = 0.002  # relative energy gain required to accept a move
 CONSENSUS_MIN_AREA = 600  # core pixels a part needs to vote for the consensus
 CONSENSUS_GAIN = 0.05  # relative energy drop that makes a part's own fit trustworthy
 CONSENSUS_MIN_PARTS = 3
-BOX_SPREAD = (1.0, 1.0, 0.004, 0.004, 0.7, 0.15)  # +/- around the consensus
+BOX_SPREAD = (1.0, 1.0, 0.004, 0.004, 0.7, 0.15)  # +/- around the consensus (weak parts)
+# Parts with their own clear evidence keep a wide box: platforms draw some parts (CityExpert icon
+# bars) clearly fainter than others, so their k legitimately differs from the consensus.
+BOX_SPREAD_SOLID = (2.0, 2.0, 0.008, 0.008, 1.5, 0.4)
 K_BOX_SCAN = (-0.1, -0.05, 0.0, 0.05, 0.1)  # k offsets tried first in the second pass
 # descent steps per level: dx/dy (px), sx/sy, sigma (px), k
 _STEPS = (
@@ -169,6 +176,7 @@ class _Part:
     region: tuple[int, int, int, int]  # evaluation window in image coords (y0, y1, x0, x1)
     tube: np.ndarray  # bool, region-shaped
     params: Params = START
+    prior_k: float = 1.0  # independent opacity estimate of this part (plateau vs background)
 
 
 def _energy(lum: np.ndarray, alpha: np.ndarray, tube: np.ndarray) -> float:
@@ -252,30 +260,40 @@ def _weighted_median(values: list[tuple[float, int]]) -> float:
     return ordered[-1][0]
 
 
+def _is_solid(part: _Part, before: float, after: float) -> bool:
+    """A part whose own fit is trustworthy: big enough and clearly better than nominal."""
+    return (
+        part.area >= CONSENSUS_MIN_AREA
+        and before > 0.0
+        and (before - after) / before >= CONSENSUS_GAIN
+    )
+
+
 def _consensus(fits: list[tuple[_Part, Params, float, float]]) -> Params:
     """Area-weighted medians of the parts whose own fit clearly lowered the energy."""
-    solid = [
-        (p, params)
-        for p, params, before, after in fits
-        if p.area >= CONSENSUS_MIN_AREA and before > 0.0
-        and (before - after) / before >= CONSENSUS_GAIN
-    ]
+    solid = [(p, params) for p, params, before, after in fits if _is_solid(p, before, after)]
     if len(solid) < CONSENSUS_MIN_PARTS:
         return START
     med = [_weighted_median([(params[i], p.area) for p, params in solid]) for i in range(6)]
     return (med[0], med[1], med[2], med[3], med[4], med[5])
 
 
-def _box_around(center: Params) -> Bounds:
-    """Per-part search box around the consensus (clipped to the global limits)."""
+def _box_around(center: Params, spreads: tuple[float, ...] = BOX_SPREAD) -> Bounds:
+    """Per-part search box around `center` (clipped to the global limits)."""
     return tuple(
         (max(lo, value - spread), min(hi, value + spread))
-        for value, spread, (lo, hi) in zip(center, BOX_SPREAD, _GLOBAL_BOUNDS, strict=True)
+        for value, spread, (lo, hi) in zip(center, spreads, _GLOBAL_BOUNDS, strict=True)
     )
 
 
 def _build_parts(
-    cov: np.ndarray, owner: np.ndarray, count: int, x: float, y: float, shape_hw: tuple[int, int]
+    cov: np.ndarray,
+    owner: np.ndarray,
+    count: int,
+    x: float,
+    y: float,
+    shape_hw: tuple[int, int],
+    k_prior: np.ndarray | None = None,
 ) -> list[_Part]:
     height, width = shape_hw
     ix, iy = int(np.floor(x)), int(np.floor(y))
@@ -303,25 +321,40 @@ def _build_parts(
         tube = ndi.binary_dilation(support, iterations=TUBE_PX) & ~ndi.binary_erosion(
             support, iterations=TUBE_PX
         )
-        parts.append(
-            _Part(index, tile, top, left, int(mask.sum()), frac, (ry0, ry1, rx0, rx1), tube)
-        )
+        part = _Part(index, tile, top, left, int(mask.sum()), frac, (ry0, ry1, rx0, rx1), tube)
+        if k_prior is not None:
+            core = base >= 0.7
+            if core.any():
+                part.prior_k = float(np.median(k_prior[ry0:ry1, rx0:rx1][core]))
+                part.prior_k = min(max(part.prior_k, K_RANGE[0]), K_RANGE[1])
+            part.params = (*START[:5], part.prior_k)
+        parts.append(part)
     return parts
 
 
 def refine_alpha(
-    img_rgb: np.ndarray, cov: np.ndarray, *, x: float, y: float, opacity: float
+    img_rgb: np.ndarray,
+    cov: np.ndarray,
+    *,
+    x: float,
+    y: float,
+    opacity: float,
+    k_prior: np.ndarray | None = None,
 ) -> RefinedMark:
     """Fit the mark part by part; `cov` is the template coverage already scaled to the photo.
 
     (x, y) is the detected top-left corner (sub-pixel). Returns the coverage*k map for the
     whole image (float32, zero away from the mark) and the per-part fits. Parts that cannot be
     measured (no contour pixels inside the image) keep the nominal template with a light blur.
+
+    `k_prior` (optional, HxW float) is an independent per-pixel opacity estimate, e.g. from the
+    plateau-vs-background method of `remove.opacity_map`: parts whose energy surface is flat
+    (busy scene, no usable contour) take their k from it instead of from the consensus.
     """
     height, width = img_rgb.shape[:2]
     lum = img_rgb.astype(np.float32).mean(axis=2)
     owner, count = split_parts(cov)
-    parts = _build_parts(cov, owner, count, x, y, (height, width))
+    parts = _build_parts(cov, owner, count, x, y, (height, width), k_prior)
 
     total = np.zeros((height, width), np.float32)  # alpha (opacity included) of all parts
     for part in parts:
@@ -337,15 +370,23 @@ def refine_alpha(
         return found
 
     fittable = [p for p in parts if int(p.tube.sum()) >= MIN_TUBE_PIXELS]
-    first = [(part, *refit(part, START, _GLOBAL_BOUNDS, K_SCAN)) for part in fittable]
+    first = [
+        (part, *refit(part, (*START[:5], part.prior_k), _GLOBAL_BOUNDS, K_SCAN))
+        for part in fittable
+    ]
     center = _consensus(first)
-    box = _box_around(center)
+    solid_box = _box_around(center, BOX_SPREAD_SOLID)
     results: dict[int, tuple[Params, float, float]] = {}
-    for part in fittable:
+    for part, own, before, after in first:
+        if _is_solid(part, before, after):
+            start, box = own, solid_box  # keep its own evidence, refit among settled neighbours
+        else:  # no reliable evidence: consensus geometry, the part's own prior opacity
+            start = (*center[:5], part.prior_k)
+            box = _box_around(start)
         scan = tuple(
-            round(min(max(center[5] + d, box[5][0]), box[5][1]), 4) for d in K_BOX_SCAN
+            round(min(max(start[5] + d, box[5][0]), box[5][1]), 4) for d in K_BOX_SCAN
         )
-        results[part.index] = refit(part, center, box, scan)
+        results[part.index] = refit(part, start, box, scan)
     fits: list[PartFit] = []
     for part in parts:
         if part.index in results:
@@ -357,3 +398,29 @@ def refine_alpha(
     measured = [(f.k, f.area) for f in fits if f.energy_before > 0.0]
     k_center = _weighted_median(measured) if measured else 1.0
     return RefinedMark(cov_k=cov_k, parts=tuple(fits), k_center=float(k_center))
+
+
+def remove_refined(
+    img_rgb: np.ndarray, tpl: WatermarkTemplate, det: Detection
+) -> tuple[np.ndarray, float]:
+    """Reverse blend with the part-by-part refined alpha. Returns (cleaned image, central k).
+
+    Pixels outside the mark's window are returned unchanged (byte for byte).
+    """
+    cov = scaled_coverage(tpl, det.scale).astype(np.float32)
+    opacity = float(np.mean(tpl.opacity))
+    k_prior, _k_center = opacity_map(img_rgb, alpha_map(tpl, det, img_rgb.shape[:2]))
+    refined = refine_alpha(img_rgb, cov, x=det.x, y=det.y, opacity=opacity, k_prior=k_prior)
+    ys, xs = np.nonzero(refined.cov_k > 0.0)
+    out = img_rgb.copy()
+    if ys.size == 0:
+        return out, refined.k_center
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    channel_opacity = np.asarray(tpl.opacity, np.float32)
+    alpha = np.clip(
+        refined.cov_k[y0:y1, x0:x1, None] * channel_opacity[None, None, :], 0.0, 0.95
+    )
+    window = img_rgb[y0:y1, x0:x1].astype(np.float32)
+    restored = (window - alpha * 255.0) / (1.0 - alpha)
+    out[y0:y1, x0:x1] = np.clip(np.rint(restored), 0, 255).astype(np.uint8)
+    return out, refined.k_center

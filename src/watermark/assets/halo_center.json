@@ -10,6 +10,8 @@
   "strategy": "inpaint",
   "inpaint_backend": "lama",
   "lama_fallback": "telea",
+  "lama_max_mask_fraction": 0.055,
+  "max_residual": 0.15,
   "ref_width": 1000,
   "scale_mode": "width",
   "instances": [

@@ -41,7 +41,7 @@ def root(tmp_path: Path, monkeypatch) -> Path:
 def _marked_photo(root: Path) -> Path:
     path = root / "1" / "9" / "00.jpg"
     path.parent.mkdir(parents=True, exist_ok=True)
-    img = apply_mark(make_background(1440, 1080, seed=8), {t.id: t for t in load_templates()}["zida_logo"])
+    img = apply_mark(make_background(1440, 1080, seed=8), {t.id: t for t in load_templates()}["cityexpert_center"])
     Image.fromarray(img).save(path, "JPEG", quality=92)
     return path
 
