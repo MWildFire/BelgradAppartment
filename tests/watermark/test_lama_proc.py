@@ -5,6 +5,7 @@ The worker is a fake (`serve()` with a small handler), so no torch and no model 
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import threading
@@ -14,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from src.config import get_settings
 from src.watermark import lama_proc
 from src.watermark.lama_proc import LamaWorkerClient, LamaWorkerError
 
@@ -193,6 +195,42 @@ def test_the_calling_process_never_imports_torch():
         capture_output=True, text=True, check=True,
     )
     assert out.stdout.strip() == "False"
+
+
+MODEL = Path(get_settings().watermark_lama_model_path)
+HAS_LAMA = importlib.util.find_spec("torch") is not None and MODEL.is_file()
+
+
+@pytest.mark.skipif(not HAS_LAMA, reason="torch or the LaMa model file is unavailable")
+def test_real_worker_gives_the_same_pixels_as_the_in_process_model():
+    from src.watermark.lama_model import ModelRunner
+
+    rng = np.random.default_rng(3)
+    img = rng.integers(0, 256, (64, 96, 3), dtype=np.uint8)
+    msk = np.zeros((64, 96), np.uint8)
+    msk[20:36, 30:60] = 1
+    client = LamaWorkerClient(
+        lama_proc.build_worker_command(MODEL, 2), cwd=ROOT, env={"PYTHONPATH": str(ROOT)},
+        timeout=120.0, auto_reap=False,
+    )
+    try:
+        remote = client.call("predict", img, msk)
+    finally:
+        client.close()
+    local = ModelRunner(MODEL, threads=2).predict(img, msk)
+    assert remote.shape == local.shape and int(np.abs(remote.astype(int) - local).max()) <= 1
+
+
+def test_unknown_operation_is_reported_by_the_real_entry_point():
+    client = LamaWorkerClient(
+        lama_proc.build_worker_command("missing.pt", 1), cwd=ROOT,
+        env={"PYTHONPATH": str(ROOT)}, timeout=60.0, auto_reap=False,
+    )
+    try:
+        with pytest.raises(LamaWorkerError, match="unknown LaMa operation"):
+            client.call("bogus", image(), mask())
+    finally:
+        client.close()
 
 
 def test_frame_codec_roundtrip():

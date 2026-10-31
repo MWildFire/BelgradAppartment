@@ -91,6 +91,7 @@ def main() -> None:
     ap.add_argument("--set", dest="which", choices=["album10", "all36"], default="album10")
     ap.add_argument("--corner", choices=["skip", "lama", "telea"], default="skip")
     ap.add_argument("--max-side", type=int, default=None, help="LaMa max side (default: code's)")
+    ap.add_argument("--max-pixels", type=int, default=None, help="LaMa crop pixel budget; 0 = off")
     ap.add_argument("--threads", type=int, default=None, help="torch threads (default: code's)")
     ap.add_argument("--repeat", type=int, default=1, help="run the set N times (leak check)")
     ap.add_argument("--out", type=Path, default=None, help="write the JSON here as well")
@@ -104,6 +105,8 @@ def main() -> None:
         os.environ["MKL_NUM_THREADS"] = str(args.threads)
     if args.max_side is not None:
         os.environ["WATERMARK_LAMA_MAX_SIDE"] = str(args.max_side)
+    if args.max_pixels is not None:
+        os.environ["WATERMARK_LAMA_MAX_PIXELS"] = str(args.max_pixels)
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
     from src.watermark.lama import get_lama_inpainter
@@ -114,6 +117,8 @@ def main() -> None:
     lama = get_lama_inpainter()
     if lama is not None and args.max_side is not None:
         lama.max_side = args.max_side  # older code has no setting for it
+    if lama is not None and args.max_pixels is not None and hasattr(lama, "max_pixels"):
+        lama.max_pixels = args.max_pixels
     if args.threads is not None:
         try:
             import torch
@@ -170,6 +175,7 @@ def main() -> None:
         "corner_mode": args.corner,
         "lama_available": lama is not None,
         "lama_max_side": getattr(lama, "max_side", None),
+        "lama_max_pixels": getattr(lama, "max_pixels", None),
         "torch_imported": torch_imported,
         "torch_threads": torch_threads,
         "rss_after_imports_mib": mib(rss_imports),

@@ -293,31 +293,37 @@ class LamaWorkerClient:
 # ---- the worker entry point ---------------------------------------------------------------------
 
 
-def _inpainter_handler() -> Handler:
-    """Handler that runs the ordinary in-process LaMa (torch is imported here, in the worker)."""
-    from src.watermark.lama import LamaInpainter, get_lama_inpainter
-    from src.watermark.lama_corner import LamaCornerInpainter
+def build_worker_command(model_path: Path | str, threads: int) -> list[str]:
+    """Command line of the worker; it needs the project root as cwd / on PYTHONPATH."""
+    return [
+        sys.executable, "-m", "src.watermark.lama_proc",
+        "--model", str(model_path), "--threads", str(threads),
+    ]
 
-    lama: LamaInpainter | None = None
+
+def _runner_handler(model_path: Path, threads: int) -> Handler:
+    """Handler around the torch-only ModelRunner (torch is imported here, in the worker)."""
+    from src.watermark.lama_model import ModelRunner
+
+    runner = ModelRunner(model_path, threads=threads)
 
     def handle(op: str, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        nonlocal lama
-        if lama is None:
-            lama = get_lama_inpainter()
-            if lama is None:
-                raise RuntimeError("LaMa is unavailable in the worker (no model file or no torch)")
-        if op == "corner":
-            return LamaCornerInpainter(lama).inpaint(image, mask)
-        if op == "center":
-            return lama.inpaint(image, mask)
-        raise ValueError(f"unknown LaMa operation {op!r}")
+        if op != "predict":
+            raise ValueError(f"unknown LaMa operation {op!r}")
+        return runner.predict(image, mask)
 
     return handle
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="LaMa worker process (internal)")
+    parser.add_argument("--model", type=Path, required=True)
+    parser.add_argument("--threads", type=int, default=2)
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="[lama-worker] %(message)s")
-    serve(_inpainter_handler())
+    serve(_runner_handler(args.model, args.threads))
 
 
 if __name__ == "__main__":
