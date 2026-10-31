@@ -69,8 +69,26 @@ Halo-центр 7.5), на кропах 2× без видимых отличий
 кэшем файловый кэш библиотек (`torch` и др.) тоже попадает в cgroup — отсюда 1090 МиБ в строке «холодный кэш»;
 ядро вытесняет его раньше, чем нужно убивать процессы.
 
-Повторить: `scripts/wm_memory_probe.py <wm-samples> --set album10 --corner skip --idle-seconds 5`
-(в контейнере Linux; на macOS RSS нестабилен из-за сжатия памяти).
+Повторить (Linux в Colima; на macOS RSS нестабилен из-за сжатия памяти). `$WT` — каталог репозитория, `$WM` —
+`/Volumes/StudioData/Home/Projects/Watermark`:
+
+```
+COLIMA_HOME=/Volumes/StudioData/AppData/colima-wm05 colima start --cpu 4 --memory 6 --disk 30 --vm-type vz \
+  --mount-type virtiofs --vz-rosetta --mount $WT:r --mount $WM/private/datasets/wm-samples:r \
+  --mount $WM/private/models:r --mount $WM/tmp/wm05/w3:w
+docker --context colima run --rm --platform linux/arm64 --memory 4g --memory-swap 4g --cpus 2 \
+  -v wm05-venv:/venv:ro -v $WT:/repo:ro -v $WM/private/datasets/wm-samples:/samples:ro \
+  -v $WM/private/models:/models:ro -v $WM/tmp/wm05/w3/probe:/out \
+  -e WATERMARK_LAMA_MODEL_PATH=/models/big-lama.pt -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/repo \
+  python:3.12-slim /venv/bin/python /repo/scripts/wm_memory_probe.py /samples \
+  --set album10 --corner skip --idle-seconds 5 --out /out/album10-skip.json
+```
+
+Том `wm05-venv` — окружение по замку: `uv export --frozen --no-dev --extra clip --no-hashes --no-emit-project`,
+`pip install -r` внутри такого же контейнера, затем `torch==2.12.0`/`torchvision==0.27.0` с индекса
+`https://download.pytorch.org/whl/cpu` (на aarch64 PyPI отдаёт CUDA-сборку — её надо заменить на CPU).
+Для x86_64 — `--platform linux/amd64` и отдельный том. Лимит 1.5 ГиБ — `--memory 1536m --memory-swap 1536m`,
+холодный кэш — `colima ssh -- sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'` перед прогоном.
 
 ## Как проверить на проде (только чтение)
 

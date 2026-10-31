@@ -163,6 +163,8 @@ class LamaWorkerClient:
             self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=self.cwd, env=env,
             bufsize=0, close_fds=True,
         )
+        assert self._proc.stdin is not None
+        os.set_blocking(self._proc.stdin.fileno(), False)  # writes obey the request deadline
         self.spawn_count += 1
         logger.info("[lama-worker] started pid=%s", self._proc.pid)
         if self._auto_reap and self.idle_seconds > 0 and self._reaper is None:
@@ -197,7 +199,10 @@ class LamaWorkerClient:
             _, writable, _ = select.select([], [fd], [], left)
             if not writable:
                 raise TimeoutError
-            view = view[os.write(fd, view[:_CHUNK]):]
+            try:  # the pipe is non-blocking: a worker that stopped reading cannot hold us here
+                view = view[os.write(fd, view[:_CHUNK]):]
+            except BlockingIOError:
+                continue
 
     @staticmethod
     def _read_exact(fd: int, count: int, deadline: float) -> bytes:
@@ -262,7 +267,9 @@ class LamaWorkerClient:
             except TimeoutError:
                 self._stop()
                 raise LamaWorkerError(f"LaMa worker timeout after {self.timeout:g} s") from None
-            except (EOFError, BrokenPipeError, ConnectionResetError, ValueError):
+            except (EOFError, OSError, KeyError, TypeError, ValueError):
+                # dead worker, broken pipe or a reply we cannot parse: stop it, so the next
+                # request starts from a clean protocol state
                 raise self._died(proc) from None
             finally:
                 self._last_used = self._clock()

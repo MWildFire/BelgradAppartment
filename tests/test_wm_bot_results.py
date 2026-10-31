@@ -129,8 +129,7 @@ async def test_not_an_image_is_skipped_but_counted_as_not_processed(monkeypatch)
     first = messages[0]
     assert any("не похож на фото" in t for t in first.texts)
     ((data, caption),) = first.photos  # only the real photo is sent
-    assert data == b"CLEAN-RAW0" and "Не удалось обработать: 1 из 2" in caption
-    assert "оригиналы без изменений" not in caption  # no original of the broken file was sent
+    assert data == b"CLEAN-RAW0" and caption.endswith("Не удалось обработать: 1 из 2.")
 
 
 async def test_download_failure_is_reported_without_inventing_an_original(monkeypatch):

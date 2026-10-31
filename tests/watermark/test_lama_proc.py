@@ -130,6 +130,34 @@ def test_timeout_kills_the_worker_and_the_next_call_starts_a_new_one(clients):
     assert client.spawn_count == 2
 
 
+def test_a_worker_that_never_reads_its_stdin_cannot_freeze_the_caller(tmp_path):
+    """Review M1: a blocking write into a full pipe ignored the deadline and held the lock."""
+    marker = tmp_path / "second-start"
+    code = (
+        "import os, sys, time, numpy as np\n"
+        "from src.watermark.lama_proc import serve\n"
+        f"marker = {str(marker)!r}\n"
+        "if not os.path.exists(marker):\n"
+        "    open(marker, 'w').close()\n"
+        "    time.sleep(60)  # alive, but never reads the request\n"
+        "serve(lambda op, img, msk: img)\n"
+    )
+    client = LamaWorkerClient(
+        [sys.executable, "-c", code], cwd=ROOT, env={"PYTHONPATH": str(ROOT)},
+        timeout=2.0, auto_reap=False,
+    )
+    try:
+        big = np.full((200, 200, 3), 5, np.uint8)  # image + mask = 160 KB > the 64 KiB pipe buffer
+        started = time.monotonic()
+        with pytest.raises(LamaWorkerError, match="timeout"):
+            client.call("center", big, np.ones((200, 200), np.uint8))
+        assert time.monotonic() - started < 4 and not client.alive
+        out = client.call("center", big, np.ones((200, 200), np.uint8))  # a fresh worker serves
+        assert int(out[0, 0, 0]) == 5 and client.spawn_count == 2
+    finally:
+        client.close()
+
+
 def test_worker_killed_by_the_oom_killer_does_not_take_the_caller_down(clients):
     client = clients(
         "lambda op, img, msk: os.kill(os.getpid(), 9) if op == 'oom' else img"

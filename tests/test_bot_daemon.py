@@ -53,6 +53,8 @@ def telegram(monkeypatch):
             calls["delete_webhook"] = kwargs
 
     class FakeDispatcher:
+        sub_routers = ("router",)  # something to serve: the daemon polls only then
+
         def resolve_used_update_types(self):
             return ["message"]
 

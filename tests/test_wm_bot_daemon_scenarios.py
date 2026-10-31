@@ -76,6 +76,17 @@ class FakeTelegram(BaseSession):
         yield self.files.get(file_id, b"RAW" + file_id.encode())
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """Tripwire for EVERY test of this module: nothing may open a network connection."""
+
+    def no_network(*_args, **_kwargs):
+        raise AssertionError("network transport is forbidden in offline scenarios")
+
+    monkeypatch.setattr(socket.socket, "connect", no_network)
+    monkeypatch.setattr(socket, "create_connection", no_network)
+
+
 @pytest.fixture
 def daemon(monkeypatch):
     """(dispatcher, bot, fake telegram) of the unified daemon with /clean on for chat 5."""
@@ -85,12 +96,6 @@ def daemon(monkeypatch):
     monkeypatch.setattr(settings, "tg_bot_recipients", str(ALLOWED_CHAT))
     monkeypatch.setattr(wm_settings, "watermark_allowed_chat_ids", "")
     monkeypatch.setattr(wm_settings, "watermark_site_use_clean", False)
-
-    def no_network(*_args, **_kwargs):
-        raise AssertionError("network transport is forbidden in offline scenarios")
-
-    monkeypatch.setattr(socket.socket, "connect", no_network)
-    monkeypatch.setattr(socket, "create_connection", no_network)
     # AlbumCollector captured its 1.5 s wait at definition time: shorten it for the tests.
     monkeypatch.setattr(wm_bot.AlbumCollector.__init__, "__defaults__", (0.02,))
     session = FakeTelegram()
@@ -379,3 +384,26 @@ async def test_lama_worker_failure_is_told_honestly_and_the_next_photo_still_wor
         assert "Удалено: Halo Oglasi — 1" in session.calls[-1]["caption"]
     finally:
         lama.reset_lama_inpainter()
+
+
+async def test_clean_on_but_nobody_allowed_and_no_subscriptions_means_nothing_to_serve(
+    monkeypatch, caplog
+):
+    """Review L4/F7: no router -> do not poll Telegram (a poller would eat the updates)."""
+    settings = get_settings()
+    wm_settings = get_watermark_settings()
+    monkeypatch.setattr(wm_settings, "watermark_bot_enabled", True)
+    monkeypatch.setattr(wm_settings, "watermark_allowed_chat_ids", "")
+    monkeypatch.setattr(wm_settings, "watermark_site_use_clean", False)
+    monkeypatch.setattr(settings, "tg_bot_recipients", "")
+    monkeypatch.setattr(settings, "subscription_bot_enabled", False)
+    monkeypatch.setattr(settings, "tg_bot_token", "42:TEST")
+
+    def tripwire(*_args, **_kwargs):
+        raise AssertionError("Telegram must not be contacted when there is nothing to serve")
+
+    monkeypatch.setattr(aiogram, "Bot", tripwire)
+    monkeypatch.setattr(aiogram.Dispatcher, "start_polling", tripwire)
+    with caplog.at_level("WARNING"):
+        assert await bot_daemon.run_bot_daemon() is None
+    assert "nothing to serve" in caplog.text

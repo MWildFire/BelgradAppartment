@@ -122,21 +122,22 @@ def test_failed_photo_is_never_reported_as_without_marks():
         [_outcome("removed_zida_001"), wm_summary.failed_outcome(original_kept=True)]
     )
     assert summary.photos["failed"] == 1 and summary.photos["not_found"] == 0
-    assert "Не удалось обработать: 1 из 2" in summary.text and "оригинал" in summary.text
+    # N08 wording only: no extra tail; the original is still sent (send_files), that is behaviour
+    assert summary.text.endswith("Не удалось обработать: 1 из 2.") and "оригинал" not in summary.text
     assert "без найденных знаков" not in summary.text
     assert summary.send_files is True
 
 
 def test_only_failed_photos_still_return_the_originals():
     summary = wm_summary.summarize_outcomes([wm_summary.failed_outcome(original_kept=True)])
-    assert summary.text.startswith("Не удалось обработать: 1 из 1")
+    assert summary.text == "Не удалось обработать: 1 из 1."
     assert "Знаков площадок не нашёл" not in summary.text
     assert summary.send_files is True
 
 
 def test_failed_without_original_does_not_promise_one():
     summary = wm_summary.summarize_outcomes([wm_summary.failed_outcome(original_kept=False)])
-    assert "оригинал" not in summary.text and summary.send_files is False
+    assert summary.text == "Не удалось обработать: 1 из 1." and summary.send_files is False
 
 
 def test_failed_next_to_not_found_is_not_nothing_found():

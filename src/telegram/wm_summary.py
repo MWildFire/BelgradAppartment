@@ -26,7 +26,6 @@ NOTHING_FOUND = "Знаков площадок не нашёл — фото бе
 DONE_HEAD = "🧽 Готово."
 KEPT_HEAD = "Знак найден и оставлен без изменений."
 FAILED_SENTENCE = "Не удалось обработать: {failed} из {total}"  # noqa: RUF001
-ORIGINALS_NOTE = " (оригиналы без изменений)"
 _PLATFORM_ORDER = ("Halo Oglasi", "4zida", "CityExpert")
 
 
@@ -125,8 +124,7 @@ def summarize_outcomes(outcomes: Sequence[PhotoOutcome]) -> AlbumSummary:
         body = "; ".join(clauses)
         sentences.append(body[:1].upper() + body[1:] + ".")
     if failed:
-        note = ORIGINALS_NOTE if originals_back == failed else ""
-        sentences.append(FAILED_SENTENCE.format(failed=failed, total=total) + note + ".")
+        sentences.append(FAILED_SENTENCE.format(failed=failed, total=total) + ".")
     text = " ".join(sentences) if sentences else NOTHING_FOUND
     send_files = bool(photos["removed_only"] or photos["mixed"] or originals_back)
     return AlbumSummary(total, photos, marks_removed, marks_kept, text, send_files)
