@@ -93,6 +93,12 @@ def main(argv: list[str] | None = None) -> int:
         "--torch-threads", type=int, default=0, help="torch.set_num_threads (0 = leave as is)"
     )
     parser.add_argument(
+        "--methods", default="", help="comma-separated methods (e.g. inpaint:lama): pairs only"
+    )
+    parser.add_argument(
+        "--max-pixels", type=int, default=0, help="LaMa crop area budget (0 = code default)"
+    )
+    parser.add_argument(
         "--save-cleaned", action="store_true", help="also write cleaned full frames (PNG)"
     )
     args = parser.parse_args(argv)
@@ -117,6 +123,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     rows: list[list[str]] = []
     kinds = {k.strip() for k in args.kinds.split(",") if k.strip()}
+    methods = {k.strip() for k in args.methods.split(",") if k.strip()}
+    if args.max_pixels:
+        from src.watermark.lama import get_lama_inpainter
+
+        lama = get_lama_inpainter()
+        if lama is None:
+            parser.error("--max-pixels needs LaMa (model and torch)")
+        lama.max_pixels = args.max_pixels
     for src in files:
         rel = src.relative_to(folder).as_posix()
         try:
@@ -129,10 +143,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.save_cleaned:
             (out_dir / "cleaned").mkdir(exist_ok=True)
             Image.fromarray(cleaned).save(out_dir / "cleaned" / f"{stem}.png")
-        if not report.marks and not kinds:
+        if not report.marks and not kinds and not methods:
             rows.append([rel, "", "", "", "", "", "", "", f"{report.seconds:.2f}"])
         for m in report.marks:
             if kinds and m.template_id not in kinds:
+                continue
+            if methods and m.method not in methods:
                 continue
             name = f"{stem}__{m.template_id}#{m.instance}.png"
             box = _mark_box(sizes[m.template_id], m, img.shape[:2])
