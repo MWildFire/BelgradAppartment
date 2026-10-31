@@ -11,20 +11,21 @@ from click.testing import CliRunner
 from PIL import Image
 from pydantic import ValidationError
 
-from src.config import Settings, get_settings
+from src.config import get_settings
 from src.watermark import pipeline, store
 from src.watermark.cli import wm_qa
 from src.watermark.inpaint import TeleaInpainter
 from src.watermark.remove import remove_inpaint
+from src.watermark.settings import WatermarkSettings, get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, jpeg_roundtrip, make_background, mark_mask
 
 
 @pytest.fixture
 def policy(monkeypatch):
-    settings = get_settings()
-    monkeypatch.setattr(settings, "watermark_lama_enabled", False)
-    return settings
+    wm = get_watermark_settings()
+    monkeypatch.setattr(wm, "watermark_lama_enabled", False)
+    return wm
 
 
 def _templates():
@@ -38,13 +39,13 @@ def _corner():
 
 def test_default_corner_mode_is_skip(monkeypatch):
     monkeypatch.delenv("WATERMARK_HALO_CORNER_MODE", raising=False)
-    assert Settings(_env_file=None).watermark_halo_corner_mode == "skip"
+    assert WatermarkSettings(_env_file=None).watermark_halo_corner_mode == "skip"
 
 
 def test_invalid_corner_mode_is_rejected(monkeypatch):
     monkeypatch.setenv("WATERMARK_HALO_CORNER_MODE", "typo")
     with pytest.raises(ValidationError, match="watermark_halo_corner_mode"):
-        Settings(_env_file=None)
+        WatermarkSettings(_env_file=None)
 
 
 def test_skip_preserves_pixels_but_reports_detected_corner(policy, monkeypatch):
@@ -103,7 +104,7 @@ def test_skip_only_bytes_and_file_behave_like_unmarked(policy, monkeypatch, tmp_
 def test_store_skip_only_and_mode_changes(policy, monkeypatch, tmp_path):
     inbound = tmp_path / "inbound"
     inbound.mkdir()
-    monkeypatch.setattr(policy, "inbound_photos_dir", inbound)
+    monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
     monkeypatch.setattr(policy, "watermark_clean_dir", tmp_path / "clean")
     src = inbound / "corner.jpg"
     Image.fromarray(_corner()).save(src, "JPEG", quality=92)
@@ -146,7 +147,7 @@ def test_qa_counts_skipped_detections(policy, monkeypatch, tmp_path: Path):
 def test_discard_remains_explicit_across_corner_modes(policy, monkeypatch, tmp_path):
     inbound = tmp_path / "inbound"
     inbound.mkdir()
-    monkeypatch.setattr(policy, "inbound_photos_dir", inbound)
+    monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
     monkeypatch.setattr(policy, "watermark_clean_dir", tmp_path / "clean")
     monkeypatch.setattr(policy, "watermark_halo_corner_mode", "telea")
     src = inbound / "corner.jpg"
@@ -167,8 +168,8 @@ def test_switching_to_skip_restores_existing_site_variants(policy, monkeypatch, 
 
     inbound = tmp_path / "inbound"
     inbound.mkdir()
-    monkeypatch.setattr(policy, "inbound_photos_dir", inbound)
-    monkeypatch.setattr(policy, "site_photos_root", inbound)
+    monkeypatch.setattr(get_settings(), "inbound_photos_dir", inbound)
+    monkeypatch.setattr(get_settings(), "site_photos_root", inbound)
     monkeypatch.setattr(policy, "watermark_clean_dir", tmp_path / "clean")
     monkeypatch.setattr(policy, "watermark_site_use_clean", True)
     monkeypatch.setattr(policy, "watermark_halo_corner_mode", "telea")

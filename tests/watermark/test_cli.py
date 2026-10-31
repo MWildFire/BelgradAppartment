@@ -10,13 +10,14 @@ from PIL import Image
 
 from src.cli import cli
 from src.config import get_settings
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
 
 
 @pytest.fixture
 def samples(tmp_path: Path, monkeypatch) -> Path:
-    monkeypatch.setattr(get_settings(), "watermark_lama_enabled", False)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", False)
     folder = tmp_path / "samples"
     (folder / "zida").mkdir(parents=True)
     tpl = {t.id: t for t in load_templates()}["zida_logo"]

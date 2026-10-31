@@ -10,7 +10,6 @@ import cv2
 import numpy as np
 import pytest
 
-from src.config import get_settings
 from src.watermark.lama import LamaInpainter
 from src.watermark.lama_corner import (
     LamaCornerInpainter,
@@ -19,6 +18,7 @@ from src.watermark.lama_corner import (
     _reflect_to_multiple,
     get_lama_corner_inpainter,
 )
+from src.watermark.settings import get_watermark_settings
 
 
 def test_corner_crop_keeps_native_pixels_and_reflects_image_and_mask():
@@ -153,7 +153,7 @@ def test_model_receives_rgb_float_unit_range_binary_mask_and_multiple_of_eight()
     assert np.all(out == [255, 0, 0])
 
 
-MODEL = Path(get_settings().watermark_lama_model_path)
+MODEL = Path(get_watermark_settings().watermark_lama_model_path)
 HAS_LAMA = importlib.util.find_spec("torch") is not None and MODEL.is_file()
 
 

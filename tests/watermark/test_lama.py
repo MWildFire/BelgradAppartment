@@ -12,13 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.config import get_settings
 from src.watermark.inpaint import get_inpainter
 from src.watermark.pipeline import clean_array
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, jpeg_roundtrip, make_background
 
-MODEL = Path(get_settings().watermark_lama_model_path)
+MODEL = Path(get_watermark_settings().watermark_lama_model_path)
 HAS_LAMA = importlib.util.find_spec("torch") is not None and MODEL.is_file()
 
 
@@ -69,15 +69,15 @@ def test_download_model_removes_partial_file_on_dropped_connection(tmp_path):
     assert not list(tmp_path.glob(".big-lama.pt.*"))  # no partial file left behind
 
 
-def test_falls_back_to_telea_without_model(monkeypatch, tmp_path):
-    monkeypatch.setattr(get_settings(), "watermark_lama_enabled", True)
-    monkeypatch.setattr(get_settings(), "watermark_lama_model_path", tmp_path / "missing.pt")
-    assert get_inpainter("lama").name == "telea"
+def test_no_inpainter_without_model_and_never_telea(monkeypatch, tmp_path):
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_model_path", tmp_path / "missing.pt")
+    assert get_inpainter("lama") is None
 
 
-def test_disabled_flag_means_telea(monkeypatch):
-    monkeypatch.setattr(get_settings(), "watermark_lama_enabled", False)
-    assert get_inpainter("lama").name == "telea"
+def test_disabled_flag_means_no_lama_inpainter(monkeypatch):
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", False)
+    assert get_inpainter("lama") is None
 
 
 @pytest.mark.skipif(not HAS_LAMA, reason="torch or the LaMa model file is unavailable")
@@ -95,7 +95,7 @@ def test_lama_changes_only_masked_pixels():
 
 @pytest.mark.skipif(not HAS_LAMA, reason="torch or the LaMa model file is unavailable")
 def test_pipeline_uses_lama_for_halo_center(monkeypatch):
-    monkeypatch.setattr(get_settings(), "watermark_lama_enabled", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", True)
     tpl = {t.id: t for t in load_templates()}["halo_center"]
     img = jpeg_roundtrip(apply_mark(make_background(1000, 750, seed=2), tpl))
     _out, report = clean_array(img)
@@ -104,7 +104,7 @@ def test_pipeline_uses_lama_for_halo_center(monkeypatch):
 
 @pytest.mark.skipif(not HAS_LAMA, reason="torch or the LaMa model file is unavailable")
 def test_pipeline_uses_lama_for_4zida(monkeypatch):
-    monkeypatch.setattr(get_settings(), "watermark_lama_enabled", True)
+    monkeypatch.setattr(get_watermark_settings(), "watermark_lama_enabled", True)
     tpl = {t.id: t for t in load_templates()}["zida_logo"]
     img = jpeg_roundtrip(apply_mark(make_background(1440, 1080, seed=6), tpl))
     _out, report = clean_array(img)

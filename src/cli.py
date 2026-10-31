@@ -520,23 +520,20 @@ def monitor(no_backfill: bool) -> None:
 
 @cli.command("subscription-bot")
 def subscription_bot() -> None:
-    """C2 legacy name: starts no poller any more, use `otz bot` instead.
+    """Unified RentFinderBot long-polling daemon: /start subscriptions + /clean (platform marks).
 
-    A bot token allows only one poller, so /start subscription linking lives in
-    `otz bot` together with /clean.
+    A bot token allows only one poller, so both features share this command (unit
+    otz-subscription-bot). SUBSCRIPTION_BOT_ENABLED turns on /start sub_<token> linking,
+    WATERMARK_BOT_ENABLED turns on /clean; with both off the command logs a warning and exits.
     """
-    from src.telegram.subscription_bot import run_subscription_bot
+    from src.telegram.bot_daemon import run_bot_daemon
 
-    run_cooperatively(run_subscription_bot())
+    run_cooperatively(run_bot_daemon())
 
 
 @cli.command("bot")
 def bot() -> None:
-    """Unified RentFinderBot long-polling daemon: /clean (platform marks) + /start subscriptions.
-
-    WATERMARK_BOT_ENABLED and SUBSCRIPTION_BOT_ENABLED decide what runs; with both off the
-    command exits immediately. Unit: deploy/otz-bot.service.
-    """
+    """Synonym of `otz subscription-bot` (the one unified RentFinderBot daemon)."""
     from src.telegram.bot_daemon import run_bot_daemon
 
     run_cooperatively(run_bot_daemon())

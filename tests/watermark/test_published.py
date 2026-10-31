@@ -22,6 +22,7 @@ from src.db.models import (
     SourceChannel,
 )
 from src.watermark import published, store
+from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import load_templates
 from tests.watermark.synth import apply_mark, make_background
 
@@ -31,11 +32,12 @@ def inbound(tmp_path: Path, monkeypatch) -> Path:
     root = tmp_path / "inbound"
     root.mkdir()
     s = get_settings()
+    wm = get_watermark_settings()
     monkeypatch.setattr(s, "inbound_photos_dir", root)
     monkeypatch.setattr(s, "site_photos_root", root)
-    monkeypatch.setattr(s, "watermark_clean_dir", tmp_path / "clean")
-    monkeypatch.setattr(s, "watermark_lama_enabled", False)
-    monkeypatch.setattr(s, "watermark_site_use_clean", False)
+    monkeypatch.setattr(wm, "watermark_clean_dir", tmp_path / "clean")
+    monkeypatch.setattr(wm, "watermark_lama_enabled", False)
+    monkeypatch.setattr(wm, "watermark_site_use_clean", False)
     return root
 
 

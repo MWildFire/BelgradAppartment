@@ -22,7 +22,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from src.config import get_settings
+from src.watermark.settings import get_watermark_settings
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +108,10 @@ def torch_available() -> bool:
 def get_lama_inpainter() -> LamaInpainter | None:
     """LaMa singleton, or None (disabled by flag / no torch / no model file)."""
     global _instance
-    settings = get_settings()
-    if not getattr(settings, "watermark_lama_enabled", True):
+    settings = get_watermark_settings()
+    if not settings.watermark_lama_enabled:
         return None
-    model_path = Path(getattr(settings, "watermark_lama_model_path", ""))
+    model_path = Path(settings.watermark_lama_model_path)
     if not model_path.is_file() or not torch_available():
         return None
     with _instance_lock:
