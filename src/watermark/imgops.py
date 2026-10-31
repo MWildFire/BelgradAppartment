@@ -121,8 +121,8 @@ def resize(img: np.ndarray, size: tuple[int, int], interpolation: str = "linear"
 
     ``interpolation``: nearest | linear (half-pixel centres) | area (exact pixel-area average,
     for shrinking) | cubic (Keys a=-0.75). Borders replicate. uint8 input is rounded back to
-    uint8 (OpenCV works in fixed point there: the difference is at most one level); float32
-    stays float32.
+    uint8 (OpenCV works in fixed point there: the difference is at most two levels, one level
+    in most pixels); float32 stays float32.
     """
     width, height = size
     arr = np.asarray(img)
