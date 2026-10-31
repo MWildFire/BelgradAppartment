@@ -27,7 +27,14 @@ from sqlalchemy import select
 from src.config import get_settings
 from src.db import get_session
 from src.db.models import InboundPost, Match, MatchDelivery
-from src.watermark.store import StoredResult, ensure_clean
+from src.telegram.wm_summary import (
+    NOTHING_FOUND,  # noqa: F401  (re-exported: tests and callers use wm_bot.NOTHING_FOUND)
+    PhotoOutcome,
+    failed_outcome,
+    outcome_from_report,
+    summarize_outcomes,
+)
+from src.watermark.store import StoredResult, ensure_clean, resolve_stored
 
 if TYPE_CHECKING:
     from src.watermark.pipeline import CleanReport
@@ -48,7 +55,6 @@ HELP_TEXT = (
     "• /clean 123 — то же для кандидата №123.\n\n"
     "Знаки агентств (BEOSTAN и т. п.) пока не убираю."
 )
-NOTHING_FOUND = "Знаков площадок не нашёл — фото без изменений."
 NOT_FOUND_MATCH = "Не нашёл кандидата для этого сообщения. Ответьте /clean на альбом кандидата."  # noqa: RUF001
 ALREADY_CLEAN = "Фото этого кандидата уже были отправлены без знаков."
 WORKING_PHOTOS = "🧽 Обрабатываю {n} фото…"
@@ -58,8 +64,6 @@ MATCH_NO_PHOTOS = "У кандидата №{match_id} нет фото на ди
 NOT_A_PHOTO = "Файл {name} не похож на фото — пропускаю."
 FAILED_ONE = "Не получилось обработать {name} — попробуйте ещё раз позже."  # noqa: RUF001
 FAILED_MATCH = "Не получилось обработать фото — попробуйте ещё раз позже."  # noqa: RUF001
-DONE_PREFIX = "🧽 Готово. Убрал знаки: "
-UNMARKED_SUFFIX = " Без знаков: {clean} из {total}."
 
 
 def parse_chat_ids(*raw_values: str) -> frozenset[int]:
@@ -81,25 +85,12 @@ def allowed_chat_ids() -> frozenset[int]:
     return parse_chat_ids(settings.tg_bot_recipients, settings.watermark_allowed_chat_ids)
 
 
-def summarize(reports: Iterable[CleanReport]) -> str:
-    """Caption for the cleaned album, e.g. 'Halo Oglasi - 1, 4zida - 2' in Russian wording."""
-    from src.watermark.pipeline import PLATFORM_TITLES
+def summarize(reports: Iterable[CleanReport | None]) -> str:
+    """Caption for the album: removed / kept / not found / failed, told apart (wm_summary).
 
-    reports = list(reports)
-    counts: dict[str, int] = {}
-    for report in reports:
-        for platform, n in report.platform_counts().items():
-            counts[platform] = counts.get(platform, 0) + n
-    clean = sum(1 for r in reports if not r.changed)
-    if not counts:
-        return NOTHING_FOUND
-    order = [PLATFORM_TITLES[k] for k in ("halooglasi", "4zida", "cityexpert")]
-    parts = [f"{name} — {counts[name]}" for name in order if name in counts]
-    parts += [f"{name} — {n}" for name, n in counts.items() if name not in order]
-    text = DONE_PREFIX + ", ".join(parts) + "."
-    if clean:
-        text += UNMARKED_SUFFIX.format(clean=clean, total=len(reports))
-    return text
+    A None report is a photo that could not be processed.
+    """
+    return summarize_outcomes([outcome_from_report(r) for r in reports]).text
 
 
 def is_image_document(document: Any) -> bool:
@@ -166,26 +157,36 @@ async def process_photo_messages(messages: list[Any]) -> None:
         return
     await first.answer(WORKING_PHOTOS.format(n=len(items)))
     outputs: list[tuple[bytes, str]] = []
-    reports: list[CleanReport] = []
+    outcomes: list[PhotoOutcome] = []
     for file_obj, name in items:
         try:
             data = await _download(bot, file_obj)
+        except Exception:
+            logger.exception("[wm-bot] download failed chat=%s", first.chat.id)
+            await first.answer(FAILED_ONE.format(name=name))
+            outcomes.append(failed_outcome(original_kept=False))
+            continue
+        try:
             cleaned, report = await run_exclusive(clean_bytes, data)
         except NotAnImageError:
             await first.answer(NOT_A_PHOTO.format(name=name))
+            outcomes.append(failed_outcome(original_kept=False))
             continue
         except Exception:
+            # Any cleaning error: the user gets the untouched original and an honest caption.
             logger.exception("[wm-bot] cleaning failed chat=%s", first.chat.id)
-            await first.answer(FAILED_ONE.format(name=name))
+            outputs.append((data, name))
+            outcomes.append(failed_outcome(original_kept=True))
             continue
         outputs.append((cleaned, name))
-        reports.append(report)
+        outcomes.append(outcome_from_report(report))
     if not outputs:
         return
-    if not any(r.changed for r in reports):
-        await first.answer(NOTHING_FOUND)
+    summary = summarize_outcomes(outcomes)
+    if not summary.send_files:  # nothing removed: the photos would come back unchanged
+        await first.answer(summary.text)
         return
-    await _send_files(first, outputs, summarize(reports), as_documents)
+    await _send_files(first, outputs, summary.text, as_documents)
 
 
 async def find_match_for_message(chat_id: int, message_id: int) -> int | None:
@@ -228,9 +229,18 @@ async def match_photo_paths(match_id: int, chat_id: int) -> list[str] | None:
 
 
 def clean_stored_paths(paths: list[str]) -> list[StoredResult]:
+    """One result per photo on disk; a photo that fails to clean comes back as its original
+    with report {"failed": True}, so one bad photo does not lose the rest of the album."""
     results: list[StoredResult] = []
     for stored in paths:
-        result = ensure_clean(stored)
+        try:
+            result = ensure_clean(stored)
+        except Exception:
+            logger.exception("[wm-bot] cleaning %s failed", stored)
+            original = resolve_stored(stored)
+            if original is None:
+                continue
+            result = StoredResult(original, None, {"failed": True}, reused=False)
         if result is not None:
             results.append(result)
     return results
@@ -248,15 +258,33 @@ async def _refresh_site_variants(paths: list[str]) -> None:
 
 
 def _report_from_dict(result: StoredResult) -> CleanReport:
-    """StoredResult keeps the report as a dict (from the sidecar); rebuild it for summarize()."""
+    """Rebuild a CleanReport from the stored (sidecar) dict.
+
+    Marks are kept even when no clean copy exists - an all-kept photo has none, and its
+    found-but-kept marks must not vanish. Old sidecars without `kept_reason` load as None;
+    keys this version does not know are ignored.
+    """
+    import dataclasses
+
     from src.watermark.pipeline import CleanReport, MarkResult
 
+    known = {f.name for f in dataclasses.fields(MarkResult)}
     report = result.report if isinstance(result.report, dict) else {}
     raw_marks = report.get("marks")
-    marks = [MarkResult(**m) for m in raw_marks or [] if isinstance(m, dict)]  # type: ignore[union-attr]
+    marks = [
+        MarkResult(**{k: v for k, v in m.items() if k in known})
+        for m in raw_marks or []  # type: ignore[union-attr]
+        if isinstance(m, dict)
+    ]
     width = int(report.get("width", 0) or 0)  # type: ignore[call-overload]
     height = int(report.get("height", 0) or 0)  # type: ignore[call-overload]
-    return CleanReport(width=width, height=height, marks=marks if result.clean else [])
+    return CleanReport(width=width, height=height, marks=marks)
+
+
+def _outcome_of_stored(result: StoredResult) -> PhotoOutcome:
+    if result.report.get("failed"):
+        return failed_outcome(original_kept=True)
+    return outcome_from_report(_report_from_dict(result))
 
 
 def _read_files(results: list[StoredResult], match_id: int) -> list[tuple[bytes, str]]:
@@ -286,12 +314,16 @@ async def clean_match_and_reply(message: Any, match_id: int) -> None:
     if all(r.report.get("outside_inbound") for r in results):
         await message.answer(ALREADY_CLEAN)
         return
-    reports = [_report_from_dict(r) for r in results]
-    if not any(r.changed for r in reports):
-        await message.answer(NOTHING_FOUND)
+    outcomes = [_outcome_of_stored(r) for r in results]
+    if all(o.status == "failed" for o in outcomes):
+        await message.answer(FAILED_MATCH)
+        return
+    summary = summarize_outcomes(outcomes)
+    if not summary.send_files:  # nothing removed: say what was found, do not resend photos
+        await message.answer(summary.text)
         return
     files = await asyncio.to_thread(_read_files, results, match_id)
-    await _send_files(message, files, summarize(reports), as_documents=False)
+    await _send_files(message, files, summary.text, as_documents=False)
     await _refresh_site_variants([str(r.original) for r in results])
 
 
