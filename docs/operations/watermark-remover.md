@@ -103,10 +103,15 @@ blend с покомпонентной подгонкой ([refine.py](../../src/
 подписок живут в одном Dispatcher. Число запущенных poller-процессов проверяется на проде
 (см. «Включение на проде»).
 
-Текущий текст бота ещё неточен: only-kept может называться отсутствием знаков, а смешанный
-случай 3 найдено /2 обработано /1 сохранён —3 удалёнными. Правдивые счётчики и варианты текста
-проверены как приватный прототип; выбранный текст в продукт не внесён. Обработанный знак
-не означает принятый визуальный результат. Сообщение CLI о kept уже исправлено ранее.
+Тексты ответов (WM05, `src/telegram/wm_summary.py`): каждое фото попадает ровно в одну группу —
+удалено, оставлено, смешанное, без найденных знаков, ошибка. Только оставлено —
+«Знак найден и оставлен без изменений. Удалено: 0; оставлено: Halo Oglasi — 1.» (текстом, без
+фото); смешанный итог — «🧽 Готово. Удалено: 4zida — 2; оставлено: Halo Oglasi — 1; без найденных
+знаков: 1 из 3 фото.» Причина `kept_reason` пользователю не показывается — все четыре значения
+(`corner_mode`, `disabled`, `self_check`, `lama_unavailable`) читаются как «оставлен». Ошибка очистки
+одного фото возвращает его оригинал на своём месте и подпись «Не удалось обработать: k из N.»
+Обработанный знак не означает принятый визуальный результат: его качество оценивается отдельно
+([QA WM05](../reviews/2026-10-16-watermark-qa-r04.md) и отчёты `docs/handoff/WM05-*`).
 
 Фильтр 30 мин относится к медиа. Старые текстовые `/clean`, `/clean <id>`, ответ на старый
 связанный альбом и `/start` могут исполняться после рестарта; возраст/повтор команд ещё не выбран
@@ -167,22 +172,29 @@ OpenCV не нужен). Сам выпуск **ничего не включае�
    `344c77bbcb158f17dd143070d1e789f38a66c04202311ae3a258ef66667a9ea9`
    (`sha256sum`); нет файла — `otz wm-fetch-model` (скачает и проверит sha256) либо копия с
    проверкой той же суммы. torch — из `clip` extra в `.venv`.
-3. **Флаги в `/opt/otz/.env`** (сайт и доставка остаются выключенными):
+3. **Флаги в `/opt/otz/.env`** (сайт и доставка остаются выключенными; остальные настройки —
+   умолчания кода: `WATERMARK_LAMA_ENABLED=true`, модель `data/models/big-lama.pt` под
+   `PROJECT_ROOT=/opt/otz`, `WATERMARK_LAMA_MAX_PIXELS=75000`, `WATERMARK_TORCH_THREADS=2`,
+   изоляция `process`, выгрузка воркера через 600 с, `WATERMARK_DISABLED_KINDS` пусто):
 
    ```
    WATERMARK_BOT_ENABLED=1
-   WATERMARK_LAMA_ENABLED=1
-   WATERMARK_LAMA_MODEL_PATH=/opt/otz/data/models/big-lama.pt
-   WATERMARK_HALO_CORNER_MODE=skip        # lama — только если принято ревью качества (RC.md)
-   # WATERMARK_ALLOWED_CHAT_IDS=          # кроме TG_BOT_RECIPIENTS, только личные чаты
-   WATERMARK_CLEAN_ON_DELIVERY=0
-   WATERMARK_SITE_USE_CLEAN=0
+   WATERMARK_HALO_CORNER_MODE=lama        # или skip — по запасу памяти, см. ниже
    ```
 
-   Доступ к `/clean` — `TG_BOT_RECIPIENTS` + `WATERMARK_ALLOWED_CHAT_IDS`; без них роутер
-   `/clean` не подключается (предупреждение в журнале).
+   Режим углов зависит от свободной памяти сервера до включения (`free -m`, колонка `available`):
+   ≥ 1600 МиБ — `lama`; 1100–1600 — `skip`; < 1100 — `/clean` не включать, вопрос владельцу.
+   После первого альбома пик юнита > 1,2 ГиБ (`systemctl status`, строка `Memory:` / `memory.peak`)
+   или рост swap — `WATERMARK_HALO_CORNER_MODE=skip` и `systemctl restart otz-subscription-bot`.
+   `WATERMARK_ALLOWED_CHAT_IDS` не задаётся — доступ по `TG_BOT_RECIPIENTS`
+   (кроме него можно ограничить личными чатами). `WATERMARK_CLEAN_ON_DELIVERY` и
+   `WATERMARK_SITE_USE_CLEAN` не трогать.
+
+   Доступ к `/clean` — чаты из `TG_BOT_RECIPIENTS` и (если задан) `WATERMARK_ALLOWED_CHAT_IDS`;
+   без единого чата роутер `/clean` не подключается (предупреждение в журнале; при выключенных
+   подписках демон тогда пишет `nothing to serve` и выходит).
 4. **Лимиты systemd** (файл вне репозитория, `deploy/` не меняется):
-   `/etc/systemd/system/otz-subscription-bot.service.d/limits.conf`
+   `/etc/systemd/system/otz-subscription-bot.service.d/wm05-limits.conf`
 
    ```
    [Service]
