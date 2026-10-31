@@ -333,7 +333,9 @@ def _halo_center_jpeg(seed: int = 2) -> bytes:
 
     tpl = {t.id: t for t in load_templates()}["halo_center"]
     buf = io.BytesIO()
-    Image.fromarray(apply_mark(make_background(1000, 750, seed=seed), tpl)).save(
+    # Portrait frame: its LaMa mask (4 %) is under the 5.5 % self-check cap, so the mark reaches
+    # LaMa; a 4:3 landscape frame (7 %) is kept as self_check before the worker is asked.
+    Image.fromarray(apply_mark(make_background(800, 1000, seed=seed), tpl)).save(
         buf, "JPEG", quality=92
     )
     return buf.getvalue()
@@ -404,6 +406,8 @@ async def test_clean_on_but_nobody_allowed_and_no_subscriptions_means_nothing_to
 
     monkeypatch.setattr(aiogram, "Bot", tripwire)
     monkeypatch.setattr(aiogram.Dispatcher, "start_polling", tripwire)
+    # Alembic migration tests disable existing loggers through fileConfig; restore this one.
+    monkeypatch.setattr(bot_daemon.logger, "disabled", False)
     with caplog.at_level("WARNING"):
         assert await bot_daemon.run_bot_daemon() is None
     assert "nothing to serve" in caplog.text
