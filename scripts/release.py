@@ -219,6 +219,56 @@ def validate_backup(receipt, now=None, *, allow_data_only=False, allow_sanitized
     require(receipt.get("database", {}).get("revisions"), "backup schema revision missing")
 
 
+OWNER_WAIVER_KIND = "owner_waiver_no_backup"
+OWNER_WAIVER_FIELDS = frozenset({"kind", "owner", "quote", "given_at", "revision"})
+OWNER_WAIVER_MAX_AGE = 24 * 3600
+OWNER_WAIVER_MAX_SKEW = 300
+
+
+def validate_owner_waiver(waiver, revision, now=None):
+    """Check the owner's explicit, recorded decision to release without a fresh backup.
+
+    The waiver is a statement by the owner, never a substitute for a backup receipt: it is
+    bound to one revision and a 24 hour window, and it must carry the owner's own words.
+    """
+    require(isinstance(waiver, dict), "owner waiver must be a JSON object")
+    require(set(waiver) == OWNER_WAIVER_FIELDS,
+            "owner waiver fields must be exactly: " + ", ".join(sorted(OWNER_WAIVER_FIELDS)))
+    require(waiver["kind"] == OWNER_WAIVER_KIND, f"owner waiver kind must be {OWNER_WAIVER_KIND}")
+    for name in ("owner", "quote"):
+        value = waiver[name]
+        require(isinstance(value, str) and value.strip(),
+                f"owner waiver {name} must be a non-empty string")
+    target = waiver["revision"]
+    require(isinstance(target, str) and re.fullmatch(r"[0-9a-f]{40}", target),
+            "owner waiver revision must be a full lowercase 40-hex revision")
+    require(target == revision, "owner waiver is for a different release revision")
+    stamp = waiver["given_at"]
+    require(isinstance(stamp, str), "owner waiver given_at must be an ISO timestamp")
+    try:
+        given = datetime.fromisoformat(stamp[:-1] + "+00:00" if stamp.endswith("Z") else stamp)
+    except ValueError:
+        raise ReleaseError("owner waiver given_at is not an ISO timestamp") from None
+    require(given.tzinfo is not None, "owner waiver given_at missing timezone")
+    age = ((now or datetime.now(UTC)) - given).total_seconds()
+    require(age >= -OWNER_WAIVER_MAX_SKEW, "owner waiver given_at is in the future")
+    require(age <= OWNER_WAIVER_MAX_AGE, "owner waiver is older than 24 hours")
+
+
+def check_backup_choice(backup, owner_waiver, *, code_only, sanitized_ack, fallback):
+    """Exactly one of a backup receipt or an owner waiver; the waiver only for plain code-only.
+
+    Arguments may be paths or loaded documents: only their presence is examined here.
+    """
+    require((backup is None) != (owner_waiver is None),
+            "exactly one of --backup-receipt and --owner-waiver is required")
+    if owner_waiver is not None:
+        require(code_only, "owner waiver requires explicit code-only mode")
+        require(not sanitized_ack,
+                "owner waiver cannot be combined with the sanitized URL-loss acknowledgement")
+        require(not fallback, "owner waiver cannot be combined with a fallback packet")
+
+
 def validate_sanitized_backup(receipt):
     """Accept only the reviewed v1 loss contract, never relabel it as protected recovery.
 
@@ -269,19 +319,25 @@ def validate_sanitized_backup(receipt):
             "sanitized independent transfer/cleanup proof incomplete")
 
 
-def validate_data_only_release(root, manifest, backup):
+def validate_data_only_release(root, manifest, backup=None, *, owner_waiver=False):
     """Narrow opt-in: same schema/dependencies/config/units, with the current runtime as rollback.
 
     This does not assert protected disaster recovery and never permits a schema transition.
-    Default deployments retain the existing protected-backup gate.
+    Default deployments retain the existing protected-backup gate. With `owner_waiver` there
+    is no receipt, so only the receipt's own checks (format, source revision) are skipped;
+    the comparison of release files with the live release stays.
     """
-    require(backup.get("backup_format") in {
-                "data_only_directory_generation", "sanitized_directory_generation",
-            },
-            "code-only mode requires a data-only receipt")
+    require((backup is None) == owner_waiver,
+            "code-only mode needs exactly one of a backup receipt or an owner waiver")
+    if not owner_waiver:
+        require(backup.get("backup_format") in {
+                    "data_only_directory_generation", "sanitized_directory_generation",
+                },
+                "code-only mode requires a data-only receipt")
     previous = read_json(root / "release.json")
-    require(previous["revision"] == backup.get("source_revision"),
-            "data-only snapshot belongs to a different source release")
+    if not owner_waiver:
+        require(previous["revision"] == backup.get("source_revision"),
+                "data-only snapshot belongs to a different source release")
     before, after = previous["files"], manifest["files"]
     fixed = {"pyproject.toml", "uv.lock", "alembic.ini", "src/config.py", "src/db/models.py",
              "scripts/runtime_contract.json", "data/districts.yaml"}
@@ -1095,15 +1151,23 @@ def activate(args):
     require(root == Path("/opt/otz"), "canonical units target /opt/otz; different root unsupported")
     require(os.geteuid() == 0, "activation requires root for coherent systemd update")
     require(args.uv_bin.is_absolute() and args.uv_bin.is_file(), "explicit uv binary unavailable")
-    backup = read_json(args.backup_receipt)
+    receipt_path = getattr(args, "backup_receipt", None)
+    waiver_path = getattr(args, "owner_waiver", None)
     code_only = bool(getattr(args, "code_only_data_backup", False))
     sanitized_ack = bool(getattr(args, "acknowledge_sanitized_url_loss", False))
+    check_backup_choice(receipt_path, waiver_path, code_only=code_only,
+                        sanitized_ack=sanitized_ack,
+                        fallback=getattr(args, "fallback_packet", None) is not None)
+    owner_waiver = waiver_path is not None
+    backup = None if owner_waiver else read_json(receipt_path)
+    waiver = read_json(waiver_path) if owner_waiver else None
     require(not sanitized_ack or code_only,
             "sanitized URL-loss acknowledgement requires explicit code-only mode")
-    if code_only:
-        validate_backup(backup, allow_data_only=True, allow_sanitized=sanitized_ack)
-    else:
-        validate_backup(backup)
+    if not owner_waiver:  # a waiver is checked against the packet revision further below
+        if code_only:
+            validate_backup(backup, allow_data_only=True, allow_sanitized=sanitized_ack)
+        else:
+            validate_backup(backup)
     with (root / "data/state/release.lock").open("a+") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1113,14 +1177,18 @@ def activate(args):
             unpacked = Path(temporary)
             manifest = unpack_packet(args.packet, unpacked)
             validate_tests(manifest["tests"], manifest["revision"], CHECKS)
+            if owner_waiver:
+                validate_owner_waiver(waiver, manifest["revision"])
             if code_only:
                 require(getattr(args, "fallback_packet", None) is None,
                         "code-only mode rolls back to the current verified runtime")
-                validate_data_only_release(root, manifest, backup)
-            require(
-                current_revisions(root / "data/otz.db") == sorted(backup["database"]["revisions"]),
-                "live schema no longer matches the verified backup",
-            )
+                validate_data_only_release(root, manifest, backup, owner_waiver=owner_waiver)
+            if not owner_waiver:
+                require(
+                    current_revisions(root / "data/otz.db")
+                    == sorted(backup["database"]["revisions"]),
+                    "live schema no longer matches the verified backup",
+                )
             release = root / ".releases" / manifest["revision"]
             require(
                 not release.exists(), "release already staged; inspect existing activation first"
@@ -1131,7 +1199,10 @@ def activate(args):
             run(["chown", "root:otz", str(release.parent), str(release)])
             shutil.copytree(unpacked / "code", release / "code")
             write_json(release / "release.json", manifest)
-            write_json(release / "backup-receipt.json", backup)
+            if owner_waiver:
+                write_json(release / "backup-waiver.json", waiver)
+            else:
+                write_json(release / "backup-receipt.json", backup)
         new_python = stage_runtime_environment(release, args.uv_bin)
         state = service_state()
         state.update(revision=manifest["revision"], result="activating", swapped=[], units=[])
@@ -1151,9 +1222,13 @@ def activate(args):
         if code_only:
             require(sorted(target_heads) == sorted(live_revisions),
                     "data-only mode forbids database migrations")
-            state.update(backup_scope=backup["backup_scope"], code_only=True,
-                         protected_recovery_verified=False,
-                         sanitized_url_loss_acknowledged=sanitized_ack)
+            state.update(
+                backup_scope=OWNER_WAIVER_KIND if owner_waiver else backup["backup_scope"],
+                code_only=True, protected_recovery_verified=False,
+                sanitized_url_loss_acknowledged=sanitized_ack,
+            )
+            if owner_waiver:
+                state["owner_waiver"] = True
         if target_contract.is_file():
             require(
                 sorted(read_json(target_contract).get("migration_heads", []))
@@ -1258,7 +1333,11 @@ def main():
     activation.add_argument("--fallback-packet", type=Path,
                             help="Separately tested queue-aware fallback for the first migration")
     activation.add_argument("--remote-root", type=Path, required=True)
-    activation.add_argument("--backup-receipt", type=Path, required=True)
+    activation.add_argument("--backup-receipt", type=Path,
+                            help="Verified backup receipt (exactly one of this and --owner-waiver)")
+    activation.add_argument("--owner-waiver", type=Path,
+                            help="Owner's recorded decision to release without a backup; "
+                                 "only with --code-only-data-backup")
     activation.add_argument("--code-only-data-backup", action="store_true",
                             help="DB+media proof; no schema/config/units/dependency changes")
     activation.add_argument("--acknowledge-sanitized-url-loss", action="store_true",
