@@ -177,6 +177,7 @@ def test_lama_inpainter_loads_the_model_through_torch_jit(monkeypatch, tmp_path)
     settings = get_watermark_settings()
     monkeypatch.setattr(settings, "watermark_lama_enabled", True)
     monkeypatch.setattr(settings, "watermark_lama_model_path", model)
+    monkeypatch.setattr(settings, "watermark_lama_isolation", "inline")  # model in this process
     monkeypatch.setattr(torch.jit, "load", fake_load)
     monkeypatch.setattr(lama, "_instance", None)
     inpainter = lama.get_lama_inpainter()

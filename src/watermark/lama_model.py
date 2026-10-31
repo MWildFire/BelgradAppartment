@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 Loader = Callable[[Path], Any]
 
 
+class LamaError(RuntimeError):
+    """LaMa could not run (model failed to load, inference failed, worker died or timed out).
+
+    The pipeline keeps the mark when it sees this: pixels stay as they are, the photo is still
+    delivered (`kept_reason="lama_unavailable"`).
+    """
+
+
 def release_memory() -> None:
     """Return freed memory to the OS as far as the allocator allows (Linux/glibc)."""
     gc.collect()

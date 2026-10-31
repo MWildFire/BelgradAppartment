@@ -33,6 +33,8 @@ from typing import IO
 
 import numpy as np
 
+from src.watermark.lama_model import LamaError
+
 logger = logging.getLogger(__name__)
 
 Handler = Callable[[str, np.ndarray, np.ndarray], np.ndarray]
@@ -41,8 +43,8 @@ DEFAULT_IDLE_SECONDS = 600.0
 _CHUNK = 1 << 20
 
 
-class LamaWorkerError(RuntimeError):
-    """The worker failed (died, timed out, or reported an error); the caller's photo fails."""
+class LamaWorkerError(LamaError):
+    """The worker failed (died, timed out, or reported an error); the mark is kept."""
 
 
 # ---- framing (shared by the parent, the worker and the tests) -----------------------------------
@@ -163,7 +165,7 @@ class LamaWorkerClient:
         )
         self.spawn_count += 1
         logger.info("[lama-worker] started pid=%s", self._proc.pid)
-        if self._auto_reap and self._reaper is None:
+        if self._auto_reap and self.idle_seconds > 0 and self._reaper is None:
             self._reaper = threading.Thread(target=self._reap_loop, name="lama-reaper", daemon=True)
             self._reaper.start()
         return self._proc
@@ -267,8 +269,11 @@ class LamaWorkerClient:
         return np.frombuffer(result, np.uint8).reshape(shape).copy()
 
     def reap_if_idle(self) -> bool:
-        """Stop the worker if it has been idle for `idle_seconds`. Never during a request."""
-        if not self._lock.acquire(blocking=False):
+        """Stop the worker if it has been idle for `idle_seconds`. Never during a request.
+
+        `idle_seconds` <= 0 means "never stop it for being idle".
+        """
+        if self.idle_seconds <= 0 or not self._lock.acquire(blocking=False):
             return False
         try:
             if not self.alive or self._clock() - self._last_used < self.idle_seconds:
@@ -284,13 +289,81 @@ class LamaWorkerClient:
         while not self._closed.wait(tick):
             self.reap_if_idle()
 
+    @property
+    def is_closed(self) -> bool:
+        return self._closed.is_set()
+
+    def close_worker(self) -> None:
+        """Stop the worker process now; a later call starts a new one."""
+        with self._lock:
+            self._stop()
+
     def close(self) -> None:
+        """Stop the worker and refuse further calls."""
         self._closed.set()
         with self._lock:
             self._stop()
 
 
 # ---- the worker entry point ---------------------------------------------------------------------
+
+
+class WorkerRunner:
+    """The same `predict` as `ModelRunner`, executed by the worker process."""
+
+    def __init__(self, client: LamaWorkerClient) -> None:
+        self.client = client
+
+    def predict(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        return self.client.call("predict", image, mask)
+
+    @property
+    def loaded(self) -> bool:
+        return self.client.alive
+
+    def unload(self) -> None:
+        self.client.close_worker()
+
+    close = unload
+
+
+_workers: dict[tuple[str, int, float, float], LamaWorkerClient] = {}
+_workers_lock = threading.Lock()
+
+
+def shared_worker(
+    model_path: Path | str, *, threads: int, timeout: float, idle_seconds: float
+) -> LamaWorkerClient:
+    """One worker per configuration for the whole bot process (one inference at a time)."""
+    from src.config import PROJECT_ROOT
+
+    key = (str(model_path), threads, timeout, idle_seconds)
+    with _workers_lock:
+        client = _workers.get(key)
+        if client is None or client.is_closed:
+            client = LamaWorkerClient(
+                build_worker_command(model_path, threads),
+                cwd=PROJECT_ROOT,
+                env={"PYTHONPATH": str(PROJECT_ROOT), "OMP_NUM_THREADS": str(threads)},
+                timeout=timeout,
+                idle_seconds=idle_seconds,
+            )
+            _workers[key] = client
+        return client
+
+
+def shared_worker_count() -> int:
+    """How many worker clients exist in this process (0 if LaMa was never needed)."""
+    with _workers_lock:
+        return len(_workers)
+
+
+def close_all_workers() -> None:
+    with _workers_lock:
+        clients = list(_workers.values())
+        _workers.clear()
+    for client in clients:
+        client.close()
 
 
 def build_worker_command(model_path: Path | str, threads: int) -> list[str]:

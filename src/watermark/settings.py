@@ -47,6 +47,26 @@ class WatermarkSettings(BaseSettings):
     watermark_site_use_clean: bool = False
     watermark_jpeg_quality: int = Field(default=95, ge=70, le=100)
 
+    # --- LaMa limits (WM05 B2). The model's working memory grows with the crop area, about
+    # 2.6 KB per pixel on top of ~0.5 GiB for torch + big-lama (measured on Linux), so the bot
+    # keeps LaMa inside a pixel budget, in a separate worker process, one request at a time.
+    # Longest side of a crop given to LaMa; larger crops are downscaled (rarely binding).
+    watermark_lama_max_side: int = Field(default=1024, ge=64, le=4096)
+    # Crop area budget in pixels; 0 = off. Over the budget the margin shrinks first
+    # (down to watermark_lama_min_margin), a downscale is the last resort.
+    watermark_lama_max_pixels: int = Field(default=105_000, ge=0)
+    watermark_lama_min_margin: int = Field(default=16, ge=0, le=96)
+    # torch threads of the LaMa process (the server has 2 vCPU shared with the monitor).
+    watermark_torch_threads: int = Field(default=2, ge=1, le=16)
+    # The LaMa worker exits (inline mode: the model is dropped) after this many idle seconds;
+    # 0 = keep it for the life of the process.
+    watermark_lama_idle_unload_seconds: int = Field(default=600, ge=0)
+    # "process": LaMa in a worker process, torch never enters the bot; "inline": same process
+    # (tests, one-off CLI runs).
+    watermark_lama_isolation: Literal["process", "inline"] = "process"
+    # One LaMa request may take at most this long; the worker is killed and the mark is kept.
+    watermark_lama_timeout_seconds: int = Field(default=180, ge=1)
+
 
 @lru_cache(maxsize=1)
 def get_watermark_settings() -> WatermarkSettings:

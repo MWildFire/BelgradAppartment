@@ -22,6 +22,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from src.watermark.detect import Detection, match_instance, score_at, to_gray
 from src.watermark.files import atomic_write
 from src.watermark.inpaint import Inpainter, get_inpainter
+from src.watermark.lama_model import LamaError
 from src.watermark.remove import remove_inpaint, remove_reverse_blend
 from src.watermark.settings import get_watermark_settings
 from src.watermark.templates import WatermarkTemplate, load_templates
@@ -181,7 +182,13 @@ def clean_array(
                 continue  # not a real mark: leave the photo and the report as they are
             out = candidate
         else:
-            out = remove_inpaint(out, tpl, det, inpainter)
+            try:
+                out = remove_inpaint(out, tpl, det, inpainter)
+            except LamaError as error:
+                # The LaMa worker died, timed out or failed: this mark stays as it is (the pixels
+                # were not touched) and the photo is still delivered; a later request retries.
+                logger.warning("[watermark] LaMa failed, keeping %s: %s", tpl.id, error)
+                method, kept_reason = "skip", "lama_unavailable"
         residual = score_at(to_gray(out), tpl, det)
         report.marks.append(
             MarkResult(
