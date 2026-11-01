@@ -1,0 +1,31 @@
+{
+  "id": "halo_center",
+  "platform": "halooglasi",
+  "title": "Halo Oglasi — логотип по центру",
+  "opacity": [
+    0.27,
+    0.27,
+    0.27
+  ],
+  "strategy": "inpaint",
+  "inpaint_backend": "lama",
+  "lama_fallback": "telea",
+  "ref_width": 1000,
+  "scale_mode": "width",
+  "instances": [
+    {
+      "anchor": "center",
+      "dx": -252.0,
+      "dy": -104.0
+    }
+  ],
+  "scale_search": [
+    0.98,
+    1.0,
+    1.02
+  ],
+  "pos_tol": 0.02,
+  "min_score": 0.2,
+  "width": 507,
+  "height": 192
+}

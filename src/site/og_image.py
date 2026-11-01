@@ -19,12 +19,18 @@ a future polish.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import stat
+from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 from src.config import get_settings
+from src.watermark.settings import get_watermark_settings
 
 # A sized font is either a TrueType face (system path) or Pillow's scalable default. Both expose
 # the textbbox/draw API we use; the union keeps mypy --strict happy across the fallback.
@@ -89,14 +95,81 @@ def _photo_file(photos: list[str]) -> Path | None:
     rel = url[len("/photos/") :]
     if not rel or ".." in rel.split("/"):
         return None
-    root = Path(get_settings().site_photos_root)
-    candidate = root / rel
     try:
-        if candidate.is_file():
-            return candidate
-    except OSError:
+        root = Path(get_settings().site_photos_root).resolve()
+        candidate = root / rel
+        if (
+            candidate.is_relative_to(root)
+            and candidate.resolve() == candidate
+            and candidate.is_file()
+        ):
+            from src.watermark.store import site_source
+
+            return site_source(candidate)
+    except (OSError, RuntimeError):
         return None
     return None
+
+
+@dataclass(frozen=True)
+class PhotoSnapshot:
+    """Selected encoded bytes and their identity; never reopen the path during rendering."""
+
+    data: bytes | None
+    identity: str
+
+
+def _read_contained(path: Path, root: Path) -> bytes:
+    """Read via directory descriptors so a replaced symlink cannot escape the chosen root."""
+    parts = path.relative_to(root).parts
+    if not parts or ".." in parts:
+        raise ValueError("Unsafe photo source")
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        source = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        with os.fdopen(source, "rb") as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("Invalid photo source")
+            return stream.read()
+    finally:
+        os.close(fd)
+
+
+def snapshot_photo(photos: list[str]) -> PhotoSnapshot:
+    """Hash encoded bytes (no decode/model) on each request, independent of mtime/size.
+
+    Clean policy is part of the identity even when two result versions have equal pixels.
+    A missing or unsafe derivative falls back to the original, without exposing paths.
+    """
+    path = _photo_file(photos)
+    if path is None:
+        return PhotoSnapshot(None, "paper")
+    try:
+        settings = get_settings()
+        root = Path(settings.site_photos_root).resolve()
+        original = root / photos[0][len("/photos/") :]
+        policy: tuple[object, ...] = ("original",)
+        if path != original:
+            from src.watermark import store
+
+            corner_mode = get_watermark_settings().watermark_halo_corner_mode
+            policy = ("clean", store.STORE_VERSION, corner_mode)
+            try:
+                data = _read_contained(path, store.clean_root())
+            except (OSError, ValueError, RuntimeError):
+                data = _read_contained(original, root)
+                policy = ("original",)
+        else:
+            data = _read_contained(original, root)
+        digest = hashlib.sha256(data).hexdigest()
+        identity = json.dumps((*policy, digest), separators=(",", ":"))
+        return PhotoSnapshot(data, identity)
+    except (OSError, ValueError, RuntimeError):
+        return PhotoSnapshot(None, "paper")
 
 
 def _cover(img: Image.Image, w: int, h: int) -> Image.Image:
@@ -113,22 +186,17 @@ def _cover(img: Image.Image, w: int, h: int) -> Image.Image:
     return resized.crop((left, top, left + w, top + h))
 
 
-def _base_canvas(photos: list[str]) -> Image.Image:
-    """The background: cover-cropped first photo under a bottom scrim, else a paper panel.
-
-    Any photo failure (missing/corrupt/unreadable) silently falls back to the paper panel — the
-    image must always render.
-    """
-    path = _photo_file(photos)
-    if path is not None:
+def _base_canvas(snapshot: PhotoSnapshot) -> tuple[Image.Image, bool]:
+    """Decode the captured bytes once; corrupt/unreadable photos use the paper panel."""
+    if snapshot.data is not None:
         try:
-            with Image.open(path) as raw:
+            with Image.open(BytesIO(snapshot.data)) as raw:
                 raw.load()
                 photo = _cover(raw, OG_W, OG_H)
-            return _apply_scrim(photo)
+            return _apply_scrim(photo), True
         except (OSError, ValueError, Image.DecompressionBombError):
-            pass  # fall through to the paper panel
-    return _paper_panel()
+            pass
+    return _paper_panel(), False
 
 
 def _paper_panel() -> Image.Image:
@@ -167,16 +235,16 @@ def _rounded_badge(
     return x + w
 
 
-def render_og_png(item) -> bytes:  # type: ignore[no-untyped-def]
+def render_og_png(item, snapshot: PhotoSnapshot | None = None) -> bytes:  # type: ignore[no-untyped-def]
     """Compose the 1200x630 OpenGraph PNG for a listing view.
 
     Consumes ONLY privacy-safe fields: price_eur, district (район), for_vnj, and the first local
     photo. No door-level location field is ever read or drawn (D1). Returns raw PNG bytes.
     """
-    canvas = _base_canvas(item.photos)
+    if snapshot is None:
+        snapshot = snapshot_photo(item.photos)
+    canvas, on_photo = _base_canvas(snapshot)
     draw = ImageDraw.Draw(canvas)
-
-    on_photo = _photo_file(item.photos) is not None
     price_color = WHITE if on_photo else OXBLOOD
     district_color = (235, 235, 235) if on_photo else NAVY
 

@@ -1,0 +1,36 @@
+{
+  "id": "zida_logo",
+  "platform": "4zida",
+  "title": "4zida — два логотипа по углам",
+  "opacity": [
+    0.38,
+    0.38,
+    0.38
+  ],
+  "strategy": "inpaint",
+  "inpaint_backend": "lama",
+  "lama_fallback": "reverse_blend",
+  "ref_width": 1440,
+  "scale_mode": "width",
+  "instances": [
+    {
+      "anchor": "top-left",
+      "dx": 98.9,
+      "dy": 99.9
+    },
+    {
+      "anchor": "bottom-right",
+      "dx": -380.77,
+      "dy": -379.79
+    }
+  ],
+  "scale_search": [
+    0.97,
+    1.0,
+    1.03
+  ],
+  "pos_tol": 0.02,
+  "min_score": 0.25,
+  "width": 280,
+  "height": 278
+}

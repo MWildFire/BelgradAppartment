@@ -13,6 +13,7 @@ the selected template + context without depending on agent D's real markup.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import cast
@@ -509,7 +510,7 @@ async def apt(
 
 
 # How long CF edge / browsers may cache a generated OG image. The image only changes when the
-# listing's price/район/ВНЖ/first-photo change; the ETag (derived from exactly those inputs)
+# listing fields or selected photo bytes/policy change; the ETag over those inputs
 # revalidates on change, and HTML is never cached, so a fresh share always resolves the live URL.
 _OG_MAX_AGE = 86_400
 
@@ -529,11 +530,16 @@ async def apt_og_image(
     if item is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
 
-    # ETag over the inputs that actually change the rendered image (cheaper + stable vs hashing the
-    # PNG bytes, which vary with Pillow/zlib): id, price, район, ВНЖ flag, first photo path.
+    # Capture and hash encoded source bytes off the event loop. The same snapshot is passed
+    # to the renderer: replacing a file after this point cannot pair new pixels with this ETag.
+    # A stable conditional GET needs no Pillow decode/resize/PNG encode or model import.
+    snapshot = await anyio.to_thread.run_sync(og_image.snapshot_photo, item.photos)
     first_photo = item.photos[0] if item.photos else ""
-    sig = f"{item.id}|{item.price_eur}|{item.district}|{int(item.for_vnj)}|{first_photo}"
-    etag = 'W/"og-' + hashlib.sha1(sig.encode("utf-8")).hexdigest()[:16] + '"'
+    sig = json.dumps((
+        "og-v2", item.id, item.price_eur, item.district, bool(item.for_vnj),
+        first_photo, snapshot.identity,
+    ), ensure_ascii=False)
+    etag = 'W/"og-' + hashlib.sha256(sig.encode("utf-8")).hexdigest() + '"'
     cache_control = f"public, max-age={_OG_MAX_AGE}"
 
     if _etag_matches(request.headers.get("if-none-match"), etag):
@@ -545,7 +551,7 @@ async def apt_og_image(
     # PERF: the Pillow decode/resize/scrim/encode is CPU-bound and was blocking the single
     # uvicorn event loop per cache-miss (Telegram/WhatsApp crawlers hit these in bursts). Offload
     # to a worker thread so concurrent share-preview fetches don't stall every other request.
-    png = await anyio.to_thread.run_sync(og_image.render_og_png, item)
+    png = await anyio.to_thread.run_sync(og_image.render_og_png, item, snapshot)
     return Response(
         content=png,
         media_type="image/png",

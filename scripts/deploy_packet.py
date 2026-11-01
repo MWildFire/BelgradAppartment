@@ -11,7 +11,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from release import CHECKS, ReleaseError, require, unpack_packet, validate_backup, validate_tests
+from release import (
+    CHECKS,
+    ReleaseError,
+    check_backup_choice,
+    require,
+    unpack_packet,
+    validate_backup,
+    validate_owner_waiver,
+    validate_tests,
+)
 
 
 def main():
@@ -21,7 +30,11 @@ def main():
     parser.add_argument("--packet", type=Path, required=True)
     parser.add_argument("--fallback-packet", type=Path,
                         help="separately tested compatible runtime for first schema transition")
-    parser.add_argument("--backup-receipt", type=Path, required=True)
+    parser.add_argument("--backup-receipt", type=Path,
+                        help="verified backup receipt (exactly one of this and --owner-waiver)")
+    parser.add_argument("--owner-waiver", type=Path,
+                        help="owner's recorded decision to release without a backup; "
+                             "only with --code-only-data-backup, no fallback packet")
     parser.add_argument("--uv-bin", required=True, help="absolute remote pinned uv binary")
     parser.add_argument("--ssh-key", type=Path)
     parser.add_argument(
@@ -35,9 +48,17 @@ def main():
     args = parser.parse_args()
     require(re.fullmatch(r"[A-Za-z0-9_.-]+@[A-Za-z0-9_.:-]+", args.target), "invalid SSH target")
     require(Path(args.uv_bin).is_absolute(), "absolute uv binary path required")
-    validate_backup(json.loads(args.backup_receipt.read_text()),
-                    allow_data_only=args.code_only_data_backup,
-                    allow_sanitized=args.acknowledge_sanitized_url_loss)
+    check_backup_choice(args.backup_receipt, args.owner_waiver,
+                        code_only=args.code_only_data_backup,
+                        sanitized_ack=args.acknowledge_sanitized_url_loss,
+                        fallback=args.fallback_packet is not None)
+    waiver = None
+    if args.owner_waiver is not None:
+        waiver = json.loads(args.owner_waiver.read_text())
+    else:
+        validate_backup(json.loads(args.backup_receipt.read_text()),
+                        allow_data_only=args.code_only_data_backup,
+                        allow_sanitized=args.acknowledge_sanitized_url_loss)
     options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
     if args.ssh_key:
         options.extend(["-i", str(args.ssh_key)])
@@ -45,6 +66,8 @@ def main():
         local = Path(temp)
         manifest = unpack_packet(args.packet, local)
         validate_tests(manifest["tests"], manifest["revision"], CHECKS)
+        if args.owner_waiver is not None:
+            validate_owner_waiver(waiver, manifest["revision"])
         fallback = None
         if args.fallback_packet:
             fallback = unpack_packet(args.fallback_packet, local / "fallback-check")
@@ -62,7 +85,8 @@ def main():
         )
         uploads = [
             (args.packet, "packet.tar.gz"),
-            (args.backup_receipt, "backup.json"),
+            (args.owner_waiver, "waiver.json") if args.owner_waiver is not None
+            else (args.backup_receipt, "backup.json"),
             (local / "code/scripts/release.py", "release.py"),
         ]
         if args.fallback_packet:
@@ -71,14 +95,17 @@ def main():
             subprocess.run(
                 ["scp", *options, str(source), f"{args.target}:{staging}/{target}"], check=True
             )
+        backup_option = (
+            ["--owner-waiver", staging + "/waiver.json"] if args.owner_waiver is not None
+            else ["--backup-receipt", staging + "/backup.json"]
+        )
         command = (["sudo", "--"] if args.sudo else []) + [
             "/usr/bin/python3",
             staging + "/release.py",
             "activate",
             "--packet",
             staging + "/packet.tar.gz",
-            "--backup-receipt",
-            staging + "/backup.json",
+            *backup_option,
             "--remote-root",
             args.remote_root,
             "--uv-bin",

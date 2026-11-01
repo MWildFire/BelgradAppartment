@@ -66,6 +66,53 @@ printed command on the explicit server. Use the existing pinned uv binary suppli
 the operator; the script does not install/upgrade uv. The tracked production lock must
 preserve validated dependencies, including CPU PyTorch/open-clip needed by Render Finder.
 
+## Release on the owner's decision, without a backup
+
+Use this only when the owner has decided, in their own words, to release without a fresh
+backup receipt, and the release is a plain code-only one (same schema, dependencies,
+`src/config.py` and `deploy/` units as the running release). It is not a way around a
+missing receipt for anything else, and a receipt is never fabricated or re-labelled.
+
+The owner's decision is a JSON file, written by the operator and kept with the release:
+
+```json
+{"kind": "owner_waiver_no_backup", "owner": "<name>", "quote": "<the owner's words, verbatim>",
+ "given_at": "2026-10-31T21:28:00+04:00", "revision": "<the 40-hex revision of the packet>"}
+```
+
+Exactly these five fields. `given_at` carries a timezone, is not older than 24 hours and
+not more than 5 minutes in the future; `revision` equals the packet revision; `quote` and
+`owner` are not empty. Activation takes exactly one of `--backup-receipt` or
+`--owner-waiver`, and the waiver is accepted only together with `--code-only-data-backup`,
+without `--acknowledge-sanitized-url-loss` and without `--fallback-packet`:
+
+```bash
+scripts/deploy_sync.sh \
+  --target "$APP_SSH_TARGET" --ssh-key "$APP_SSH_KEY" \
+  --remote-root /opt/otz --uv-bin /opt/otz/tools/uv-venv/bin/uv \
+  --packet "$PRIVATE_RELEASE_DIR/release.tar.gz" \
+  --code-only-data-backup --owner-waiver "$PRIVATE_RELEASE_DIR/owner-waiver.json" --sudo
+```
+
+The wrapper checks the waiver locally against the packet before it contacts the server;
+the activation script on the server checks it again.
+
+Only the checks that need a receipt are skipped: its format and age, its source revision,
+and the match of the live schema with the backup. Everything else still applies: the tested
+packet, the byte comparison of `pyproject.toml`, `uv.lock`, `alembic.ini`, `src/config.py`,
+`src/db/models.py`, `scripts/runtime_contract.json`, `data/districts.yaml`, `alembic/` and
+`deploy/` with the running release (and with the live files on the server), the refusal of
+any database migration, the health gate and the automatic return to the running code.
+
+The release directory `/opt/otz/.releases/<revision>/` then holds `backup-waiver.json`
+(instead of `backup-receipt.json`), and `activation.json` records
+`backup_scope: "owner_waiver_no_backup"` and `owner_waiver: true`.
+
+The risk is the owner's. Rollback restores code only and never touches the database, so a
+data problem caused by the release has no backup to return to. A local SQLite online
+snapshot on the server before activation (`sqlite3 data/otz.db ".backup <file>"`) is a
+cheap restore point, not a gate.
+
 ## Activation behavior
 
 Activation currently supports `/opt/otz` and its canonical systemd topology only. It:

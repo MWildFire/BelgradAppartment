@@ -23,6 +23,7 @@ from src.scrapers import SCRAPERS, removal_guard
 from src.scrapers.orchestrator import PriceChange, ScrapeResult, scrape_platform
 from src.scrapers.run_safety import COMPLETENESS_REASONS, probe_sweep_broken, source_removal_alarm
 from src.scrapers.shadow_audit import run_shadow_audit, write_report
+from src.watermark.cli import register_watermark_commands
 
 if TYPE_CHECKING:  # runtime-импорт dedup остаётся ленивым для несвязанных CLI-команд
     from src.matching.dedup import DedupStats
@@ -41,6 +42,9 @@ def _setup_logging() -> None:
 def cli() -> None:
     """otz-rent-finder CLI."""
     _setup_logging()
+
+
+register_watermark_commands(cli)
 
 
 PLATFORM_NAMES = {p.value.lower(): p for p in Platform}
@@ -516,14 +520,23 @@ def monitor(no_backfill: bool) -> None:
 
 @cli.command("subscription-bot")
 def subscription_bot() -> None:
-    """C2 — run the Telegram linking daemon for saved-search subscriptions (long-polling).
+    """Unified RentFinderBot long-polling daemon: /start subscriptions + /clean (platform marks).
 
-    Listens for /start sub_<token> and links the sender's chat to the subscription. Config-gated:
-    when SUBSCRIPTION_BOT_ENABLED=0 (default) the command no-ops. Runs forever until interrupted.
+    A bot token allows only one poller, so both features share this command (unit
+    otz-subscription-bot). SUBSCRIPTION_BOT_ENABLED turns on /start sub_<token> linking,
+    WATERMARK_BOT_ENABLED turns on /clean; with both off the command logs a warning and exits.
     """
-    from src.telegram.subscription_bot import run_subscription_bot
+    from src.telegram.bot_daemon import run_bot_daemon
 
-    run_cooperatively(run_subscription_bot())
+    run_cooperatively(run_bot_daemon())
+
+
+@cli.command("bot")
+def bot() -> None:
+    """Synonym of `otz subscription-bot` (the one unified RentFinderBot daemon)."""
+    from src.telegram.bot_daemon import run_bot_daemon
+
+    run_cooperatively(run_bot_daemon())
 
 
 @cli.command("notify-subscriptions")

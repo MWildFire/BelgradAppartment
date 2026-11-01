@@ -1,0 +1,31 @@
+{
+  "id": "halo_corner",
+  "platform": "halooglasi",
+  "title": "Halo Oglasi — ©www.halooglasi.com в углу",
+  "opacity": [
+    0.5426,
+    0.509,
+    0.4838
+  ],
+  "strategy": "inpaint",
+  "inpaint_backend": "telea",
+  "lama_fallback": "telea",
+  "ref_width": 1000,
+  "scale_mode": "fixed",
+  "instances": [
+    {
+      "anchor": "bottom-right",
+      "dx": -241.0,
+      "dy": -25.0
+    }
+  ],
+  "scale_search": [
+    0.97,
+    1.0,
+    1.03
+  ],
+  "pos_tol": 0.012,
+  "min_score": 0.3,
+  "width": 235,
+  "height": 25
+}
